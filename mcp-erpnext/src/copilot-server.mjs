@@ -94,32 +94,59 @@ export function formatVnd(n) {
 }
 
 /**
- * Customer-name candidates from cleaned text — every token-prefix, longest
- * first. Fuzzy matching stays a Phase 6 concern; this is deliberately crude
- * and honest.
+ * Customer-name candidates from cleaned text — EVERY token substring (not just
+ * prefixes: the customer name usually sits mid-utterance — "cho biết nợ của
+ * Trang trại Minh Anh"), longest first. Candidates are pre-filtered by the
+ * caller against the customer list (batch-accuracy result9 finding: prefix-only
+ * candidates made names like "Trang trại Minh Anh" unreachable).
+ * Fuzzy matching stays a Phase 6 concern; this is deliberately crude and honest.
  */
 export function nameCandidates(cleanedText) {
   const tokens = cleanedText.split(/\s+/).filter(Boolean);
   const cands = [];
-  for (let len = tokens.length; len >= 1; len--) {
-    cands.push(tokens.slice(0, len).join(" "));
+  for (let start = 0; start < tokens.length; start++) {
+    for (let len = tokens.length - start; len >= 1; len--) {
+      cands.push(tokens.slice(start, start + len).join(" "));
+    }
   }
   return [...new Set(cands)];
 }
 
 /**
- * Resolve the customer WITHOUT guessing between homonyms: prefer the first
- * candidate that matches EXACTLY ONE customer; only if no candidate is
- * unambiguous, fall back to the first candidate that matched at all (and say
- * so via `ambiguous: true`). Asking beats answering for the wrong "Khách smoke".
+ * Fetch the customer list ONCE, then score every candidate name substring
+ * against it. (The previous per-candidate findCustomer() made up to 100 MCP
+ * round-trips per question; against the real server that is minutes per
+ * question — batch-accuracy result9 finding.) Same safety rule as before:
+ * a candidate matching EXACTLY ONE customer wins; only when no candidate is
+ * unique does the first multi-match win, flagged `ambiguous: true`.
+ * Asking beats answering for the wrong "Khách smoke".
  */
 export async function resolveCustomer(skills, cleanedText) {
+  const list = await skills.findCustomer("");
+  const customers = list.data?.data ?? [];
+  const cands = nameCandidates(cleanedText);
   let fallback = null;
-  for (const cand of nameCandidates(cleanedText)) {
-    const found = await skills.findCustomer(cand);
-    const rows = found.data?.data ?? [];
-    if (rows.length === 1) return { customer: rows[0], ambiguous: false };
-    if (rows.length > 1 && !fallback) fallback = rows[0];
+  for (const cand of cands) {
+    const hits = customers.filter(
+      (c) =>
+        c.customer_name?.toLowerCase() === cand.toLowerCase() ||
+        c.name?.toLowerCase() === cand.toLowerCase(),
+    );
+    if (hits.length === 1) return { customer: hits[0], ambiguous: false };
+    if (hits.length > 1 && !fallback) fallback = hits[0];
+  }
+  for (const cand of cands) {
+    const hits = customers.filter(
+      (c) =>
+        c.customer_name?.toLowerCase().includes(cand.toLowerCase()) ||
+        c.name?.toLowerCase().includes(cand.toLowerCase()),
+    );
+    if (hits.length === 1) return { customer: hits[0], ambiguous: false };
+    // result9 (b07): a ONE-word fragment like "khách" matches 19 customers —
+    // picking the first of those is answering for an arbitrary customer.
+    // The ambiguous fallback only accepts fragments of ≥ 2 words; otherwise
+    // stay null and ask.
+    if (hits.length > 1 && !fallback && cand.includes(" ")) fallback = hits[0];
   }
   return fallback ? { customer: fallback, ambiguous: true } : { customer: null, ambiguous: false };
 }
@@ -152,15 +179,59 @@ export async function answerQuestion(rawText) {
 
     const skills = route.factory(mcp, knownIds);
 
-    // Inventory needs no customer.
+    // Inventory needs no customer. When the question names an item (e.g.
+    // "cám gà còn tồn kho bao nhiêu"), filter the balance rows to that item
+    // — dumping the whole warehouse list was a batch-accuracy finding (b13–15).
+    // Real item_names are longer than what people say ("Cám gà thịt 25kg"),
+    // so matching uses word-PREFIXES of the stored name, longest first.
     if (route.group === "inventory") {
       const inv = await skills.listInventory({});
-      const rows = inv.data?.data ?? [];
+      const allRows = inv.data?.data ?? [];
+      const low = nlp.text.toLowerCase();
+      let named = [];
+      try {
+        const items = (await skills.findItem("")).data?.data ?? []; // "" = all items
+        // Two passes: score each item by its LONGEST matching word-prefix
+        // phrase, then keep only the items at the overall best length —
+        // otherwise "cám gà ..." also matched bare "cám" for heo/vịt items.
+        let bestLen = 0;
+        const scored = [];
+        for (const it of items) {
+          const words = String(it.item_name ?? it.item_code ?? "")
+            .toLowerCase()
+            .split(/\s+/)
+            .filter(Boolean);
+          let hit = 0;
+          for (let len = words.length; len >= 1; len--) {
+            if (low.includes(words.slice(0, len).join(" "))) {
+              hit = len;
+              break;
+            }
+          }
+          if (hit > 0) {
+            scored.push({ it, hit });
+            if (hit > bestLen) bestLen = hit;
+          }
+        }
+        named = scored.filter((s) => s.hit === bestLen).map((s) => s.it);
+      } catch {
+        // item list unavailable → answer unfiltered rather than crashing
+      }
+      let rows = allRows;
+      let note = "";
+      if (named.length === 1) {
+        const code = named[0].item_code ?? named[0].name;
+        rows = allRows.filter((r) => r.item_code === code);
+      } else if (named.length > 1) {
+        note = "⚠️ tên vật tư khớp nhiều mặt hàng — hiển thị tất cả";
+      }
+      const lines = rows.map((r) => `${r.item_code}: ${r.actual_qty} (kho ${r.warehouse})`);
+      const answer = note ? [...lines, note] : lines;
       return {
         question: rawText,
         normalized: nlp,
         routed: { group: route.group, matched: route.matched },
-        answer: rows.map((r) => `${r.item_code}: ${r.actual_qty} (kho ${r.warehouse})`),
+        answer,
         rows,
       };
     }

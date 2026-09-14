@@ -44,6 +44,10 @@ MUST_NOT_STRIP: list[str] = [
     "ba mươi nghìn",  # "mươi" must not count as a nickname
     "ba ghi nợ",  # followed by a verb
     "Chi Lan",  # "Chi" (no diacritic) is a name, not the title "Chị"
+    # result9 batch-accuracy finding (b12): real ERPNext names CONTAIN titles —
+    # a mid-utterance title is part of a stored name, not a vocative.
+    "xem phiếu thu của Công trình nhà ông An",
+    "nợ của Anh Ba — xây nhà",
 ]
 
 

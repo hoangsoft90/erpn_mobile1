@@ -55,6 +55,12 @@ const PAYMENTS = [
   { name: "PE-0001", party: "CUST-00001", posting_date: "2026-09-06", paid_amount: 8_000_000, received_amount: 8_000_000, docstatus: 1 },
 ];
 
+/** result9: the copilot inventory filter needs item_name — mirror the real tool's shape. */
+const ITEMS = [
+  { name: "CAM-HEO-25KG", item_code: "CAM-HEO-25KG", item_name: "Cám heo tăng trọng 25kg" },
+  { name: "CAM-GA-10KG", item_code: "CAM-GA-10KG", item_name: "Cám gà thịt 10kg" },
+];
+
 /** Handlers mirror the real 3.0.4 handlers' return shapes. */
 const TOOLS = {
   erpnext_customer_list: (args) => {
@@ -81,6 +87,11 @@ const TOOLS = {
   erpnext_payment_entry_list: (args) => {
     const rows = PAYMENTS.filter((p) => !args?.party || p.party === args.party);
     return { doctype: "Payment Entry", count: rows.length, data: rows };
+  },
+  erpnext_item_list: () => {
+    // No server-side name filtering (the real 3.0.4 tool has no txt param either):
+    // the skill layer filters client-side on item_name/item_code.
+    return { doctype: "Item", count: ITEMS.length, data: ITEMS };
   },
 };
 

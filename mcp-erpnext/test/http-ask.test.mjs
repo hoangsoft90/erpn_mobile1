@@ -15,6 +15,13 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
+// Hermetic (result9 fix): strip leaked ERPNEXT_* from the parent shell so the
+// in-process createAskServer() also resolves the MOCK target, never the real
+// ERPNext — the in-process tests set NLP_SERVICE_PORT on process.env below.
+for (const k of Object.keys(process.env)) {
+  if (/^ERPNEXT_/.test(k)) delete process.env[k];
+}
+
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..");
 const REPO = path.resolve(ROOT, "..");
@@ -101,7 +108,9 @@ test("/ask CLI main(): ready line on stdout then exit on close", async () => {
   const nlp = await startNlpService();
   const child = spawn(process.execPath, [path.join(ROOT, "src", "http-ask.mjs"), "--port", "0"], {
     cwd: REPO,
-    env: { ...process.env, NLP_SERVICE_PORT: String(nlp.port) },
+    // Hermetic: strip ERPNEXT_* — this file tests the MOCK path (a leaked env
+    // var from an earlier `source .env` shell flipped the target, result9 fix).
+    env: Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^ERPNEXT_/.test(k))),
     stdio: ["ignore", "pipe", "inherit"],
   });
   try {

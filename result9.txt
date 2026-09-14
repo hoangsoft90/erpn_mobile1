@@ -1,0 +1,127 @@
+========================================================================
+RESULT 9 — PHASE 2 BATCH ACCURACY ĐO THẬT (ERPNext THẬT) + PUSH GH + CI FIX
+Timestamp: 2026-09-14 08:30
+Env: Linux VPS, Node v24.20.0, Python 3.12.3, ERPNext qua ngrok tunnel.
+Repo erpn_mobile1, branch change/flutter-chat-mvp (commits 33f9dc0,
+0ac8e61, 590b1b2 — đã push lên github.com/hoangsoft90/erpn_mobile1).
+========================================================================
+
+== 1. TRẠNG THÁI KEY ERPNext (verify bằng lệnh, KHÔNG tin lời) ==
+
+$ grep -c "<OLD-KEY-VALUE>" .env  → 1   (giá trị key/secret cũ đã REDACT
+$ grep -c "<OLD-SECRET-VALUE>" .env → 1    khỏi file này — từng lộ qua chat,
+                                            không đưa vào git; xem .env thật trên máy)
+$ curl -u key:secret .../api/resource/Customer?limit_page_length=1 → HTTP 200
+
+→ Key CŨ (đã lộ trong chat) VẪN trong .env VÀ VẪN hợp lệ phía server.
+→ Kết luận: rotation CHƯA có hiệu lực trên server này (user xác nhận chạy
+  tiếp với key cũ; rotation ghi là CHƯA XONG). .env mtime 06:49:17 chỉ
+  thêm GH_REPO_URL + GH_TOKEN.
+
+== 2. BATCH ACCURACY — 3 VÒNG, ĐỀU CHẠY THẬT QUA answerQuestion() ==
+
+Cách đo: mcp-erpnext/test/batch-accuracy.mjs — 18 câu tiếng Việt đa dạng
+(công nợ / hóa đơn / phiếu thu / tồn kho / fail-safe), chạy qua pipeline
+thật (NLP :8787 → copilot → MCP 3.0.4 → ERPNext thật), expected lấy từ
+ground-truth dump cùng ngày (mcp-erpnext/test/batch-groundtruth.mjs:
+26 khách, 37 hóa đơn, 29 phiếu thu (REST), 14 dòng tồn kho, 13 vật tư).
+
+Vòng 1: 5/18 = 27.8%   (NLP service chết ở lần chạy đầu → 0/18 là lỗi
+                        môi trường, đã tách khỏi số liệu thật)
+Vòng 2: 11/18 = 61.1%  (sau fix 4 nhóm lỗi)
+Vòng 3: 18/18 = 100%   ← kết quả cuối, output nguyên văn:
+
+  PASS b01 customer :: Khách smoke 2026-09-13-p1done còn nợ bao nhiêu
+  PASS b02 customer :: Anh Nam ơi cho hỏi khách smoke 2026-09-13-p1done còn nợ bao nhiêu tiền
+  PASS b03 customer :: bác Hai hỏi công nợ của khách smoke 2026-09-13-postfix
+  PASS b04 customer :: Công ty xây dựng ABC còn nợ bao nhiêu
+  PASS b05 customer :: cho biết nợ của Trang trại Minh Anh
+  PASS b06 customer :: Khách lẻ Minh Phát còn nợ không
+  PASS b07 customer :: khách Nguyễn Văn A còn nợ mấy tiền
+  PASS b08 sales    :: hóa đơn chưa trả của Khách làm tròn 2026-09-14-p1fixwhole còn lại bao nhiêu
+  PASS b09 sales    :: liệt kê hóa đơn chưa thanh toán của Khách smoke 2026-09-13-p1final
+  PASS b10 sales    :: đơn hàng nào của Khách đo lại 309110 chưa trả tiền
+  PASS b11 payment  :: Khách smoke 2026-09-14-p1fixwhole đã trả tiền chưa
+  PASS b12 payment  :: xem phiếu thu của Công trình nhà ông An
+  PASS b13 inventory:: cám gà còn tồn kho bao nhiêu
+  PASS b14 inventory:: tồn kho của cám heo là bao nhiêu
+  PASS b15 inventory:: trong kho còn bao nhiêu gạch đỏ
+  PASS b16 inventory:: thép D16 còn lại trong kho mấy
+  PASS b17 customer :: chị Lan còn nợ bao nhiêu          (fail-safe: null + lý do)
+  PASS b18 -        :: hôm nay trời đẹp quá              (no route: null)
+
+Đối chiếu tiền thật: b11 trả "2 phiếu thu, tổng 91.000đ" = 90.000+1.000
+(đúng ground-truth REST); b12 trả "chưa có phiếu thu nào" (đúng 0 phiếu);
+b01 269.000đ = 90.000+89.000+90.000 (3 hóa đơn thật).
+
+== 3. 7 CASE SAI VÒNG 2 → NGUYÊN NHÂN GỐC (đã fix hết) ==
+
+1. b11/b12 [route=None] TOOL_ERROR party_type:
+   "erpnext_payment_entry_list — 'party_type' is required when filtering
+   by 'party'" (lỗi lộ ra SAU khi vượt qua lỗi 417 cũ).
+   Fix: thêm party_type: "Customer" (skills/payment.mjs).
+2. b07 trả NHẦM TIỀN khách khác (457.875đ của "Khách làm tròn…"):
+   ambiguous-fallback bắt cả candidate 1 từ ("khách" khớp 19 khách) →
+   chọn hộ khách tùy ý. Fix: fallback chỉ nhận fragment ≥ 2 từ, không
+   thì null + hỏi lại (copilot-server.mjs resolveCustomer).
+3. b13–b16: pipeline trả ĐÚNG dữ liệu lọc theo item nhưng batch test
+   chấm sai (predicate dùng string.includes trên mảng). Fix: chấm bằng
+   mọi-element + count đúng (lỗi test, không phải lỗi pipeline).
+
+== 4. CÁC FIX CODE PHASE 2 (kèm unit test mới) ==
+
+- router.mjs: nhóm SPECIFIC (sales/payment/inventory) check TRƯỚC nhóm
+  customer (từ khóa rộng "khách/nợ/còn lại" trước đây nuốt mọi câu hỏi
+  hóa đơn/kho — b08–b10, b16); bỏ "còn bao nhiêu" khỏi inventory (nuốt
+  câu "còn nợ" khi inventory check trước); "khách hàng" không bị keyword
+  "hàng" ăn (replaceAll trước khi match).
+- copilot-server.mjs nameCandidates: PREFIX-ONLY → MỌI token substring,
+  dài nhất trước (trước đây "cho biết nợ của Trang trại Minh Anh" không
+  bao giờ thử được tên khách giữa câu — dù khách TỒN TẠI trong DB,
+  verify bằng REST 26 khách).
+- copilot-server.mjs resolveCustomer: fetch customer list ĐÚNG 1 LẦM/
+  câu hỏi (trước đây tới 100 MCP round-trips/câu), chấm exact trước,
+  substring sau; ambiguous-fallback ≥ 2 từ.
+- copilot-server.mjs inventory: lọc rows theo item hỏi bằng word-prefix
+  dài nhất (2 passes chống "cám" ăn "cám heo/cám vịt"); item list fail
+  → trả không lọc thay vì crash.
+- skills/payment.mjs: 417 (site chặn field currency) → fallback
+  erpnext_doc_list (doctype Payment Entry, fields KHÔNG currency —
+  verify REST 29 entries) + party_type.
+- kinship.py: CHỈ strip title ở cụm xưng hô ĐẦU câu; title GIỮA câu là
+  phần của tên thật trong DB ("Công trình nhà ông An", "Anh Ba — xây
+  nhà" — verify trong danh sách 26 khách).
+- mock-server.mjs: thêm ITEMS + erpnext_item_list (thiếu so với thật).
+- test hermetic: copilot.test/http-ask.test strip ERPNEXT_* khi spawn
+  (env leak từ shell trước làm E2E mock chạm nhầm server THẬT).
+
+== 5. TEST CUỐI (lệnh + output thật) ==
+
+$ cd mcp-erpnext && node --test
+  ℹ tests 40 · ℹ pass 40 · ℹ fail 0
+$ PYTHONPATH=src python3 -m unittest discover -s tests
+  Ran 58 tests in 0.319s · OK   (money corpus 259/259 nguyên vẹn)
+
+== 6. GITHUB PUSH + ACTIONS (bằng chứng) ==
+
+- remote origin = https://github.com/hoangsoft90/erpn_mobile1.git
+  (được thêm trong phiên này từ GH_REPO_URL trong .env — repo trước đó
+  CHƯA có remote, khác mô tả trong prompt)
+- $ git push -u origin change/flutter-chat-mvp
+  → "* [new branch] change/flutter-chat-mvp -> change/flutter-chat-mvp"
+- Run đầu: android-debug-apk #34823212314 → completed | FAILURE
+  https://github.com/hoangsoft90/erpn_mobile1/actions/runs/34823212314
+  Lỗi thật (job log): step Analyze — 19 issues, "Undefined name
+  'chatControllerProvider'/'state'/'ref'".
+  Nguyên nhân gốc (verify): *.g.dart bị .gitignore dòng 20 (`.gitignore:
+  20:*.g.dart`) → không lên CI; local xanh chỉ nhờ file sinh sẵn trên
+  disk. Fix: workflow thêm step
+  "dart run build_runner build --delete-conflicting-outputs" sau pub get.
+  → CẦN COMMIT + PUSH LẠI để chạy run thứ 2 (chờ user duyệt — fix nằm
+  cùng vùng phase 2 trả lời tiền).
+
+== 7. CHỜ USER ==
+
+1. Duyệt commit đợt fix này (vùng pipeline trả lời tiền) + push lại →
+   GH Actions build APK lần 2.
+2. Rotation key ERPNext: VẪN chưa hiệu lực phía server (xem mục 1).

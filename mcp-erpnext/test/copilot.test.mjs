@@ -17,6 +17,13 @@ const ROOT = path.resolve(HERE, "..");
 const REPO = path.resolve(ROOT, "..");
 const COPILOT = path.join(ROOT, "src", "copilot-server.mjs");
 
+/** E2E tests are HERMETIC: strip ERPNEXT_* so the copilot child always talks
+ * to the in-memory mock, never to the real server (a leaked env var from an
+ * earlier `source .env` shell silently flipped the target — result9 fix). */
+const MOCK_ENV = Object.fromEntries(
+  Object.entries(process.env).filter(([k]) => !/^ERPNEXT_/.test(k)),
+);
+
 /** Spawn the Python bridge on an ephemeral port, return {child, port}. */
 async function startNlpService() {
   const child = spawn("python3", ["-m", "nlp_service.server", "--port", "0"], {
@@ -37,7 +44,7 @@ async function startNlpService() {
 /** Minimal stdio JSON-RPC client for one copilot-server process. */
 function startCopilot(port) {
   const child = spawn(process.execPath, [COPILOT], {
-    env: { ...process.env, NLP_SERVICE_PORT: String(port) },
+    env: { ...MOCK_ENV, NLP_SERVICE_PORT: String(port) },
     stdio: ["pipe", "pipe", "inherit"],
   });
   const pending = new Map();

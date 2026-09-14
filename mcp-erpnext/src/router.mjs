@@ -27,13 +27,10 @@ import * as inventory from "./skills/inventory.mjs";
 
 /** @type {Array<{group: string, keywords: string[]}>} */
 const ROUTES = [
-  {
-    group: "customer",
-    keywords: [
-      "khách", "khach", "customer", "công nợ", "cong no", "receivable",
-      "còn nợ", "còn lại", "must pay", "nợ", "no ",
-    ],
-  },
+  // SPECIFIC groups FIRST — the customer group is intentionally broad
+  // ("khách"/"nợ"/"còn lại" appear in most questions), so a broad-first order
+  // swallows invoice/stock/payment questions that merely mention a customer
+  // (batch-accuracy result9: b08–b10 misrouted). Most-specific-match wins.
   {
     group: "sales",
     keywords: [
@@ -51,9 +48,20 @@ const ROUTES = [
   {
     group: "inventory",
     keywords: [
-      "tồn kho", "ton kho", "stock", "kho", "còn bao nhiêu", "con bao nhieu",
+      // "còn bao nhiêu" deliberately ABSENT: it stole "còn nợ" questions when
+      // inventory was checked before the broad customer group (result9 fix).
+      "tồn kho", "ton kho", "stock", "kho",
       "cám", "cam ", "hàng", "hang ", "nhập hàng", "nhap hang", "purchase",
       "xuất kho", "xuat kho", "delivery",
+    ],
+  },
+  // BROAD group LAST — catches bare receivable questions like
+  // "Khách X còn nợ bao nhiêu" that no specific group claimed.
+  {
+    group: "customer",
+    keywords: [
+      "khách", "khach", "customer", "công nợ", "cong no", "receivable",
+      "còn nợ", "còn lại", "must pay", "nợ", "no ",
     ],
   },
 ];
@@ -88,7 +96,9 @@ const SKILL_FACTORIES = {
  * @returns {{group: string, factory: (mcp: object, knownIds: Set<string>) => object, matched: string} | null}
  */
 export function routeIntent(text) {
-  const t = ` ${String(text).toLowerCase()} `;
+  // "khách hàng" is THE Vietnamese word for customer — the inventory keyword
+  // "hàng" must never eat it (router.test regression, result9).
+  const t = ` ${String(text).toLowerCase().replaceAll("khách hàng", "khách")} `;
   for (const route of ROUTES) {
     const hit = route.keywords.find((kw) => t.includes(kw.toLowerCase()));
     if (hit) {

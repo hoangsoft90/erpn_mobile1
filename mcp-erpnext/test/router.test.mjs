@@ -26,6 +26,17 @@ test("routes customer/receivable intent", () => {
   assert.equal(routeIntent("khách hàng còn nợ mấy")?.group, "customer");
 });
 
+test("specific groups beat the broad customer group (result9 batch findings)", () => {
+  // b08/b09: invoice questions that MENTION a customer must stay sales,
+  // the customer group is broad ("khách", "nợ") and checked LAST now.
+  assert.equal(routeIntent("hóa đơn chưa trả của Khách làm tròn 2026-09-14")?.group, "sales");
+  assert.equal(routeIntent("liệt kê hóa đơn chưa thanh toán của Khách smoke")?.group, "sales");
+  // b16: an inventory question with no customer word at all
+  assert.equal(routeIntent("thép D16 còn lại trong kho mấy")?.group, "inventory");
+  // b12: bare payment-entry question stays payment ("trả" kept intentionally)
+  assert.equal(routeIntent("xem phiếu thu của Công trình nhà ông An")?.group, "payment");
+});
+
 test("routes inventory intent", () => {
   assert.equal(routeIntent("tồn kho cám heo còn bao nhiêu")?.group, "inventory");
   assert.equal(routeIntent("kho còn mấy bao cám")?.group, "inventory");

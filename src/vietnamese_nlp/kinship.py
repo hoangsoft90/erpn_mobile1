@@ -107,8 +107,17 @@ def strip_kinship(text: str) -> tuple[str, tuple[str, ...]]:
     removals: list[tuple[int, int]] = []
     titles: list[str] = []
 
+    # Only strip a leading vocative cluster ("Anh chị Nam", "Bác Hai hỏi...").
+    # A title in the MIDDLE of the utterance is usually part of a real stored
+    # name ("Công trình nhà ông An", "Anh Ba — xây nhà") — stripping there
+    # corrupts the name the ERPNext lookup needs (batch-accuracy finding b12,
+    # 2026-09-14).
+    frontier = 0  # end of the last stripped token; a title qualifies only if
+    #               it directly continues that cluster from utterance start.
     for idx, match in enumerate(tokens):
         if match.group().lower() not in KINSHIP_TITLES:
+            continue
+        if match.start() > frontier + 1:  # +1 tolerates one separating space
             continue
         nxt = tokens[idx + 1] if idx + 1 < len(tokens) else None
         if nxt is None or nxt.group().isdigit():
@@ -117,6 +126,7 @@ def strip_kinship(text: str) -> tuple[str, tuple[str, ...]]:
             continue
         removals.append((match.start(), match.end()))
         titles.append(match.group())
+        frontier = match.end()
 
     if not removals:
         return text, ()
