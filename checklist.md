@@ -70,16 +70,17 @@ Trạng thái roadmap chi tiết nằm ở `next.md` — file này KHÔNG nhân 
 ## Chưa làm / đang làm (thứ tự)
 
 ### Đang làm
-- [x] GH Actions run #2 ✅ **SUCCESS** (`result10.txt`): [run 34826575147](https://github.com/hoangsoft90/erpn_mobile1/actions/runs/34826575147) — build_runner/Analyze/Test/Build APK đều xanh; artifact `erpn-chat-debug-apk` (80MB zip) đã tải về VPS `/home/kythuat_hoangweb/erpn-apk/app-debug.apk`. ⚠️ APK mặc định trỏ `127.0.0.1:8788` → cần `--dart-define` trỏ IP VPS khi test thật
+- [x] GH Actions run #2 ✅ **SUCCESS** (`result10.txt`): [run 34826575147](https://github.com/hoangsoft90/erpn_mobile1/actions/runs/34826575147) — build_runner/Analyze/Test/Build APK đều xanh; artifact `erpn-chat-debug-apk` (80MB zip) đã tải về VPS `/home/kythuat_hoangweb/erpn-apk/app-debug.apk`
+- [x] **APK nối được VPS — endpoint security** ✅ (`result11.txt`, commit `c3d74c3`): http-ask bind policy (non-loopback BẮT BUỘC basic auth, public cần ASK_ALLOW_PUBLIC=1 — server tự từ chối cấu hình unsafe) + Flutter client gửi auth qua dart-define + CI build APK từ repo Variables/Secret. Verify thật: 401 không auth → 200 có auth → trả lời 269.000đ qua ERPNext thật. ⚠️ **Port 8788 bị cloud firewall hosting chặn từ internet** (read_url timeout) — cần user mở port HOẶC dùng Tailscale (đã cài, chờ login)
 - [ ] **Tài liệu Mandatory Sign-off Phase 5 (PII/Nghị định 13/2023)** — ✅ ĐÃ SOẠN: `SIGNOFF-phase5-pii.md` (root) — 4 phương án scrubbing khảo sát, bảng quyết định 0/4, **gate ĐÓNG**. 🛑 KHÔNG code LLM Router/PII scrubbing cho tới khi user KÝ file này (gate pháp lý cố ý, không phải gate kỹ thuật)
+- [ ] **Chờ user dán 3 giá trị vào GitHub Settings** (token hiện tại chỉ-đọc, PUT 404): Variables `COPILOT_BASE_URL=http://35.194.130.120:8788` + `COPILOT_AUTH_USER=copilot` (user lấy từ `.env` ASK_USER), Secret `COPILOT_AUTH_PASSWORD` (= ASK_PASSWORD trong `.env`) → CI build APK cài được luôn
+- [x] **Kịch bản thu âm** ✅ `docs/audio-collection-script.md`: 150 câu 3 miền có ground truth (A-G), chỉ tài liệu
 
 ### Bị chặn — chờ người thật (không phải việc agent)
 - [ ] **Rotate key ERPNext** — user (Hoàng) làm trực tiếp trên server; trạng thái 2026-09-14:
       key cũ vẫn hợp lệ (HTTP 200), rotation chưa hiệu lực (`result9.txt` §1)
 - [ ] **Thu 100–200 câu audio thật 3 miền** — điều kiện còn thiếu của Phase 1, chặn Phase 4 (STT)
-- [ ] **Cài APK lên thiết bị thật tại điểm bán + test** — cần người thật. APK đã ở VPS
-      (`/home/kythuat_hoangweb/erpn-apk/app-debug.apk`); lưu ý build APK cần trỏ đúng server
-      (mặc định `127.0.0.1:8788` chỉ dùng khi app chạy cùng máy service) + service bind `0.0.0.0`
+- [ ] **Cài APK lên thiết bị thật tại điểm bán + test** — cần người thật. Trước hết xử lý 1 trong 3 đường endpoint (`result11.txt` §5): Tailscale login (khuyến nghị) / hosting mở port 8788 / ngrok từ VPS. Sau đó user dán 3 giá trị GitHub Settings → CI build APK cài được
 - [ ] **LLM gateway thật (OpenAI-compatible)** — chờ user cấp; chỉ sửa `/tmp/dsh-home/settings.yaml`
 
 ### Các phase kế tiếp (chi tiết ở `next.md`)
