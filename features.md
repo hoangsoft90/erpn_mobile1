@@ -6,7 +6,7 @@ Bằng chứng code + test: `resultNN.txt`, `.plan/phases/phase-0N-result.md`, `
 **Ý tưởng sản phẩm (1 câu):** nói chuyện với ERPNext như nói chuyện với một nhân viên kế toán/bán hàng —
 `"Anh Nam vừa trả 10 triệu tiền cám"` → AI tra khách, kiểm tra công nợ, đề xuất phiếu thu, chờ user xác nhận, rồi ghi vào ERPNext.
 
-**Trạng thái tổng:** xong **Phase 0 + Phase 1 + Phase 2 (read-only trên mock) + cầu nối dsh** (`result5.txt`). Chưa có giao diện, chưa nối ERPNext thật, chưa có STT.
+**Trạng thái tổng:** xong **Phase 0 + Phase 1 + Phase 2 (read-only, ĐÃ NỐI ERPNext THẬT) + cầu nối dsh** (`result6.txt`). Chưa có giao diện (Flutter Phase 3), chưa có STT.
 
 ---
 
@@ -50,6 +50,12 @@ Lớp chuẩn hóa chạy **TRƯỚC** LLM, cố định bằng code chứ khôn
 - **File đăng ký dsh** (`dsh.cordis.patch.yml`) đúng format example chính thức + driver transcript `scripts/ask-copilot.mjs`
 - **25/25 node --test PASS** (gồm 6 E2E spawn thật 3 process) — chưa gồm chân dsh Web UI (dsh chưa cài trên máy, chưa có LLM key/runtime)
 
+### Nối ERPNext thật + dsh smoke — 2026-09-14 (`result6.txt`)
+- **Env-switch real/mock** (`pickServerScript`): đủ 3 biến `ERPNEXT_*` → spawn server 3.0.4 thật; thiếu → mock; cấu hình sai → hard error (không bao giờ âm thầm rơi về mock). 5 unit test pin contract này
+- **ERPNext thật qua ngrok**: probe 125 tools + customer_list + sales_invoice_list trả dữ liệu thật; auth `token key:secret` xác nhận từ source package trước khi gọi
+- **dsh thật (0.1.5-rc.1) chạy headless** với patch copilot + mock LLM OpenAI-compatible (`scripts/mock-llm.mjs`, không dependency): transcript thật — *"Khách smoke 2026-09-13-p1done còn nợ 269.000đ (3 hóa đơn chưa trả)"* khớp đúng 3 hóa đơn thật (hóa đơn outstanding=0 bị loại đúng)
+- **resolveCustomer chống trùng tên**: ưu tiên candidate khớp ĐÚNG 1 khách (longest-prefix-first), câu trả lời mang cảnh báo khi trùng — 4 unit test
+
 ---
 
 ## Chưa làm / Tương lai
@@ -65,8 +71,8 @@ Lớp chuẩn hóa chạy **TRƯỚC** LLM, cố định bằng code chứ khôn
 - **Phase 8 — TTS readback** (đọc kết quả), gắn với background job
 
 ### Tích hợp ERPNext
-- **Phase 2 (phần còn lại) — nối ERPNext thật:** đã có skill layer trên mock; cần user cung cấp `ERPNEXT_URL` + `ERPNEXT_API_KEY/SECRET` → chỉ đổi binary mà client spawn, không viết lại logic; audit log/rate limit thuộc phase-05
-- **Chân dsh Web UI:** cài dsh + LLM backend (key hoặc local runtime) → `dsh web --patch mcp-erpnext/dsh.cordis.patch.yml` → gõ câu tiếng Việt thật trong Web UI
+- **Chân dsh Web UI (browser):** `dsh web --patch mcp-erpnext/dsh.cordis.patch.yml` (chân headless đã chạy thật; cần LLM thật thì swap settings.yaml)
+- **Swap mock LLM → gateway OpenAI-compatible thật:** chỉ sửa `settings.yaml` (baseURL + apiKeyEnv), không đụng code; mock giữ lại làm contract test
 - **Phase 7 — Write đầu tiên `create_payment_entry` + idempotency** ⚠️ Go/No-Go gate
 - **Phase 11 — Mở rộng write skills:** sales order, inventory, purchase
 

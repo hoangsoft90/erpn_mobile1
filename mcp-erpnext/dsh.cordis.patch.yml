@@ -28,3 +28,9 @@
         cwd: !!js process.cwd()
         env:
           NLP_SERVICE_PORT: '8787'
+          # Pass-through by NAME only — values live in the operator environment
+          # (.env, gitignored). With all three set, the copilot targets the REAL
+          # pinned server; with none, it stays on the mock (target.ts contract).
+          ERPNEXT_URL: !!js process.env.ERPNEXT_URL || ''
+          ERPNEXT_API_KEY: !!js process.env.ERPNEXT_API_KEY || ''
+          ERPNEXT_API_SECRET: !!js process.env.ERPNEXT_API_SECRET || ''

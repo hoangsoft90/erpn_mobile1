@@ -60,9 +60,9 @@ Bằng chứng chi tiết nằm ở `.plan/phases/phase-0N-result.md` và `resul
 ## Chưa làm — cần làm (theo thứ tự roadmap)
 
 ### Ngay tiếp theo
-- [ ] **Phase 2** — MCP server ERPNext read-only + skill layer — **SKELETON + E2E MOCK XONG 2026-09-13** (`result4.txt`): pin 3.0.4 verify lockfile · readonly-guard 12 tool đọc THẬT (erpnext_*) · JSON-RPC correlation hoàn chỉnh · **19/19 node --test PASS** · smoke flow route→find→balance OK — **dsh wiring XONG 2026-09-14** (`result5.txt`): `copilot_ask` MCP server chuẩn stdio + `nlp_service` HTTP bridge + driver `scripts/ask-copilot.mjs`, **25/25 node --test PASS**, transcript nguyên văn 7 câu. Còn thiếu: nối ERPNext thật (cần URL + API key/secret), chân dsh Web UI (dsh chưa cài + chưa có LLM backend), audit log/rate limit (phase-05)
+- [x] **Phase 2** — MCP server ERPNext read-only + skill layer ✅ **XONG 2026-09-14** (`result4.txt` skeleton + `result5.txt` wiring + `result6.txt` real): pin 3.0.4 (lockfile) · readonly-guard 12 tool đọc THẬT · **34/34 node --test PASS** · **đã nối ERPNext THẬT** (env-switch `pickServerScript`: đủ 3 var → real, thiếu → mock, sai → hard error; probe thật 125 tools + customer_list OK) · **dsmoke dsh thật end-to-end** (dsh 0.1.5-rc.1 headless + mock LLM OpenAI-compatible → câu trả lời đúng 269.000đ khớp 3 hóa đơn thật). Còn thiếu: audit log/rate limit (phase-05), dsh Web UI browser leg
 - [x] **Cầu nối Python ↔ Flutter/dsh** ✅ ĐÃ XÂY 2026-09-14: `nlp_service/server.py` (stdlib, bind 127.0.0.1, GET /health + /normalize) — `copilot-server.mjs` gọi qua HTTP thật. Chưa nối: chân Flutter (Phase 3)
-- [ ] **Commit code Phase 1** — hiện **CHƯA commit** (repo còn 0 commit, `master` trống). Code chạm vùng tiền nên AI không tự commit, chờ user duyệt
+- [x] **Commit Phase 1** ✅ **33f9dc0** — root commit 55 files +6390 (2026-09-14, user duyệt "thấy ổn thì commit"), scope đúng kế hoạch, `.env` không bị add (verified `git check-ignore` trước staging + grep secrets chỉ có .env)
 - [ ] Thu 100–200 câu **audio thật** 3 miền (cửa hàng/kho/ngoài đường) → điều kiện còn thiếu của phase-01, bắt buộc trước Phase 4
 
 ### Các phase sau (chi tiết ở `next.md` + `.plan/phases/`)
@@ -115,13 +115,10 @@ Bằng chứng chi tiết nằm ở `.plan/phases/phase-0N-result.md` và `resul
 - [x] **Commit: CHƯA commit gì cả** → để untracked, commit gộp sau
 
 ### Còn treo
-- [ ] **Commit khi nào?** Toàn bộ `src/`, `tests/`, `pyproject.toml`, `README.md`, `mcp-erpnext/` + docs đang untracked; repo **0 commit**; `.plan/` bị gitignore. User đã duyệt nguyên tắc commit gộp sau khi fix bug hậu tố (bug đã fix) — **chờ user gõ OK lần cuối**. Message: `feat: phase 1 — Vietnamese NLP pipeline (money/kinship/synonyms/quantity)`.
-- [x] ~~Sửa `phase-03` (PWA → Flutter)?~~ ✅ đã sửa 2026-09-13 (`result4.txt`) — next.md/features.md/roadmap đã đồng bộ
-- [ ] **Commit gộp Phase 1** — user đã duyệt commit sau khi fix bug hậu tố (đợt này). Chưa chạy.
 - [ ] **Định nghĩa Flutter client track** — khoảng trống lớn nhất; chặn `phase-04` (STT) và `phase-15` (ads).
-- [x] ~~Fix BUG hậu tố dính liền~~ ✅ đã fix 2026-09-13 (`result3.txt`, 58/58 PASS).
-- [ ] **Cài dsh + chọn LLM backend** — máy này CHƯA có dsh (`which dsh` trống) và KHÔNG có key/runtime LLM nào (DEEPSEEK/OPENAI/GEMINI/ANTHROPIC/OPENROUTER unset, không có ollama). Chân "gõ câu trong dsh Web UI" chờ 2 thứ này. Patch đăng ký đã sẵn: `mcp-erpnext/dsh.cordis.patch.yml` (đúng format example chính thức, validate cấu trúc OK, chưa exercised với dsh sống).
-- [ ] **ERPNext URL + API key/secret** — để chuyển mock → server thật (`index.mjs` exit 2 khi thiếu env là chủ đích).
+- [ ] **Rotate ERPNext API key/secret** — key đã đi qua nội dung chat (plain text); `.env` đã git-ignored + chmod 600 nhưng nên đổi key trên ERPNext.
+- [ ] **Swap mock LLM → gateway OpenAI-compatible thật** — chỉ sửa `/tmp/dsh-home/settings.yaml` (baseURL + apiKeyEnv), không đụng code; `scripts/mock-llm.mjs` dùng làm contract test.
+- [ ] **dsh Web UI (browser) leg** — headless đã chạy thật; Web UI còn thiếu vì chưa mở browser (server `dsh web --patch ...` đã sẵn sàng + `--no-open`).
 - [ ] **`bạc` = bao nhiêu?** Chờ user xác nhận mệnh giá mới làm (`ch-003`).
 - [ ] **4 câu của Phase 15:** ad provider · múi giờ tính "hết ngày" · danh sách tính năng pro · có IAP bỏ ad không.
 - [ ] **Vị trí OmniRoute/9Router + TAXPRO** — xác nhận không có trên máy này; nếu mang code từ máy local sang thì cần refactor thành shared lib (đã ghi trong next.md).

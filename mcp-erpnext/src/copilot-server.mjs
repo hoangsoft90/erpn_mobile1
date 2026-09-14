@@ -94,15 +94,34 @@ export function formatVnd(n) {
 }
 
 /**
- * Customer-name candidates from cleaned text, longest-first. Fuzzy customer
- * matching stays a Phase 6 concern — this is deliberately crude and honest.
+ * Customer-name candidates from cleaned text — every token-prefix, longest
+ * first. Fuzzy matching stays a Phase 6 concern; this is deliberately crude
+ * and honest.
  */
 export function nameCandidates(cleanedText) {
   const tokens = cleanedText.split(/\s+/).filter(Boolean);
   const cands = [];
-  if (tokens.length >= 2) cands.push(tokens.slice(0, 2).join(" "));
-  cands.push(...tokens);
+  for (let len = tokens.length; len >= 1; len--) {
+    cands.push(tokens.slice(0, len).join(" "));
+  }
   return [...new Set(cands)];
+}
+
+/**
+ * Resolve the customer WITHOUT guessing between homonyms: prefer the first
+ * candidate that matches EXACTLY ONE customer; only if no candidate is
+ * unambiguous, fall back to the first candidate that matched at all (and say
+ * so via `ambiguous: true`). Asking beats answering for the wrong "Khách smoke".
+ */
+export async function resolveCustomer(skills, cleanedText) {
+  let fallback = null;
+  for (const cand of nameCandidates(cleanedText)) {
+    const found = await skills.findCustomer(cand);
+    const rows = found.data?.data ?? [];
+    if (rows.length === 1) return { customer: rows[0], ambiguous: false };
+    if (rows.length > 1 && !fallback) fallback = rows[0];
+  }
+  return fallback ? { customer: fallback, ambiguous: true } : { customer: null, ambiguous: false };
 }
 
 function reply(id, result) {
@@ -148,14 +167,7 @@ export async function answerQuestion(rawText) {
 
     // Customer-bound intents: resolve the name first — IDs only ever come from
     // a tool result (the guard refuses invented ones).
-    let customer = null;
-    for (const cand of nameCandidates(nlp.text)) {
-      const found = await skills.findCustomer(cand);
-      if ((found.data?.count ?? 0) > 0) {
-        customer = found.data.data[0];
-        break;
-      }
-    }
+    const { customer, ambiguous } = await resolveCustomer(skills, nlp.text);
     if (!customer) {
       return {
         question: rawText,
@@ -165,6 +177,8 @@ export async function answerQuestion(rawText) {
         reason: `không tìm thấy khách hàng trong "${nlp.text}" (fuzzy matching đầy đủ là Phase 6)`,
       };
     }
+
+    const ambNote = ambiguous ? " (⚠️ tên khách trùng nhiều kết quả — đã lấy kết quả đầu tiên, entity resolution đúng là Phase 6)" : "";
 
     if (route.group === "payment") {
       const pays = await skills.listPaymentEntries(customer.name, knownIds);
@@ -176,8 +190,8 @@ export async function answerQuestion(rawText) {
       const total = rows.reduce((s, r) => s + r.amount_vnd, 0);
       const answer =
         rows.length > 0
-          ? `${customer.customer_name} đã có ${rows.length} phiếu thu, tổng ${formatVnd(total)}đ (mới nhất: ${rows[0].id} ngày ${rows[0].date}). Ghi nhận phiếu thu mới là Phase 7 — Phase 2 chỉ đọc.`
-          : `${customer.customer_name} chưa có phiếu thu nào trong hệ thống. Ghi nhận phiếu thu mới là Phase 7 — Phase 2 chỉ đọc.`;
+          ? `${customer.customer_name} đã có ${rows.length} phiếu thu, tổng ${formatVnd(total)}đ (mới nhất: ${rows[0].id} ngày ${rows[0].date}). Ghi nhận phiếu thu mới là Phase 7 — Phase 2 chỉ đọc.${ambNote}`
+          : `${customer.customer_name} chưa có phiếu thu nào trong hệ thống. Ghi nhận phiếu thu mới là Phase 7 — Phase 2 chỉ đọc.${ambNote}`;
       return { question: rawText, normalized: nlp, routed: { group: route.group, matched: route.matched }, customer: { id: customer.name, name: customer.customer_name }, rows, answer };
     }
 
@@ -187,8 +201,8 @@ export async function answerQuestion(rawText) {
       const total = rows.reduce((s, r) => s + (Number(r.outstanding_amount) || 0), 0);
       const answer =
         rows.length > 0
-          ? `${customer.customer_name} còn ${rows.length} hóa đơn chưa trả, tổng ${formatVnd(total)}đ (${rows.map((r) => `${r.name}: ${formatVnd(Number(r.outstanding_amount))}đ`).join(", ")}).`
-          : `${customer.customer_name} không còn hóa đơn nào chưa trả.`;
+          ? `${customer.customer_name} còn ${rows.length} hóa đơn chưa trả, tổng ${formatVnd(total)}đ (${rows.map((r) => `${r.name}: ${formatVnd(Number(r.outstanding_amount))}đ`).join(", ")}).${ambNote}`
+          : `${customer.customer_name} không còn hóa đơn nào chưa trả.${ambNote}`;
       return { question: rawText, normalized: nlp, routed: { group: route.group, matched: route.matched }, customer: { id: customer.name, name: customer.customer_name }, rows, answer };
     }
 
@@ -197,8 +211,8 @@ export async function answerQuestion(rawText) {
     const b = balance.data;
     const answer =
       b.outstanding_vnd > 0
-        ? `${customer.customer_name} còn nợ ${formatVnd(b.outstanding_vnd)}đ (${b.open_invoices} hóa đơn chưa trả).`
-        : `${customer.customer_name} không còn nợ gì.`;
+        ? `${customer.customer_name} còn nợ ${formatVnd(b.outstanding_vnd)}đ (${b.open_invoices} hóa đơn chưa trả).${ambNote}`
+        : `${customer.customer_name} không còn nợ gì.${ambNote}`;
     return {
       question: rawText,
       normalized: nlp,

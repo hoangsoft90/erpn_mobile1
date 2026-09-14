@@ -38,7 +38,7 @@ Python, `src/vietnamese_nlp/`, **zero runtime dependency**.
 - **Challenge set 11 case** phơi rõ dạng chưa hỗ trợ (`2m5`, không dấu, `1 triệu 5`, `bạc`, hậu tố dính liền) — không trộn vào điểm số
 - **Đợt fix sau (2026-09-13, xem `result2.txt`):** fix 4 false positive + thêm tiếng lóng `trẹo`/`chai` = triệu → **55/55 test PASS · money 247/247 = 100% · 33 negative case**
 
-### Phase 2 (một phần: read-only trên mock) + Cầu nối dsh ✅ (`result4.txt`, `result5.txt`)
+### Phase 2 (read-only) + Cầu nối dsh + ERPNext thật ✅ (`result4.txt`, `result5.txt`, `result6.txt`)
 
 Chưa nối ERPNext thật (cần credential) — mọi thứ khác đã chạy được end-to-end.
 
@@ -55,11 +55,12 @@ Chưa nối ERPNext thật (cần credential) — mọi thứ khác đã chạy 
 
 ### Ngay tiếp theo (thứ tự khuyến nghị)
 
-1. **Commit Phase 1** — user ĐÃ DUYỆT commit gộp sau khi fix bug hậu tố (đợt này). CHƯA chạy.
-2. **Cung cấp ERPNext URL + API key/secret** → chuyển mock → server thật (`serverScript` là tham số duy nhất cần đổi, logic giữ nguyên). Chưa có credential thì mọi phase sau vẫn test được trên mock như hiện tại.
-3. **Cài dsh + chọn LLM backend** (DEEPSEEK_API_KEY / OpenAI-compatible / local runtime — máy hiện không có cả hai) → chạy `dsh web --patch mcp-erpnext/dsh.cordis.patch.yml`, gõ câu tiếng Việt thật trong Web UI để hoàn tất chân còn thiếu của việc nối dsh.
-4. **Thu 100–200 câu audio thật 3 miền** — điều kiện còn thiếu của Phase 1, **bắt buộc trước Phase 4**
-5. **Định nghĩa Flutter client track chi tiết** — phase-03 đã Flutter hoá nhưng track đầy đủ vẫn là khoảng trống lớn nhất; chặn `phase-04` (STT) và `phase-15` (ads)
+1. ~~Commit Phase 1~~ ✅ **33f9dc0** (root commit, 55 files, 2026-09-14 — user duyệt).
+2. ~~ERPNext thật~~ ✅ **ĐÃ NỐI 2026-09-14** (`result6.txt`): `.env` (git-ignored) + env-switch `pickServerScript` (đủ 3 var → real, thiếu → mock, sai → hard error); probe thật 125 tools; smoke dsh→copilot→REAL ERPNext trả đúng 269.000đ.
+3. ~~Cài dsh + LLM backend~~ ✅ **dsh 0.1.5-rc.1 headless chạy thật** với mock LLM OpenAI-compatible (`scripts/mock-llm.mjs`); swap sang gateway thật = chỉ sửa settings.yaml (baseURL + apiKeyEnv), không đụng code.
+4. **Rotate ERPNext key/secret** (đã đi qua chat) + **swap mock LLM → gateway thật** khi user cấp.
+5. **Thu 100–200 câu audio thật 3 miền** — điều kiện còn thiếu của Phase 1, **bắt buộc trước Phase 4**
+6. **Định nghĩa Flutter client track chi tiết** — phase-03 đã Flutter hoá nhưng track đầy đủ vẫn là khoảng trống lớn nhất; chặn `phase-04` (STT) và `phase-15` (ads). Flutter UI giờ có thể gọi thẳng `nlp_service` HTTP (cầu nối đã chạy thật).
 
 ### Theo phase (`production_roadmap.md`)
 
