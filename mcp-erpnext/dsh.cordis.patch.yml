@@ -1,0 +1,30 @@
+# Register the erpn copilot skill layer as an MCP server for dsh (Agent Runtime).
+#
+# Usage (from repo root):
+#   python3 -m nlp_service.server &          # Python bridge on 127.0.0.1:8787
+#   dsh web --patch mcp-erpnext/dsh.cordis.patch.yml
+#
+# Structure byte-verified against the official dsh example
+# apps/cli/config/examples/mcp-memory/mcp-reference-memory.cordis.yml
+# (`- insert:` -> list of plugin entries; name/config/env exactly as shown there).
+# Tools appear to the model as: mcp__erpn_copilot__copilot_ask
+#
+# NOTE (honest limitation): dsh is not installed on this machine, so this file
+# is format-verified against the official example but not yet exercised against
+# a live dsh. It assumes dsh is started from the repo root (cwd trick mirrors
+# the official example). The command spawns the REAL MCP stdio server
+# mcp-erpnext/src/copilot-server.mjs — never a prompt-side description.
+
+- insert:
+    - id: erpn-copilot-mcp
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: erpn_copilot
+        transport: stdio
+        command: node
+        args:
+          - !!js >-
+            process.getBuiltinModule('node:path').join(process.cwd(), 'mcp-erpnext', 'src', 'copilot-server.mjs')
+        cwd: !!js process.cwd()
+        env:
+          NLP_SERVICE_PORT: '8787'

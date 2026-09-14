@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vietnamese-nlp"
+version = "0.1.0"
+description = "Rule-based Vietnamese text normalisation (money, kinship titles, domain synonyms) for the ERPNext voice copilot"
+readme = "README.md"
+requires-python = ">=3.10"
+# Zero runtime dependencies on purpose: standard library only, so the layer runs
+# on the VPS next to ERPNext/dsh without adding an install footprint.
+dependencies = []
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+# Standard-library unittest is the primary runner (nothing to install):
+#   PYTHONPATH=src python3 -m unittest discover -s tests
+# pytest works too, if it happens to be installed.
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
