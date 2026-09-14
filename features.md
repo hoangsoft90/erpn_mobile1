@@ -6,7 +6,7 @@ Bằng chứng code + test: `resultNN.txt`, `.plan/phases/phase-0N-result.md`, `
 **Ý tưởng sản phẩm (1 câu):** nói chuyện với ERPNext như nói chuyện với một nhân viên kế toán/bán hàng —
 `"Anh Nam vừa trả 10 triệu tiền cám"` → AI tra khách, kiểm tra công nợ, đề xuất phiếu thu, chờ user xác nhận, rồi ghi vào ERPNext.
 
-**Trạng thái tổng:** xong **Phase 0 + Phase 1 + Phase 2 (read-only, ĐÃ NỐI ERPNext THẬT) + cầu nối dsh** (`result6.txt`). ✅ Flutter chat MVP kỹ thuật xong (`result7.txt`: apps/mobile + /ask wrapper + GH Actions workflow; 13/13 test) — chờ user duyệt UI → commit → build APK thật. Chưa có STT.
+**Trạng thái tổng:** xong **Phase 0 + 1 + 2 (read-only, ERPNext thật, **accuracy thật 18/18 = 100%** — `result9.txt`) + cầu nối dsh + **Flutter chat MVP** (`result7.txt`, commit `590b1b2`, **đã push GH**). Phase 3 branch trên GitHub; run CI đầu FAILURE (gitignore `*.g.dart`) — workflow đã fix, chờ user duyệt commit đợt fix result9 để build lại APK. Chưa có STT.
 
 ---
 
@@ -55,6 +55,17 @@ Lớp chuẩn hóa chạy **TRƯỚC** LLM, cố định bằng code chứ khôn
 - **ERPNext thật qua ngrok**: probe 125 tools + customer_list + sales_invoice_list trả dữ liệu thật; auth `token key:secret` xác nhận từ source package trước khi gọi
 - **dsh thật (0.1.5-rc.1) chạy headless** với patch copilot + mock LLM OpenAI-compatible (`scripts/mock-llm.mjs`, không dependency): transcript thật — *"Khách smoke 2026-09-13-p1done còn nợ 269.000đ (3 hóa đơn chưa trả)"* khớp đúng 3 hóa đơn thật (hóa đơn outstanding=0 bị loại đúng)
 - **resolveCustomer chống trùng tên**: ưu tiên candidate khớp ĐÚNG 1 khách (longest-prefix-first), câu trả lời mang cảnh báo khi trùng — 4 unit test
+
+### Đo accuracy thật + đợt fix Phase 2 — 2026-09-14 (`result9.txt`)
+- **Batch accuracy 18 câu tiếng Việt qua `answerQuestion()` với ERPNext THẬT** (đúng exit-criteria phase-02): 27.8% → 61.1% → **100%** sau 2 vòng fix; expected lấy từ ground-truth dump cùng ngày (26 khách / 37 hóa đơn / 29 phiếu thu / 14 dòng tồn kho)
+- **5 nhóm lỗi mà unit xanh không bắt được** (đã fix, có unit test bám theo):
+  1. Router: nhóm customer (từ khóa rộng) check trước specific → nuốt câu hỏi hóa đơn/kho; + `"khách hàng"` bị keyword `hàng` ăn → specific trước customer + replaceAll
+  2. nameCandidates chỉ sinh tiền tố → tên khách giữa câu không bao giờ được thử (dù tồn tại trong DB) → mọi token substring, dài nhất trước + fetch list 1 lần/câu
+  3. Kinship strip title giữa câu phá tên thật `"Công trình nhà ông An"` → chỉ strip cụm xưng hô đầu câu
+  4. Payment tool: 417 (site chặn field `currency`) → fallback `erpnext_doc_list`; rồi đòi `party_type` khi lọc theo party → thêm param
+  5. Inventory trả cả kho → lọc theo item hỏi (word-prefix dài nhất, 2 passes)
+- **Fail-safe củng cố**: ambiguous-fallback chỉ nhận fragment ≥ 2 từ; khách không tồn tại / fragment 1 từ khớp 19 khách → trả null + lý do, KHÔNG chọn hộ khách (an toàn tiền đo được bằng chính batch)
+- Test hermetic: E2E test strip `ERPNEXT_*` khi spawn (env leak làm mock chạm nhầm server thật)
 
 ---
 

@@ -257,27 +257,39 @@ Phân biệt rõ 2 tình huống:
 <!-- Từ đây trở xuống là phần RIÊNG của từng project — điền cụ thể khi khởi tạo, không để trống các mục đánh dấu ĐIỀN -->
 
 ## Role & Context
-<!-- ĐIỀN: project này làm gì, tech stack chính, vai trò của agent (vd: full-stack dev cho SaaS X) -->
+**Project:** ERPNext Vietnamese Voice Copilot (`erpn_mobile1`) — app Flutter tiếng Việt giúp chủ tiệm bán cám/thức ăn chăn nuôi hỏi **công nợ / hóa đơn / tồn kho** từ ERPNext bằng câu nói tự nhiên. Agent đóng vai trò full-stack dev: Flutter client (`apps/mobile/`) + Node copilot/skill layer (`mcp-erpnext/`) + Python NLP (`src/vietnamese_nlp/`, `nlp_service/`).
+
+**Tech stack:** Flutter 3.47.2 + Riverpod (codegen) + GoRouter + dio + shared_preferences · Node 24 (MCP `@casys/mcp-erpnext@3.0.4` pin stdio) · Python 3.12 stdlib · CI build APK trên GitHub Actions (KHÔNG build trên VPS).
+
+**Kiến thức chi tiết:** `.project/README.md` là entry point (overview/architecture/state-routing/modules/integrations/design-system/patterns/openspec).
 
 ## Initial Setup & Navigation
 `context.md`/`working.md`/`operating_rules.md` đã được đọc tự động ở "SESSION START" (đầu file) — KHÔNG đọc lại ở đây, tránh tốn token 2 lần. Mục này chỉ để ĐIỀN thêm bước navigation RIÊNG của project, ví dụ: đọc sâu hơn trong `.project/README.md` nếu cần tra cứu cấu trúc schema/API, hoặc thứ tự đọc các service trong monorepo.
 
-<!-- ĐIỀN thêm nếu project có quy trình navigation riêng (vd: cấu trúc monorepo, service nào đọc trước) -->
+**Navigation riêng của project:**
+1. Trạng thái tiến độ & việc sắp tới → `next.md` + `checklist.md` (nguồn sự thật; `.plan/phases/` chỉ tham chiếu).
+2. Kiến trúc/module/API/storage → `.project/` (bắt đầu từ `.project/README.md`).
+3. Bằng chứng lệnh + output theo phase → `resultNN.txt` (mới nhất = số lớn nhất); bàn giao phiên → `handoff_*.md` mới nhất.
+4. Skills riêng project: `erpnext-mcp-connect` (nối MCP ERPNext/dsh) + `erpn-verify-first` (chống vòng lặp đoán-sửa) trong `.agents/skills/`.
 
 ## Critical Rules (Must Follow)
-<!-- ĐIỀN các rule RIÊNG của project ở đây (không lặp lại nội dung đã có ở phần trên của file này) -->
-1. <!-- ĐIỀN -->
-2. <!-- ĐIỀN -->
-<!-- ... thêm rule riêng nếu cần ... -->
+1. **An toàn số tiền > độ phủ:** số tiền chỉ COPY từ dữ liệu ERPNext, không chỗ nào tự tính; ambiguous → `answer: null` + reason (không bịa). Code chạm tiền AI KHÔNG tự duyệt / KHÔNG tự commit.
+2. **Read-only đến Phase 7:** mọi skill hiện tại chỉ đọc; write đầu tiên (`create_payment_entry`) phải qua Go/No-Go gate.
+3. **Secrets chỉ trong `.env`** (chmod 600, git-ignored; `git check-ignore` trước staging). Key/secret không dán vào patch/README/chat artifact. ERPNext key đã từng đi qua plain chat → user phải rotate.
+4. **Verify-first:** đọc source/contract thật trước khi đoán (tool name, env var, YAML format, response shape); unit xanh ≠ chạy thật — task lớn phải có ít nhất 1 loop thật; `read_url` làm mất indentation YAML → curl raw + `cat -A`.
+5. **Không tự cài service/tool còn thiếu** (dsh, LLM key, OCR, AgentMemory…) — báo user quyết. Không build APK trên VPS.
+6. **Pin `@casys/mcp-erpnext@3.0.4` + stdio** — không nâng bừa; env-switch mock/real: thiếu var → mock, sai → hard error (không fallback âm thầm).
+7. **Flutter blueprint KHÓA:** Riverpod codegen + GoRouter + Feature-first; package ngoài danh sách duyệt phải hỏi user trước khi thêm.
 n. **Xem thêm phần hạ tầng chung ở đầu file** (không lặp lại ở đây): luôn ưu tiên tool MCP nội bộ trước grep thủ công · không báo "hoàn thành" nếu chưa test/lint/Code Review · không tự commit code thuộc vùng loại trừ Ponytail khi chưa có xác nhận user.
 
 ## Workflow
-<!-- ĐIỀN workflow riêng của project, ví dụ mẫu bên dưới — sửa/xóa/thêm theo thực tế -->
-- **Bug fixing**: <!-- ĐIỀN: check ở đâu trước, log ở đâu -->
-- **Feature add**: 
-  - Nghĩ kỹ xem là Client hay Server Component.
-  - Update `working.md` sau khi làm xong.
-  - Test kĩ tính năng trước khi báo cáo cho user.
+- **Bug fixing:** (1) in TRẠNG THÁI THẬT của lớp nghi ngờ trước khi sửa (debug widget test in toàn bộ Text; thêm log 1 dòng có giới hạn) — không đoán; (2) đối chiếu contract đã verify (source package / response thật); (3) sửa gốc rễ, không vá dấu hiệu; (4) chạy lại TOÀN BỘ suite liên quan; (5) bug có nguyên nhân chắc chắn + dùng được cho project khác → ghi skill/Simplenote; bug nội bộ project → `openspec.md` (`.project/`) phần bugs.
+- **Feature add:**
+  - Flutter: theo blueprint (`features/<name>/{data,application,presentation}`), hỏi user trước khi thêm package; codegen `dart run build_runner build --delete-conflicting-outputs`.
+  - Backend: thêm/sửa trên **mock đúng shape thật** trước (`mock-server.mjs`), test E2E spawn thật, rồi mới nối thật = chỉ đổi binary spawn.
+  - Skill riêng project: nạp `erpn-verify-first` TRƯỚC khi viết code; nối MCP dùng `erpnext-mcp-connect`.
+  - Update `working.md` sau khi làm xong; task lớn ghi `resultNN.txt` (số tiếp theo).
+  - Test kĩ tính năng trước khi báo cáo cho user (analyze + test + 1 loop thật).
 
 ## Git & Kiểm thử (BẮT BUỘC cho **task lớn** — xem định nghĩa đầu file; tuân theo phương pháp TDD/debugging của Superpowers)
 
@@ -288,8 +300,7 @@ n. **Xem thêm phần hạ tầng chung ở đầu file** (không lặp lại �
   - Khi cần xem lại/review thay đổi vừa làm: dùng `git diff` (chưa commit) hoặc `git log -p -1`/`git show <sha>` (đã commit) để chỉ đọc phần THAY ĐỔI, thay vì `view`/`cat` lại nguyên file.
   - Chỉ đọc lại nguyên file khi diff không đủ ngữ cảnh để hiểu (vd: cần xem toàn bộ hàm bao quanh đoạn diff) hoặc đây là lần đầu tiếp cận file đó.
   - Áp dụng tương tự cho bước Code Review (impact review): ưu tiên `git diff`/`detect_changes{since}` để khoanh vùng, không quét lại toàn bộ codebase.
-- **Branch/Commit convention:** ...
-  <!-- Điền quy ước riêng của project, ví dụ: feat/, fix/, chore/ prefix; Conventional Commits; branch từ main/develop -->
+- **Branch/Commit convention:** Conventional Commits (`feat:`/`fix:`/`chore:`) · branch per OpenSpec change: `change/<ten-change>` từ master · commit sau khi user duyệt (UI-checkpoint hoặc "OK commit") · KHÔNG commit `.env` / `node_modules` / `build` / `.plan/` / `.gemini/` / `.opencode/` / `initp` (`.agents/` bị gitignore — giữ nguyên) · secret scan trước commit · footer `🤖 Generated with Codebuff / Co-Authored-By: Codebuff <noreply@codebuff.com>`.
 - **Targeted testing (ưu tiên, để tiết kiệm thời gian/token với project lớn):**
   - Trước khi chạy test, gọi `detect_changes{project, scope, since}` (codebase-memory-mcp) để xác định phạm vi file/module bị ảnh hưởng bởi thay đổi.
   - Nếu `detect_changes` không khả dụng (codebase-memory-mcp down): dùng `git diff --name-only` để lấy danh sách file thay đổi, suy ra test liên quan theo quy ước đặt tên test của project; nếu không suy ra được, chạy full test suite (chấp nhận tốn thời gian hơn là bỏ sót).

@@ -1,125 +1,161 @@
 # next.md — Roadmap ERPNext Vietnamese Voice Copilot (erpn_mobile1)
 
-Đường đi tính năng đã hoàn thành và sắp tới. Cập nhật sau mỗi phase lớn.
-Chi tiết từng phase: `.plan/phases/phase-0N-*.md`. Bằng chứng: `resultNN.txt`.
+Đường đi tính năng đã hoàn thành và sắp tới. Bằng chứng từng phase: `result*.txt`.
+Trạng thái tóm tắt (đã làm/chưa làm/chờ ai): `checklist.md` — hai file này không nhân bản nhau.
 
 **Định vị sản phẩm:** không phải "chatbot ERPNext", mà là **lớp AI UI trên ERPNext** —
 `understand → plan → act → verify → report`. Chat/voice chỉ là phương thức nhập liệu.
+Client đích đã chốt: **Flutter** (không phải PWA).
 
 ---
 
 ## Đã hoàn thành
 
-### Phase 0 — Foundation & Verification ✅ (`result1.txt`, `phase-00-result.md`)
+### Phase 0 — Foundation & Verification ✅ (`result1.txt`)
 
-Không viết code. Mục đích: chặn fabrication trước khi giao cho agent code (bài học từ `plan1_review1.md`).
+Không viết code. Chặn fabrication trước khi code (bài học `plan1_review1.md`).
 
-- Verify toàn bộ external dependency bằng npm registry + GitHub API + docs chính thức
-- **Pin `@casys/mcp-erpnext@3.0.4` + transport `stdio`** — né breaking change HTTP của 3.0.0 (stateless, đòi `MCP-Protocol-Version: 2026-07-28`, client TS SDK v1 bị reject)
-- **Agent Runtime = dsh** (`deepseek-ai/deepseek-harness`), MCP client **built-in** (`@deepseek-ai/dsh-mcp-client`). Ghi nhận rủi ro: 20/20 version là `rc`/`alpha`, chưa có bản stable
-- Chốt **2 trigger tách lớp khỏi dsh**: (1) ≥2 user cần credential khác nhau chạy đồng thời → Phase 10; (2) dsh breaking change làm hỏng production
-- Thứ tự STT: Web Speech API → Cohere Transcribe → Whisper API → PhoWhisper CPU
-- **Phát hiện ngược với review6:** 5 repo "DSH mobile" mà review6 gọi là bịa thì **đều tồn tại thật** (0–204 ★). Vẫn loại bỏ, nhưng vì lý do thẩm định an toàn, không phải "không tồn tại"
-- Chốt **Xây mới** Vietnamese NLP + LLM Router (không có OmniRoute/9Router/TAXPRO trên máy)
-- Thêm gate cứng **Mandatory Sign-off PII** vào `phase-05` (Nghị định 13/2023)
+- Pin `@casys/mcp-erpnext@3.0.4` + **stdio** (né breaking change HTTP 3.0.0:
+  stateless, đòi `MCP-Protocol-Version: 2026-07-28`)
+- **Agent Runtime = dsh** (`deepseek-ai/deepseek-harness`, MCP client built-in).
+  Rủi ro ghi nhận: 20/20 version là rc/alpha. 2 trigger tách khỏi dsh:
+  (1) ≥2 user cần credential khác nhau → Phase 10; (2) dsh breaking change phá production
+- STT order: Web Speech API → Cohere Transcribe → Whisper API → PhoWhisper CPU
+- Phát hiện ngược review6: 5 repo "DSH mobile" đều tồn tại thật — vẫn loại vì thẩm định an toàn
+- Chốt xây mới NLP + LLM Router; gate **Mandatory Sign-off PII** thêm vào phase-05 (NĐ13/2023)
 
-### Phase 1 — Vietnamese NLP Pipeline ✅ (`result1.txt`, `phase-01-result.md`)
+### Phase 1 — Vietnamese NLP Pipeline ✅ (`result1–3.txt`)
 
-Python, `src/vietnamese_nlp/`, **zero runtime dependency**.
+Python `src/vietnamese_nlp/`, stdlib thuần, chạy TRƯỚC LLM — cố định bằng code, không phụ thuộc prompt.
 
-- **Number normalizer → integer VND**: 14/14 dạng bắt buộc + mở rộng (`1tr5`, `1k5`, `230.000`, `1 500 000`, `0.5 triệu`, `2 triệu rưỡi`, `1 tỷ 200 triệu`, hậu tố tiền tệ…)
-- **Fail-safe là điểm cốt lõi**: `"Bác Hai"`, `"hai trăm"`, `"2 triệu 500"` → **không** sinh số thay vì đoán sai
-- **Kinship stripper**: 21 title; birth-order nickname (`Bác Hai`, `Cô Ba`, `Thím Mười`) là TÊN, nhưng `mươi` thì không (không làm hỏng `"ba mươi nghìn"`)
-- **Synonym mapper**: 10 nhóm intent (payment, credit_sale, receivable, purchase, delivery, sale, stock_level, unit_price, advance_payment, offset); **sản phẩm không bị map** (`cám heo` giữ nguyên)
-- **Quantity extractor**: `20 bao`, `25 ký`/`kg`, `tấn`, `tạ`, `yến`, `thùng`, `gói`…
-- **CLI độc lập**: `python -m vietnamese_nlp --pretty "..."` → JSON
-- **Test: 49/49 PASS** · **Money accuracy 234/234 = 100%** (lúc đầu; sau 2 đợt fix: **58/58 PASS · 259/259 = 100%** — 37 negative, corpus 259 case)
-- **Fix 3 bug thật cho ra số tiền sai im lặng** (gộp nhầm amount cụm sau; `"không triệu"` → 1.000.000; guard bỏ sót số viết bằng chữ)
-- **Challenge set 11 case** phơi rõ dạng chưa hỗ trợ (`2m5`, không dấu, `1 triệu 5`, `bạc`, hậu tố dính liền) — không trộn vào điểm số
-- **Đợt fix sau (2026-09-13, xem `result2.txt`):** fix 4 false positive + thêm tiếng lóng `trẹo`/`chai` = triệu → **55/55 test PASS · money 247/247 = 100% · 33 negative case**
+- Number normalizer → integer VND (14/14 dạng bắt buộc + mở rộng: `1tr5`, `230.000`,
+  `1 500 000đ`, `0.5 triệu`, `2 triệu rưỡi`, `1 tỷ 200 triệu`, slang `trẹo`/`chai`…)
+- **Fail-safe cốt lõi**: `"Bác Hai"`, `"hai trăm"`, `"2 triệu 500"` → KHÔNG sinh số thay vì đoán sai
+- Kinship 21 title (birth-order nickname là tên); synonym 10 intent (sản phẩm không bị map:
+  `cám heo` giữ nguyên); quantity extractor; CLI độc lập
+- **58/58 test · money 259/259 = 100%** sau 2 đợt fix thật (3 bug sai im lặng; 4 false positive +
+  hậu tố dính liền + chặn merge rác `2tr5k`)
+- Đợt fix result9: kinship chỉ strip cụm xưng hô ĐẦU câu — title giữa câu là phần tên thật
+  trong DB (`"Công trình nhà ông An"` có thật trong 26 khách)
 
-### Phase 2 (read-only) + Cầu nối dsh + ERPNext thật ✅ (`result4.txt`, `result5.txt`, `result6.txt`)
+### Phase 2 — MCP ERPNext read-only + skill layer + cầu nối + đo thật ✅ (`result4–9.txt`, commits `0ac8e61` + `119edd4`)
 
-Chưa nối ERPNext thật (cần credential) — mọi thứ khác đã chạy được end-to-end.
+- Skill layer: readonly-guard chặn write ở tầng code; 12 tool đọc thật `erpnext_*`;
+  `assertKnownId` (ID chỉ từ tool result); `markUntrusted` bọc dữ liệu ERPNext
+- Cầu nối Python HTTP (`nlp_service/server.py`, stdlib, 127.0.0.1) — đúng quyết định cầu nối đã khóa
+- Copilot MCP server 1 tool `copilot_ask` cho dsh; env-switch real/mock (thiếu var → mock,
+  sai config → hard error, không bao giờ âm thầm rơi về mock)
+- dsh 0.1.5-rc.1 headless E2E thật với ERPNext thật qua ngrok: *"Khách smoke 2026-09-13-p1done
+  còn nợ 269.000đ (3 hóa đơn chưa trả)"* — khớp đúng 3 hóa đơn thật
+- **Đo accuracy thật theo exit-criteria phase-02 (result9): 18 câu tiếng Việt đa dạng qua
+  `answerQuestion()` với ERPNext thật** — expected lấy từ ground-truth dump cùng ngày
+  (26 khách / 37 hóa đơn / 29 phiếu thu / 14 dòng tồn kho):
+  **vòng 1 = 27.8% → vòng 2 = 61.1% → vòng 3 = 18/18 = 100%**
+- **5 nhóm lỗi mà unit xanh (36/36) không bắt được** — đã fix kèm unit test bám theo:
+  ① router nhóm customer (khách/nợ/còn lại) nuốt câu hỏi hóa đơn/kho → specific TRƯỚC customer
+  ② nameCandidates prefix-only → tên giữa câu không bao giờ được thử → mọi token substring,
+  dài nhất trước, fetch list 1 lần/câu (trước đây tới 100 MCP round-trips)
+  ③ kinship strip title giữa câu phá tên thật → chỉ strip vocative đầu câu
+  ④ payment tool 417 (site chặn field `currency`) rồi đòi `party_type` → fallback
+  `erpnext_doc_list` + thêm param
+  ⑤ inventory trả cả kho → lọc theo vật tư hỏi (word-prefix dài nhất, 2 passes)
+- **An toàn tiền củng cố bằng chính batch test**: hỏi khách không tồn tại / fragment 1 từ khớp
+  19 khách → trả null + lý do, KHÔNG chọn hộ khách nào (b07 từng trả nhầm 457.875đ của khách khác)
+- **Test cuối: 40/40 node --test · 58/58 Python (money corpus nguyên vẹn)**
 
-- **Skill layer** (`mcp-erpnext/`): pin `@casys/mcp-erpnext@3.0.4` (lockfile verified) · readonly-guard chặn write ở tầng code, 12 tool đọc THẬT `erpnext_*` (skeleton đầu sai tên generic — sửa sau khi đọc source package) · mock server đúng shape 3.0.4 · JSON-RPC correlation hoàn chỉnh
-- **Cầu nối Python** (`nlp_service/server.py`): `normalize()` qua HTTP localhost (stdlib, bind 127.0.0.1, /health + /normalize) — đúng quyết định cầu nối đã khóa
-- **Copilot MCP server** (`copilot-server.mjs`): 1 tool `copilot_ask` cho dsh đăng ký — text → HTTP normalize → routeIntent → skill → mock → câu trả lời tiếng Việt xác định (không LLM bên trong). Mỗi nhóm skill 1 nhánh trả lời; fail-safe: không route/không tìm thấy khách → `answer: null` + reason, không bao giờ bịa ID
-- **File đăng ký dsh** (`dsh.cordis.patch.yml`): cấu trúc byte-chính-xác từ example chính thức (curl + cat -A), validate YAML OK + biểu thức `!!js` resolve đúng file; **chưa exercised với dsh sống** (dsh chưa cài trên máy — `which dsh` trống; không có key/runtime LLM nào)
-- **Test: 25/25 node --test PASS** (gồm 6 E2E spawn thật Python service + copilot + mock) · Python 58/58 PASS không regression · 7 transcript nguyên văn trong `result5.txt` — câu user yêu cầu: "chị Lan còn nợ bao nhiêu" → "Nguyễn Thị Lan còn nợ 2.500.000đ (1 hóa đơn chưa trả)."
-- **2 lỗi tự bắt bằng test E2E** (không phải bằng đọc code): route payment/sales rơi nhánh balance (sai shape) → tách nhánh; factory `sales`/`payment` thiếu `findCustomer` → sửa ở router (chia sẻ code customer skill, không nhân bản)
+### Phase 3 — Flutter chat MVP ✅ (`result7–8.txt`, commit `590b1b2`)
+
+- `apps/mobile` (Flutter 3.47.2 / Dart 3.13.2, Riverpod + dio, GoRouter 1 route): màn hình chat,
+  lịch sử `chat_history_v1` (SharedPreferences), empty state, SnackBar lỗi giữ text,
+  footer hiện `COPILOT_BASE_URL` đang nói với server nào
+- HTTP `/ask` wrapper (`mcp-erpnext/src/http-ask.mjs`) — app không gọi MCP trực tiếp
+- GH Actions `android-debug-apk`: analyze --fatal-infos → test → build APK debug → artifact
+  `erpn-chat-debug-apk`; **run 1 FAILURE** (gitignore `*.g.dart` không lên CI) → **đã fix
+  bằng step build_runner trong commit `119edd4`** — run 2 đang chờ kết quả
+- Flutter analyze 0 issue · 13/13 test; bug thật nổi bật: ChatBubble không bao giờ render
+  answer (bắt bằng debug test in toàn bộ Text trong tree)
+
+### Hạ tầng dự án ✅
+
+- Git: branch `change/flutter-chat-mvp`, remote `origin = github.com/hoangsoft90/erpn_mobile1`
+  (setup trong phiên result9 từ `.env` GH_REPO_URL/GH_TOKEN); commits `33f9dc0` → `0ac8e61`
+  → `590b1b2` → `119edd4`; `.env` git-ignored, secret scan trước mỗi commit
+  (result9 đã redact key lộ khỏi file evidence trước khi commit)
+- 2 project skills (`.agents/skills/`, local-only): `erpnext-mcp-connect` + `erpn-verify-first`
+- Tài liệu phiên mới: `.project/` (kiến thức tĩnh) + memory files; `.project/openspec.md`
+  là pointer — **1 nguồn sự thật duy nhất**: checklist.md (trạng thái) + next.md (roadmap)
+  + result*.txt (bằng chứng)
 
 ---
 
 ## Sắp tới
 
-### Ngay tiếp theo (thứ tự khuyến nghị)
+### Đang chạy (không cần quyết thêm)
 
-1. ~~Commit Phase 1~~ ✅ **33f9dc0** (root commit, 55 files, 2026-09-14 — user duyệt).
-2. ~~ERPNext thật~~ ✅ **ĐÃ NỐI 2026-09-14** (`result6.txt`): `.env` (git-ignored) + env-switch `pickServerScript` (đủ 3 var → real, thiếu → mock, sai → hard error); probe thật 125 tools; smoke dsh→copilot→REAL ERPNext trả đúng 269.000đ.
-3. ~~Cài dsh + LLM backend~~ ✅ **dsh 0.1.5-rc.1 headless chạy thật** với mock LLM OpenAI-compatible (`scripts/mock-llm.mjs`); swap sang gateway thật = chỉ sửa settings.yaml (baseURL + apiKeyEnv), không đụng code.
-4. **Rotate ERPNext key/secret** (đã đi qua chat) + **swap mock LLM → gateway thật** khi user cấp.
-5. **Thu 100–200 câu audio thật 3 miền** — điều kiện còn thiếu của Phase 1, **bắt buộc trước Phase 4**
-6. **Định nghĩa Flutter client track chi tiết** — phase-03 đã Flutter hoá nhưng track đầy đủ vẫn là khoảng trống lớn nhất; chặn `phase-04` (STT) và `phase-15` (ads). ✅ BƯỚC ĐẦU TIÊN ĐÃ CÓ 2026-09-14: Flutter chat MVP kỹ thuật xong (`result7.txt`, apps/mobile, Riverpod+GoRouter, GH Actions build APK) — chờ UI-checkpoint + commit + APK thật trên máy.
+1. **GH Actions run #2** (sau `119edd4`) — nếu xanh: tải artifact `erpn-chat-debug-apk`
+   từ trang run → người thật cài thử thiết bị thật (service `--host 0.0.0.0`,
+   app `--dart-define=COPILOT_BASE_URL=http://<IP-VPS>:8788`)
+2. **Tài liệu Mandatory Sign-off Phase 5** (PII/Nghị định 13/2023) — đang soạn để user review.
+   🛑 **Đây là gate pháp lý CỐ Ý**: KHÔNG code LLM Router/PII scrubbing cho tới khi user
+   ký duyệt rõ ràng trên tài liệu này
 
-### Theo phase (`production_roadmap.md`)
+### Theo phase
 
-| Phase | Nội dung | Write? | Ghi chú |
+| Phase | Nội dung | Write? | Điều kiện tiên quyết |
 |---|---|---|---|
-| 3 | MVP **Flutter** text chat (read-only) — file phase đã sửa từ PWA | Không | Giữ tên file `phase-03-mvp-pwa-text-chat.md` để tham chiếu cũ không gãy; nội dung đã là Flutter. Flutter UI gọi thẳng `nlp_service` + copilot HTTP (cầu nối đã có sẵn từ result5) |
-| **15** | Monetization: pro qua xem ads, reset mỗi ngày | — | **Thứ tự thực thi: giữa 13 và 14** (đánh số 15 để không đổi số 13/14). Có phase rồi nhưng còn 4 câu cần quyết |
-| 4 | Voice input/STT (hybrid) | Không | ⚠️ **Chặn bởi corpus audio thật** |
-| 5 | AI Gateway core: auth, PII scrub, LLM Router, audit | Không | 🛑 **Mandatory Sign-off phải xong TRƯỚC khi code router** |
-| 6 | Entity resolution + Action Proposal card | Không | Exit criteria có mục sign-off của Phase 5 |
-| 7 | `create_payment_entry` + idempotency | **Có** | ⚠️ **Go/No-Go gate — write đầu tiên chạm tiền** |
-| 8 | Background jobs, push notification, TTS readback | Có | "Ra lệnh rồi đi chỗ khác" |
-| 9 | Proposal state machine (expiry, re-validation, saga) | Có | Undo ≠ delete document |
-| 10 | Multi-user, RBAC, on-behalf-of credential | Có | **Trigger #1 để tách khỏi dsh** |
-| 11 | Mở rộng write skills (sales, inventory, purchase) | Có | |
+| 4 | Voice input/STT (hybrid): 🎤 → STT → user xem lại/sửa text → Gửi | Không | ⚠️ **Chặn bởi audio thật 3 miền** (100–200 câu, chờ người thật thu) |
+| 5 | AI Gateway core: auth, PII scrub, LLM Router, audit | Không | 🛑 **Mandatory Sign-off ĐƯỢC KÝ trước khi code router** |
+| 6 | Entity resolution + Action Proposal card (xác nhận tiếng Việt + Risk Level) | Không | Exit criteria Phase 5 |
+| 7 | **`create_payment_entry` + idempotency** | **Có** | ⚠️ **Go/No-Go gate: Phase 1–6 exit criteria ĐỦ** — write đầu tiên chạm tiền |
+| 8 | Background jobs + push notification + TTS readback | Có | Phase 7 |
+| 9 | Proposal state machine (expiry, re-validation, saga/compensation) | Có | Undo ≠ delete document |
+| 10 | Multi-user, RBAC, on-behalf-of ERPNext credential | Có | **Trigger #1 tách khỏi dsh** |
+| 11 | Mở rộng write skills (sales order, inventory, purchase) | Có | Phase 10 |
 | 12 | Multi-tenant readiness | Có | Chỉ nếu có ý định SaaS |
-| 13 | Production hardening + beta pilot | Có | Chaos test, đo success rate |
-| 14 | Store submission + PII/Nghị định 13 sign-off | — | Audit thủ công, không chỉ unit test |
+| 13 | Production hardening + beta pilot (chaos test, success rate) | Có | |
+| — | **Phase 15 — Monetization (pro qua ads, reset mỗi ngày) thực thi Ở GIỮA 13 và 14** | — | 4 câu chờ user: ad provider · múi giờ "hết ngày" · danh sách pro · IAP bỏ ad |
+| 14 | Store submission + PII/NĐ13 sign-off thủ công | — | Phase 9 + PII scrubbing phải pass audit THỦ CÔNG |
 
-### Nợ kỹ thuật Phase 1 (làm khi có dữ liệu thật)
+### Chờ người thật (không phải việc agent)
 
-- Tiếng lóng miền Nam: ~~`trẹo`~~ / ~~`chai`~~ ✅ đã làm; `bạc` **còn nợ** (không có mệnh giá cố định — chờ user xác nhận); viết tắt `m` **còn nợ** (`m` = mét, đoán là nguy hiểm)
-- ~~BUG hậu tố tiền tệ dính liền~~ ✅ **ĐÃ FIX 2026-09-13** (`result3.txt`): `"2000đ"`/`"5000vnd"`/`"500đồng"`/`"2tr5đ"`/`"230.000đ"`/`"1 500 000đ"` parse đúng; đồng thời chặn merge rác `2tr5k`/`2tr50`/`2024năm`/`2024rưỡi` (trước fix `"2tr5k"` = 2.500.000.000 và `"1 500 000đ"` = 1500 im lặng) → **58/58 PASS · 259/259 = 100%**
-- Tiếng lóng `bạc` **còn nợ** (chờ user xác nhận mệnh giá); viết tắt `m` **còn nợ**
-- Cờ `approximate` / so sánh (`"khoảng 10 triệu"`, `"hơn 10 triệu"`)
-- Số âm / hoàn tiền (`"trả lại 500 nghìn"`)
-- Tiếng lóng miền Trung (chưa khảo sát)
-- Số trần ở cuối câu (`"2 triệu 500"`) — hiện từ chối có chủ đích
-- Số trần 4 chữ số dạng năm (`"trả 2000"`) — từ chối có chủ đích; viết `2000 đ` hoặc `hai nghìn`
+- **Rotate key ERPNext** — Hoàng làm trực tiếp trên server (trạng thái: key cũ vẫn hợp lệ,
+  result9 §1). Sau khi rotate: update `.env` qua SSH + probe lại + xóa giá trị cũ khỏi mọi file
+- **Thu audio thật 3 miền** — mở khóa Phase 4
+- **Cài APK + test tại điểm bán** — cần người thật
+- **LLM gateway thật** — chờ user cấp; chỉ sửa settings.yaml, mock giữ làm contract test
 
-### Chưa có trong roadmap (cần user quyết)
+### Nợ kỹ thuật Phase 1 (khi có dữ liệu quyết định)
 
-- **Flutter client track** — `phase-03` đã sửa sang Flutter (2026-09-13), nhưng track chi tiết (navigation, state management, design token, native integration) **vẫn chưa có phase riêng**; `phase-04` (STT) và `phase-15` (ads) phụ thuộc vào nó
-- Native integration (đồng bộ native — yêu cầu gốc trong `checklist.md`)
-- ~~Monetization~~ → ✅ đã có `phase-15-monetization-ads.md`
+- `bạc` = mệnh giá nào (`ch-003`) · viết tắt `m` = triệu? (`ch-004`) · cờ `approximate`
+  ("khoảng/hơn 10 triệu") · số âm/hoàn tiền · tiếng lóng miền Trung · phân biệt câu hỏi/lệnh (Phase 6)
+- Số trần cuối câu (`"2 triệu 500"`) và 4 số dạng năm (`"trả 2000"`) — **từ chối có chủ đích**
+  (fail-safe); viết `2000 đ` hoặc `hai nghìn`
 
 ---
 
 ## Gate quan trọng nhất (không được bỏ qua)
 
-- **Trước Phase 7** (write đầu tiên chạm tiền): Phase 1–6 phải đạt exit criteria đầy đủ. Đây là điểm mà nếu bỏ qua, hậu quả là mất niềm tin người dùng vĩnh viễn — không phase sau nào cứu được.
-- **Trước Phase 14** (publish): Phase 9 (race condition/saga) + PII scrubbing (Phase 5) phải **pass audit thủ công**, không chỉ pass unit test — nghĩa vụ pháp lý (Nghị định 13/2023).
+- **Trước Phase 7** (write đầu tiên chạm tiền): Phase 1–6 đạt exit criteria đầy đủ — điểm mà nếu
+  bỏ qua, mất niềm tin người dùng vĩnh viễn, không phase sau nào cứu được.
+- **Trước Phase 14** (publish): Phase 9 + PII scrubbing Phase 5 phải **pass audit thủ công**,
+  không chỉ unit test — nghĩa vụ pháp lý (Nghị định 13/2023).
 
 ## Nguyên tắc xuyên suốt (áp dụng MỌI phase)
 
-1. **Read trước Write** — không phase write nào bắt đầu trước khi phase read-only tương ứng đạt ≥90% success rate đo thực tế.
-2. **Không tin external reference chưa verify** — tự `npm view` / mở link / test call trước khi đưa vào code.
-3. **Tái dùng trước khi xây mới** — kiểm tra OmniRoute/9Router + TAXPRO trước mỗi phase liên quan runtime/router/NLP.
-4. **An toàn > tốc độ** — không cắt Compliance (PII/NĐ13), Idempotency, Proposal Confirmation để rút ngắn. Có thể cắt scope nghiệp vụ (ít skill hơn), **không cắt safety**.
-5. **Exit criteria đo được** — không chuyển phase dựa trên cảm tính "chắc ổn rồi".
-
----
+1. **Read trước Write** — phase write chỉ bắt đầu khi phase read-only tương ứng đạt ≥90% success
+   rate **đo thật trên server thật** (chuẩn tham chiếu: result9 đo 18/18 bằng batch script).
+2. **Không tin external reference chưa verify** — tự `npm view` / mở link / curl thật trước khi code.
+3. **Tái dùng trước khi xây mới** — check OmniRoute/9Router + TAXPRO trước mỗi phase liên quan runtime/router/NLP.
+4. **An toàn > tốc độ** — có thể cắt scope nghiệp vụ, KHÔNG cắt Compliance (PII/NĐ13),
+   Idempotency, Proposal Confirmation.
+5. **Exit criteria đo được** — không chuyển phase bằng cảm tính; unit xanh ≠ chạy thật.
 
 ## Notes
 
-- **Tool đang hỏng trong env này:** AgentMemory (down) · MCP `cocoindex-code`/`codebase-memory-mcp` (không expose) · OCR (không khả dụng) · Simplenote MCP (không có trong tool list). Code Review phải làm thủ công.
-- **Vùng tiền/số: AI KHÔNG được tự ký duyệt** — mọi thay đổi chạm logic tiền phải user review trước khi commit.
-- **Cầu nối Python ↔ Flutter/dsh = HTTP service nội bộ (localhost)** (chốt 2026-09-13) — 1 nguồn logic duy nhất, không port sang Dart. ✅ Phía Python+Node đã xây xong 2026-09-14 (`nlp_service/server.py` + `copilot-server.mjs`, `result5.txt`); chân Flutter nối vào sau (Phase 3).
-- **Repo vẫn 0 commit** — user đã duyệt nguyên tắc commit gộp Phase 1 (sau khi fix bug hậu tố — đã fix xong), **chờ user gõ OK lần cuối**.
-- **Đừng báo "xong" bằng lời** — mọi claim cần dòng code + output test thật.
-- Mỗi phase lớn: cập nhật `resultNN.txt` + `checklist.md` + `features.md` + `next.md` + `handoff_<timestamp>.md`.
-- `.plan/` bị gitignore → các file kết quả phase KHÔNG được commit; `result*.txt` / `checklist.md` / `features.md` / `next.md` / `handoff*.md` thì có.
+- **Tool đang hỏng trong env:** AgentMemory (down) · MCP cocoindex/codebase-memory (không expose) ·
+  OCR (không chạy được) · Simplenote (không có) → Code Review thủ công, không tự cài.
+- **Vùng tiền/số/phân quyền: AI KHÔNG tự ký duyệt/không tự commit** — chờ user review.
+- **Cầu nối Python ↔ Flutter/dsh = HTTP service nội bộ (localhost)** (chốt 2026-09-13) —
+  1 nguồn logic duy nhất, không port sang Dart.
+- Mỗi phase lớn: cập nhật `resultNN.txt` + `checklist.md` + `features.md` + `next.md` + `handoff_<ts>.md`.
+- `.plan/` bị gitignore → file kết quả phase KHÔNG commit; `result*.txt` / docs root thì có.
