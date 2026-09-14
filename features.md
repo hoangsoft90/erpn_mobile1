@@ -6,7 +6,7 @@ Bằng chứng code + test: `resultNN.txt`, `.plan/phases/phase-0N-result.md`, `
 **Ý tưởng sản phẩm (1 câu):** nói chuyện với ERPNext như nói chuyện với một nhân viên kế toán/bán hàng —
 `"Anh Nam vừa trả 10 triệu tiền cám"` → AI tra khách, kiểm tra công nợ, đề xuất phiếu thu, chờ user xác nhận, rồi ghi vào ERPNext.
 
-**Trạng thái tổng:** xong **Phase 0 + 1 + 2 (read-only, ERPNext thật, **accuracy thật 18/18 = 100%** — `result9.txt`) + cầu nối dsh + **Flutter chat MVP** (`result7.txt`, commit `590b1b2`, **đã push GH**). Phase 3 branch trên GitHub; run CI đầu FAILURE (gitignore `*.g.dart`) — workflow đã fix, chờ user duyệt commit đợt fix result9 để build lại APK. Chưa có STT.
+**Trạng thái tổng:** xong **Phase 0 + 1 + 2 (read-only, ERPNext thật, **accuracy thật 18/18 = 100%** — `result9.txt`) + cầu nối dsh + **Flutter chat MVP** (`result7.txt`, commit `590b1b2`). 6 commits đã push GH; **CI XANH 2 lần liên tiếp** (run #2 `4c5bd26`, run #3 `c3d74c3` — result10/11). **Endpoint /ask có bảo mật bind + basic auth, verify thật 401→200→269.000đ** (`result11.txt`). Chưa có STT; chờ user: dán 3 giá trị GitHub Settings + chọn đường endpoint (Tailscale/mở port/ngrok) + cài APK thiết bị thật + ký sign-off Phase 5.
 
 ---
 
@@ -67,18 +67,26 @@ Lớp chuẩn hóa chạy **TRƯỚC** LLM, cố định bằng code chứ khôn
 - **Fail-safe củng cố**: ambiguous-fallback chỉ nhận fragment ≥ 2 từ; khách không tồn tại / fragment 1 từ khớp 19 khách → trả null + lý do, KHÔNG chọn hộ khách (an toàn tiền đo được bằng chính batch)
 - Test hermetic: E2E test strip `ERPNEXT_*` khi spawn (env leak làm mock chạm nhầm server thật)
 
+### Endpoint /ask bảo mật + APK cài được + kịch bản thu âm — 2026-09-14 (`result10.txt`, `result11.txt`)
+- **Bind policy + basic auth** (`http-ask.mjs`): non-loopback BẮT BUỘC `ASK_USER`/`ASK_PASSWORD` (server TỪ KHỞI ĐỘNG nếu thiếu); interface public cần thêm `ASK_ALLOW_PUBLIC=1` (quyết định tường minh); so sánh timing-safe; auth phủ cả `/health`. Flutter client gửi Basic auth qua dart-define (không fallback âm thầm anonymous)
+- **Verify thật trên interface mạng**: 401 không auth → 200 có auth → `POST /ask` trả đúng 269.000đ qua ERPNext thật. ⚠️ Port 8788 bị cloud firewall hosting chặn từ internet (không phải lỗi code) — 3 đường chọn: Tailscale (khuyến nghị, đã cài chờ login) / hosting mở port / ngrok từ VPS
+- **CI build APK cài được**: dart-define `COPILOT_BASE_URL` + auth từ repo Variables/Secret — không hardcode endpoint vào repo (chờ user dán 3 giá trị; token hiện tại chỉ-đọc)
+- **Kịch bản thu âm 150 câu 3 miền** (`docs/audio-collection-script.md`): 7 nhóm A–G có ground truth, hướng dẫn thiết bị/môi trường/metadata — chuẩn bị Phase 4, CHỈ tài liệu
+- **Mandatory Sign-off Phase 5 đã soạn** (`SIGNOFF-phase5-pii.md`): 4 phương án scrubbing khảo sát, bảng quyết định 0/4 — **gate ĐÓNG, chờ ký**
+- Test: Node 48/48 (thêm 8 test auth) · Python 58/58 · Flutter 13/13 · analyze 0 issue
+
 ---
 
 ## Chưa làm / Tương lai
 
 ### Giao diện & kênh truy cập
-- **Phase 3 — MVP text chat (read-only) bằng Flutter** — file phase đã sửa từ PWA sang Flutter (2026-09-13): màn hình chat, lịch sử hội thoại, query công nợ/tồn kho/đơn hàng, gọi HTTP service nội bộ trên VPS (không nhúng key vào app), build APK debug test máy thật
+- **Phase 3 — MVP text chat (read-only) bằng Flutter** — ✅ XONG + COMMITTED `590b1b2` + CI XANH (result7, result10/11). Còn lại là vận hành: user dán 3 giá trị GitHub Settings → APK cài được; xử lý endpoint (Tailscale/mở port/ngrok); cài thiết bị thật
 - **Flutter client track chi tiết** — ⚠️ **VẪN CHƯA có phase riêng** (phase-03 chỉ là màn hình chat đầu tiên): navigation, state management, design token, đồng bộ native. Đây là **khoảng trống lớn nhất** của roadmap; `phase-04` (STT) và `phase-15` (ads) đều phụ thuộc vào nó
-- **Cầu nối Python ↔ Flutter/dsh** — ✅ phía Python+Node đã xây xong (`nlp_service` + `copilot-server.mjs`, result5); còn chân **Flutter** gọi vào cầu nối này (Phase 3)
+- **Cầu nối Python ↔ Flutter/dsh** — ✅ XONG toàn chuỗi: `nlp_service` (Python) + `copilot-server.mjs` (Node) + `/ask` HTTP + Flutter client gọi thật (result7/11)
 - Native integration (đồng bộ native — yêu cầu gốc trong `checklist.md`)
 
 ### Voice
-- **Phase 4 — Voice input/STT (hybrid):** interface `SpeechRecognitionProvider`, luồng bắt buộc 🎤 → STT → **user xem lại/sửa text** → Gửi; đo accuracy theo từng miền
+- **Phase 4 — Voice input/STT (hybrid):** interface `SpeechRecognitionProvider`, luồng bắt buộc 🎤 → STT → **user xem lại/sửa text** → Gửi; đo accuracy theo từng miền. **Kịch bản 150 câu đã sẵn sàng** (`docs/audio-collection-script.md`) — chỉ chờ người thật thu
 - **Phase 8 — TTS readback** (đọc kết quả), gắn với background job
 
 ### Tích hợp ERPNext

@@ -1,0 +1,61 @@
+========================================================================
+RESULT 12 — DOCS SYNC (openspec/features/checklist/next/working) +
+AI-RULES + SKILL LESSONS + HANDOFF — không code mới
+Timestamp: 2026-09-14 10:23
+Branch change/flutter-chat-mvp, head trước commit này = c9bc64d.
+========================================================================
+
+== 1. PHÁT HIỆN QUAN TRỌNG: .project/ai-rules.md KHÔNG TỒN TẠI ==
+
+User yêu cầu "tuân thủ quy tắc trong .project/ai-rules.md" → verify trước
+(không đoán — pattern giống akimcp.py result9):
+$ ls .project/ → ai-rules.md KHÔNG có trong danh sách
+→ Đã TẠO MỚI file, nội dung tổng hợp từ AGENTS.md + operating_rules.md +
+  thực tế đã duyệt qua result1→11 (nguồn sự thật, secrets, gate pháp lý,
+  quy trình verify-first, môi trường đã biết). CHỜ USER REVIEW/DUYỆT —
+  đã thêm vào checklist mục "Cần hỏi lại".
+
+== 2. SKILL erpn-verify-first — CẬP NHẬT 7 BÀI HỌC RESULT11 ==
+
+Bảng đoán-sai thêm 4 dòng: NAT IP không bind trực tiếp được · hairpin NAT
+làm curl-from-VPS vô dụng cho verify public · GH token read-only (GET 200,
+PUT 404) · pure function đọc env lẫn lộn process.env vs env param.
+Bảng bẫy môi trường thêm 2 dòng: curl exit 28 đứt chuỗi && · 401 vs 000
+(two chẩn đoán khác nhau: service sống cần auth vs firewall chặn mạng).
+Mục 3 thêm: check tính thuần nhất pure function khi test fail quanh policy;
+verify network từ đúng tầm nhìn (từ ngoài mới là bằng chứng public).
+Validate: frontmatter OK · 6 sections · CJK leak CLEAN · 125 dòng.
+
+== 3. OPENSPEC tasks.md — CẬP NHẬT THỰC TẾ ==
+
+- 3.2 ✅ (đã xong từ phiên trước, chưa tick) + thêm 3.3 (CI dart-define,
+  xong) + 3.4 (chờ user dán 3 giá trị GitHub Settings)
+- 4.1/4.2 ✅ (đã xong — UI-checkpoint duyệt, result7 có thật)
+- 4.3 ghi rõ điều kiện chờ: APK chạy OK trên thiết bị thật
+
+== 4. DOCS ĐỒNG BỘ (không nhân bản, mỗi loại 1 nguồn) ==
+
+- checklist.md: mục "Cần hỏi lại" thêm review ai-rules.md; các mục
+  endpoint/security đã ở trạng thái result11 (từ lần cập nhật trước)
+- features.md: trạng thái tổng = CI xanh 2 lần + endpoint security verify;
+  thêm section "Endpoint /ask bảo mật + APK cài được + kịch bản thu âm";
+  Phase 3/cầu nối chuyển sang ✅ hoàn toàn; Phase 4 ghi kịch bản sẵn sàng
+- next.md: "Đang chạy" = run #2/#3 SUCCESS + việc còn lại thuộc user;
+  Sign-off = đã soạn, gate ĐÓNG; section Phase 3 cập nhật CI mới nhất
+- working.md: nhật ký mới nhất result10/11/12 + việc chờ user rõ ràng
+
+== 5. TRẠNG THÁI TEST (không đổi code production trong phiên docs này) ==
+
+Chỉ chạy lại để xác nhận không lệch:
+$ cd mcp-erpnext && node --test → 48/48 pass
+$ flutter analyze → No issues found · flutter test → 13/13
+(Python 58/58 không đụng tới từ result11 — không chạy lại không cần thiết)
+
+== 6. CHỜ USER (không đổi) ==
+
+1. Dán 3 giá trị GitHub Settings (Variables COPILOT_BASE_URL/COPILOT_AUTH_USER
+   + Secret COPILOT_AUTH_PASSWORD) → re-run CI → APK cài được
+2. Chọn đường endpoint: Tailscale login / hosting mở port 8788 / ngrok từ VPS
+3. Ký SIGNOFF-phase5-pii.md (gate ĐÓNG — KHÔNG code Phase 5 trước đó)
+4. Rotate key ERPNext (Hoàng, trên server) · thu audio 150 câu
+5. Review .project/ai-rules.md (mới tạo)

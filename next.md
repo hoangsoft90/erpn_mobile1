@@ -63,15 +63,16 @@ Python `src/vietnamese_nlp/`, stdlib thuần, chạy TRƯỚC LLM — cố đị
   19 khách → trả null + lý do, KHÔNG chọn hộ khách nào (b07 từng trả nhầm 457.875đ của khách khác)
 - **Test cuối: 40/40 node --test · 58/58 Python (money corpus nguyên vẹn)**
 
-### Phase 3 — Flutter chat MVP ✅ (`result7–8.txt`, commit `590b1b2`)
+### Phase 3 — Flutter chat MVP ✅ (`result7–8.txt`, commit `590b1b2` + CI fix `119edd4`/`c3d74c3`)
 
 - `apps/mobile` (Flutter 3.47.2 / Dart 3.13.2, Riverpod + dio, GoRouter 1 route): màn hình chat,
   lịch sử `chat_history_v1` (SharedPreferences), empty state, SnackBar lỗi giữ text,
   footer hiện `COPILOT_BASE_URL` đang nói với server nào
 - HTTP `/ask` wrapper (`mcp-erpnext/src/http-ask.mjs`) — app không gọi MCP trực tiếp
-- GH Actions `android-debug-apk`: analyze --fatal-infos → test → build APK debug → artifact
-  `erpn-chat-debug-apk`; **run 1 FAILURE** (gitignore `*.g.dart` không lên CI) → **đã fix
-  bằng step build_runner trong commit `119edd4`** — run 2 đang chờ kết quả
+- GH Actions `android-debug-apk`: analyze --fatal-infos → test → build APK debug (dart-define
+  `COPILOT_BASE_URL`/auth từ repo Variables/Secret — artifact cài được lên máy thật) → artifact
+  `erpn-chat-debug-apk`; **run 1 FAILURE** (gitignore `*.g.dart` không lên CI) → **run #2 + #3
+  SUCCESS sau khi thêm step build_runner + dart-define** (`result10.txt`, `result11.txt`)
 - Flutter analyze 0 issue · 13/13 test; bug thật nổi bật: ChatBubble không bao giờ render
   answer (bắt bằng debug test in toàn bộ Text trong tree)
 
@@ -92,12 +93,14 @@ Python `src/vietnamese_nlp/`, stdlib thuần, chạy TRƯỚC LLM — cố đị
 
 ### Đang chạy (không cần quyết thêm)
 
-1. **GH Actions run #2** (sau `119edd4`) — nếu xanh: tải artifact `erpn-chat-debug-apk`
-   từ trang run → người thật cài thử thiết bị thật (service `--host 0.0.0.0`,
-   app `--dart-define=COPILOT_BASE_URL=http://<IP-VPS>:8788`)
-2. **Tài liệu Mandatory Sign-off Phase 5** (PII/Nghị định 13/2023) — đang soạn để user review.
-   🛑 **Đây là gate pháp lý CỐ Ý**: KHÔNG code LLM Router/PII scrubbing cho tới khi user
-   ký duyệt rõ ràng trên tài liệu này
+1. ~~GH Actions run #2~~ ✅ **XONG — run #2 + #3 đều SUCCESS** (`result10.txt`, `result11.txt`):
+   run #3 (`c3d74c3`) build APK với dart-define `COPILOT_BASE_URL`/auth từ repo
+   Variables/Secret. **Còn lại là việc user:** ① dán 3 giá trị GitHub Settings (token
+   chỉ-đọc) ② chọn đường endpoint — port 8788 bị firewall hosting chặn từ internet
+   (Tailscale khuyến nghị / mở port / ngrok) ③ cài APK thiết bị thật
+2. **Mandatory Sign-off Phase 5** — ✅ ĐÃ SOẠN `SIGNOFF-phase5-pii.md` (4 phương án
+   scrubbing, bảng quyết định 0/4). 🛑 **Gate pháp lý CỐ Ý — ĐÓNG**: KHÔNG code
+   LLM Router/PII scrubbing cho tới khi user ký duyệt rõ ràng trên tài liệu này
 
 ### Theo phase
 

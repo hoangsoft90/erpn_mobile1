@@ -16,10 +16,12 @@
 ## 3. CI build APK trên GitHub Actions
 
 - [x] 3.1 Thêm `.github/workflows/android-debug-apk.yml`: trigger push/PR, setup Java 21 + Flutter stable + `flutter pub get` + `flutter analyze` + `flutter test` + `flutter build apk --debug`, upload artifact `erpn-chat-debug-apk`.
-- [ ] 3.2 Ghi trong README + next.md: quy trình user cấp repo → push → tải APK từ tab Actions (KHÔNG build trên VPS theo quyết định user).
+- [x] 3.2 Ghi trong README + next.md: quy trình user cấp repo → push → tải APK từ tab Actions (KHÔNG build trên VPS theo quyết định user).
+- [x] 3.3 (mở rộng 2026-09-14) CI build APK nhận `COPILOT_BASE_URL`/auth qua repo Variables + Secret qua dart-define — artifact cài được lên máy thật, không hardcode endpoint vào repo (result10/11).
+- [ ] 3.4 **Chờ user** dán 3 giá trị vào GitHub Settings (token hiện tại chỉ-đọc, PUT 404): Variables `COPILOT_BASE_URL`, `COPILOT_AUTH_USER` + Secret `COPILOT_AUTH_PASSWORD` (result11 §6).
 
 ## 4. Đóng gói phase
 
-- [ ] 4.1 UI-checkpoint: chạy app (desktop nếu cài deps được, nếu không qua widget test + screenshot sau) → xin user duyệt UI trước khi commit.
-- [ ] 4.2 Cập nhật result7.txt (số liệu thật: analyze/test/wrapper test), checklist.md, features.md, next.md, handoff mới.
-- [ ] 4.3 `/opsx:verify` → commit trên branch change → sync/archive OpenSpec change khi user OK.
+- [x] 4.1 UI-checkpoint: widget test 13/13 + mô tả UI → user duyệt UI → commit `590b1b2` (2026-09-14).
+- [x] 4.2 Cập nhật result7.txt (số liệu thật: analyze/test/wrapper test), checklist.md, features.md, next.md, handoff mới.
+- [ ] 4.3 `/opsx:verify` → sync/archive OpenSpec change khi APK chạy OK trên thiết bị thật (chờ: user xử lý endpoint — Tailscale/mở port — + dán 3 giá trị GitHub Settings + cài thử).

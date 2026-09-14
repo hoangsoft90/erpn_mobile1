@@ -99,6 +99,7 @@ Trạng thái roadmap chi tiết nằm ở `next.md` — file này KHÔNG nhân 
 
 ## Cần hỏi lại / chờ user quyết định
 
+- [ ] **Review `.project/ai-rules.md`** (MỚI 2026-09-14): file bạn nhắc tới KHÔNG tồn tại trước đó — agent đã tổng hợp từ AGENTS.md + operating_rules + thực tế result1→11. Duyệt hoặc sửa theo ý bạn; sau đó đây là nguồn quy tắc số 1 của `.project/`
 - [ ] **4 câu của Phase 15 (monetization):** ad provider · múi giờ tính "hết ngày" ·
       danh sách tính năng pro · có IAP bỏ ad không
 - [ ] **`bạc` mệnh giá** (`ch-003`) + có chấp nhận `m` = triệu không (`ch-004`)
