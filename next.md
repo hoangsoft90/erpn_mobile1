@@ -60,7 +60,7 @@ Chưa nối ERPNext thật (cần credential) — mọi thứ khác đã chạy 
 3. ~~Cài dsh + LLM backend~~ ✅ **dsh 0.1.5-rc.1 headless chạy thật** với mock LLM OpenAI-compatible (`scripts/mock-llm.mjs`); swap sang gateway thật = chỉ sửa settings.yaml (baseURL + apiKeyEnv), không đụng code.
 4. **Rotate ERPNext key/secret** (đã đi qua chat) + **swap mock LLM → gateway thật** khi user cấp.
 5. **Thu 100–200 câu audio thật 3 miền** — điều kiện còn thiếu của Phase 1, **bắt buộc trước Phase 4**
-6. **Định nghĩa Flutter client track chi tiết** — phase-03 đã Flutter hoá nhưng track đầy đủ vẫn là khoảng trống lớn nhất; chặn `phase-04` (STT) và `phase-15` (ads). Flutter UI giờ có thể gọi thẳng `nlp_service` HTTP (cầu nối đã chạy thật).
+6. **Định nghĩa Flutter client track chi tiết** — phase-03 đã Flutter hoá nhưng track đầy đủ vẫn là khoảng trống lớn nhất; chặn `phase-04` (STT) và `phase-15` (ads). ✅ BƯỚC ĐẦU TIÊN ĐÃ CÓ 2026-09-14: Flutter chat MVP kỹ thuật xong (`result7.txt`, apps/mobile, Riverpod+GoRouter, GH Actions build APK) — chờ UI-checkpoint + commit + APK thật trên máy.
 
 ### Theo phase (`production_roadmap.md`)
 

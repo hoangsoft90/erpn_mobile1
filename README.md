@@ -112,5 +112,52 @@ cd mcp-erpnext && npm install && npm test
 
 Verbatim transcripts of a full run: `result5.txt`.
 
+## HTTP `/ask` endpoint (phone-facing, Phase 3)
+
+The Flutter client speaks plain HTTP to the copilot pipeline:
+
+```bash
+# mock ERPNext (no credentials needed):
+node mcp-erpnext/src/http-ask.mjs            # binds 127.0.0.1:8788
+
+# REAL ERPNext — credentials come from .env (ERPNEXT_URL/ERPNEXT_API_KEY/ERPNEXT_API_SECRET):
+set -a; source .env; set +a; node mcp-erpnext/src/http-ask.mjs
+
+# phone on the LAN (operator decision — read-only but still our backend):
+node mcp-erpnext/src/http-ask.mjs --host 0.0.0.0
+
+curl -s http://127.0.0.1:8788/health
+curl -s -X POST http://127.0.0.1:8788/ask \
+  -H 'Content-Type: application/json' -d '{"text":"chị Lan còn nợ bao nhiêu"}'
+```
+
+Response shapes: `200 {ok:true,result:{answer,...}}` (answer is null when no
+route/customer matches — the reason field explains why, the pipeline never
+invents data), `400/500 {ok:false,error}`.
+
+## Flutter client (apps/mobile, Phase 3)
+
+```bash
+export PATH="/google/flutter/bin:$PATH"
+cd apps/mobile
+flutter pub get && flutter analyze && flutter test
+
+# run against a copilot on the LAN (default is 127.0.0.1:8788):
+flutter run --dart-define=COPILOT_BASE_URL=http://<LAN-IP>:8788
+```
+
+Architecture: Riverpod (codegen) + GoRouter + feature-first
+(`lib/features/chat/{data,application,presentation}`), design tokens in
+`lib/app/theme/` + `openspec/config.yaml`.
+
+### Android APK via GitHub Actions (never build on the dev VPS)
+
+`.github/workflows/android-debug-apk.yml` runs on push/PR touching
+`apps/mobile/**` and uploads the debug APK as artifact `erpn-chat-debug-apk`:
+
+1. push this repo to GitHub
+2. open the repo's **Actions** tab → workflow *android-debug-apk*
+3. download artifact `erpn-chat-debug-apk` → install `app-debug.apk` on a phone
+
 See `.plan/phases/phase-01-result.md` for the full accuracy report, `result2.txt`
 for the follow-up fix, and the list of forms that are deliberately unsupported.

@@ -6,7 +6,7 @@ Bằng chứng code + test: `resultNN.txt`, `.plan/phases/phase-0N-result.md`, `
 **Ý tưởng sản phẩm (1 câu):** nói chuyện với ERPNext như nói chuyện với một nhân viên kế toán/bán hàng —
 `"Anh Nam vừa trả 10 triệu tiền cám"` → AI tra khách, kiểm tra công nợ, đề xuất phiếu thu, chờ user xác nhận, rồi ghi vào ERPNext.
 
-**Trạng thái tổng:** xong **Phase 0 + Phase 1 + Phase 2 (read-only, ĐÃ NỐI ERPNext THẬT) + cầu nối dsh** (`result6.txt`). Chưa có giao diện (Flutter Phase 3), chưa có STT.
+**Trạng thái tổng:** xong **Phase 0 + Phase 1 + Phase 2 (read-only, ĐÃ NỐI ERPNext THẬT) + cầu nối dsh** (`result6.txt`). ✅ Flutter chat MVP kỹ thuật xong (`result7.txt`: apps/mobile + /ask wrapper + GH Actions workflow; 13/13 test) — chờ user duyệt UI → commit → build APK thật. Chưa có STT.
 
 ---
 

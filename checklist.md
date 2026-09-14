@@ -61,12 +61,12 @@ Bằng chứng chi tiết nằm ở `.plan/phases/phase-0N-result.md` và `resul
 
 ### Ngay tiếp theo
 - [x] **Phase 2** — MCP server ERPNext read-only + skill layer ✅ **XONG 2026-09-14** (`result4.txt` skeleton + `result5.txt` wiring + `result6.txt` real): pin 3.0.4 (lockfile) · readonly-guard 12 tool đọc THẬT · **34/34 node --test PASS** · **đã nối ERPNext THẬT** (env-switch `pickServerScript`: đủ 3 var → real, thiếu → mock, sai → hard error; probe thật 125 tools + customer_list OK) · **dsmoke dsh thật end-to-end** (dsh 0.1.5-rc.1 headless + mock LLM OpenAI-compatible → câu trả lời đúng 269.000đ khớp 3 hóa đơn thật). Còn thiếu: audit log/rate limit (phase-05), dsh Web UI browser leg
-- [x] **Cầu nối Python ↔ Flutter/dsh** ✅ ĐÃ XÂY 2026-09-14: `nlp_service/server.py` (stdlib, bind 127.0.0.1, GET /health + /normalize) — `copilot-server.mjs` gọi qua HTTP thật. Chưa nối: chân Flutter (Phase 3)
+- [x] **Cầu nối Python ↔ Flutter/dsh** ✅ ĐÃ XÂY 2026-09-14: `nlp_service/server.py` (stdlib, bind 127.0.0.1, GET /health + /normalize) — `copilot-server.mjs` gọi qua HTTP thật. ✅ Chân Flutter ĐÃ NỐI 2026-09-14: `apps/mobile` gọi HTTP `/ask` (`result7.txt`)
 - [x] **Commit Phase 1** ✅ **33f9dc0** — root commit 55 files +6390 (2026-09-14, user duyệt "thấy ổn thì commit"), scope đúng kế hoạch, `.env` không bị add (verified `git check-ignore` trước staging + grep secrets chỉ có .env)
 - [ ] Thu 100–200 câu **audio thật** 3 miền (cửa hàng/kho/ngoài đường) → điều kiện còn thiếu của phase-01, bắt buộc trước Phase 4
 
 ### Các phase sau (chi tiết ở `next.md` + `.plan/phases/`)
-- [ ] Phase 3 — MVP PWA text chat (read-only)
+- [ ] Phase 3 — MVP **Flutter** text chat (read-only) — KỸ THUẬT XONG 2026-09-14 (`result7.txt`: apps/mobile + http-ask.mjs + GH Actions workflow; Node 36/36, Python 58/OK, Flutter 13/13, analyze 0 issue). CHỜ: UI-checkpoint user duyệt → commit → push GH → build APK thật
 - [ ] Phase 4 — Voice input/STT (hybrid) — **bị chặn bởi corpus audio**
 - [ ] Phase 5 — AI Gateway core (auth, PII scrub, LLM Router, audit) — **phải xong Mandatory Sign-off trước khi code router**
 - [ ] Phase 6 — Entity resolution + Action Proposal card
