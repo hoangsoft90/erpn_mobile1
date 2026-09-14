@@ -13,15 +13,23 @@
  *                   missing/invalid text -> 400 {ok:false,error}
  *                   internal failure    -> 500 {ok:false,error} (no stack)
  *
- * Bind: 127.0.0.1 by default (same stance as nlp_service). For phone testing
- * on the LAN run with --host 0.0.0.0 explicitly — that is an operator
- * decision, not a default (the endpoint is read-only but still our backend).
+ * Bind + auth policy (user decision 2026-09-14 — REAL customer debt data
+ * must never be exposed to the public internet without auth):
+ *   - Default stays 127.0.0.1 (same stance as nlp_service).
+ *   - Non-loopback binds REQUIRE basic auth (ASK_USER + ASK_PASSWORD env)
+ *     AND the server hard-refuses to start otherwise. Public-interface
+ *     binds additionally require ASK_ALLOW_PUBLIC=1 — an explicit operator
+ *     decision, not an accident of a wrong flag.
+ *   - Intended safe path: bind the Tailscale interface (or any VPN IP) —
+ *     encrypted WireGuard transport, no public exposure, auth still on.
  *
  * Run: node src/http-ask.mjs [--port 8788] [--host 127.0.0.1]
- * Ready line on stdout: {"ready":true,"port":N}
+ *      ASK_USER=op ASK_PASSWORD=... node src/http-ask.mjs --host <tailscale-ip>
+ * Ready line on stdout: {"ready":true,"port":N,"host":"...","auth":bool}
  */
 
 import http from "node:http";
+import { timingSafeEqual } from "node:crypto";
 import { answerQuestion } from "./copilot-server.mjs";
 
 const MAX_BODY = 1_000_000; // one utterance is ~200 chars; 1MB is generous
@@ -33,6 +41,62 @@ function parseArgs(argv) {
     if (argv[i] === "--host") args.host = argv[++i];
   }
   return args;
+}
+
+/**
+ * Non-loopback bind policy. Throws on unsafe config so the process never
+ * comes up exposed by accident. Returns the parsed credential pair.
+ */
+export function resolveBindPolicy({ host, env = process.env }) {
+  const loopback = /^(127\.|localhost$|::1$)/.test(host);
+  if (loopback) {
+    if (env.ASK_USER || env.ASK_PASSWORD) {
+      throw new Error("ASK_USER/ASK_PASSWORD make no sense on a loopback bind — remove them");
+    }
+    return { loopback: true, user: null, password: null };
+  }
+  const user = env.ASK_USER;
+  const password = env.ASK_PASSWORD;
+  if (!user || !password) {
+    throw new Error(
+      `refusing to bind non-loopback host ${host} without auth: set ASK_USER and ASK_PASSWORD`,
+    );
+  }
+  if (String(password).length < 8) {
+    throw new Error("ASK_PASSWORD must be at least 8 characters");
+  }
+  const isPrivate =
+    /^10\./.test(host) ||
+    /^192\.168\./.test(host) ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
+    /^100\./.test(host); // Tailscale CGNAT range 100.64.0.0/10
+  if (!isPrivate && env.ASK_ALLOW_PUBLIC !== "1") {
+    throw new Error(
+      `refusing to bind public interface ${host}: pass ASK_ALLOW_PUBLIC=1 only if you understand the exposure (prefer a VPN/Tailscale IP)`,
+    );
+  }
+  return { loopback: false, user: String(user), password: String(password) };
+}
+
+function basicAuthOk(req, policy) {
+  const header = req.headers.authorization ?? "";
+  const m = /^Basic (.+)$/.exec(header);
+  if (!m) return false;
+  let decoded;
+  try {
+    decoded = Buffer.from(m[1], "base64").toString("utf8");
+  } catch {
+    return false;
+  }
+  const idx = decoded.indexOf(":");
+  if (idx < 0) return false;
+  const user = Buffer.from(decoded.slice(0, idx));
+  const pass = Buffer.from(decoded.slice(idx + 1));
+  const eu = Buffer.from(policy.user);
+  const ep = Buffer.from(policy.password);
+  const okUser = user.length === eu.length && timingSafeEqual(user, eu);
+  const okPass = pass.length === ep.length && timingSafeEqual(pass, ep);
+  return okUser && okPass;
 }
 
 function sendJson(res, status, payload) {
@@ -68,8 +132,18 @@ function readBody(req) {
   });
 }
 
-export function createAskServer({ port = 8788, host = "127.0.0.1" } = {}) {
+export function createAskServer({ port = 8788, host = "127.0.0.1", policy = null } = {}) {
+  const bindPolicy = policy ?? resolveBindPolicy({ host });
   const server = http.createServer(async (req, res) => {
+    // Non-loopback: every route (including /health) requires basic auth.
+    if (!bindPolicy.loopback && !basicAuthOk(req, bindPolicy)) {
+      res.writeHead(401, {
+        "WWW-Authenticate": "Basic realm=erpn-copilot, charset=UTF-8",
+        "Content-Type": "application/json; charset=utf-8",
+      });
+      res.end(JSON.stringify({ ok: false, error: "unauthorized" }));
+      return;
+    }
     if (req.method === "OPTIONS") {
       res.writeHead(204, {
         "Access-Control-Allow-Origin": "*",
@@ -114,12 +188,15 @@ export function createAskServer({ port = 8788, host = "127.0.0.1" } = {}) {
 
 export async function main(argv = process.argv.slice(2)) {
   const { port, host } = parseArgs(argv);
-  const server = createAskServer({ port, host });
+  const policy = resolveBindPolicy({ host }); // throws before listen on unsafe config
+  const server = createAskServer({ port, host, policy });
   await new Promise((resolve, reject) => {
     server.once("error", reject);
     server.listen(port, host, resolve);
   });
-  process.stdout.write(JSON.stringify({ ready: true, port: server.address().port }) + "\n");
+  process.stdout.write(
+    JSON.stringify({ ready: true, port: server.address().port, host, auth: !policy.loopback }) + "\n",
+  );
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:dio/dio.dart';
 
 import 'chat_models.dart';
@@ -29,7 +31,17 @@ class CopilotServerException extends CopilotException {
 ///   POST `/ask`    {text} -> {ok:true, result:{...}} | {ok:false, error}
 ///   GET  `/health` -> {ok:true, service, port}
 class CopilotApiClient {
-  CopilotApiClient({required this.dio});
+  CopilotApiClient({required this.dio}) {
+    // Server policy (2026-09-14): non-loopback binds require HTTP basic auth.
+    // The app sends credentials only when they were compiled in via dart-define
+    // — no credentials in code, no silent fallback to anonymous.
+    final user = const String.fromEnvironment('COPILOT_AUTH_USER');
+    final pass = const String.fromEnvironment('COPILOT_AUTH_PASSWORD');
+    if (user.isNotEmpty && pass.isNotEmpty) {
+      dio.options.headers['authorization'] =
+          'Basic ${base64Encode(utf8.encode('$user:$pass'))}';
+    }
+  }
 
   final Dio dio;
 
