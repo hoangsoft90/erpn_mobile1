@@ -5,6 +5,15 @@
   "cooldownMs": 30000,
   "upstreams": [
     {
+      "name": "mac-custom",
+      "baseUrl": "https://llm9000.loca.lt/v1",
+      "model": "oc/big-pickle",
+      "apiKeyEnv": "MAC_LLM_API_KEY",
+      "timeoutMs": 120000,
+      "cooldownMs": 15000,
+      "_note": "Self-hosted OpenCode LLM on the user's Mac via localtunnel — NO provider quota, first in chain for daily dev/test. The router routes by model name, so sessions must request oc/big-pickle to reach it. Tunnel is flaky (502/408 on first attempts, verified 2026-09-15) — retrying the request usually succeeds. Not a real-provider-compat proxy: no geminiThoughtSignatures here (different protocol)."
+    },
+    {
       "name": "mock",
       "baseUrl": "http://127.0.0.1:8899/v1",
       "model": "mock-copilot-1",
@@ -25,7 +34,7 @@
       "apiKeyEnv": "GEMINI_API_KEY",
       "stripFields": ["store"],
       "geminiThoughtSignatures": true,
-      "_note": "gemini-2.5-flash retired for new users (provider 404 2026-09-15 names gemini-3.6-flash as replacement)"
+      "_note": "gemini-2.5-flash retired for new users (provider 404 2026-09-15 names gemini-3.6-flash as replacement). ROLE: real-provider compatibility verify (thought_signature etc.) before production — free tier RPD=20, do NOT use for daily dev (mac-custom covers that)."
     }
   ]
 }

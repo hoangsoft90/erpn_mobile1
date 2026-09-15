@@ -1,10 +1,19 @@
 {
-  "_note": "E2E variant of llm-router.config.json: ONE upstream, so a single dsh session spends the fewest provider requests (free tier Gemini is capped at 20 generate-requests/day — result16). Use it for dsh→router→LLM verification; keep llm-router.config.json as the production chain.",
+  "_note": "E2E variant of llm-router.config.json. mac-custom (self-hosted on the user's Mac, no quota) is FIRST for daily dev/test E2E; gemini-openai stays for real-provider compatibility verification (thought_signature, RPD=20 — one session/day). dsh picks the chain via the model it requests (router routes by model name).",
   "port": 8900,
   "host": "127.0.0.1",
   "timeoutMs": 60000,
   "cooldownMs": 30000,
   "upstreams": [
+    {
+      "name": "mac-custom",
+      "baseUrl": "https://llm9000.loca.lt/v1",
+      "model": "oc/big-pickle",
+      "apiKeyEnv": "MAC_LLM_API_KEY",
+      "timeoutMs": 120000,
+      "cooldownMs": 15000,
+      "_note": "Flaky tunnel: first attempts may 502/408 — retry the request, it usually succeeds. No geminiThoughtSignatures (different protocol)."
+    },
     {
       "name": "gemini-openai",
       "baseUrl": "https://generativelanguage.googleapis.com/v1beta/openai",
@@ -12,7 +21,7 @@
       "apiKeyEnv": "GEMINI_API_KEY",
       "stripFields": ["store"],
       "geminiThoughtSignatures": true,
-      "_note": "Zen (opencode.ai/zen) is billing-blocked and deliberately absent here — a blocked upstream in the chain would burn an extra attempt per request."
+      "_note": "Real-provider verify only (thought_signature). Free tier RPD=20 — see result19 for why counting 200s is wrong and one dsh turn costs 6-8 requests."
     }
   ]
 }

@@ -119,7 +119,7 @@ Python `src/vietnamese_nlp/`, stdlib thuần, chạy TRƯỚC LLM — cố đị
 | Phase | Nội dung | Write? | Điều kiện tiên quyết |
 |---|---|---|---|
 | 4 | Voice input/STT (hybrid): 🎤 → STT → user xem lại/sửa text → Gửi | Không | ⚠️ **Chặn bởi audio thật 3 miền** (100–200 câu, chờ người thật thu) |
-| 5 | AI Gateway core: auth, LLM Router, audit (scrub ĐÃ BỎ theo sign-off 2026-09-15) | **ĐANG LÀM** — router đơn giản + upstream thật: gemini verify 200, zen billing-blocked, E2E dsh flaky do free tier 20 req/min (result15) | Chờ user: Zen nạp payment hay bỏ · Gemini free hay paid |
+| 5 | AI Gateway core: auth, LLM Router, audit (scrub ĐÃ BỎ theo sign-off 2026-09-15) | **ĐANG LÀM** — upstream hàng ngày = **mac-custom** (LLM tự host trên Mac qua `llm9000.loca.lt`, KHÔNG quota — result20); gemini-openai giữ lại CHỈ để verify tương thích provider thật (thought_signature, `E2E_LLM_MODEL=real-gemini`); zen billing-blocked để sau. E2E thật qua mac-custom **XANH 2 tool-call** (result20 §3) | Còn lại: fix bug credit-note (chờ duyệt) · verify thought_signature live khi thuận tiện |
 | 6 | Entity resolution + Action Proposal card (xác nhận tiếng Việt + Risk Level) | Không | Exit criteria Phase 5 |
 | 7 | **`create_payment_entry` + idempotency** | **Có** | ⚠️ **Go/No-Go gate: Phase 1–6 exit criteria ĐỦ** — write đầu tiên chạm tiền |
 | 8 | Background jobs + push notification + TTS readback | Có | Phase 7 |
@@ -138,6 +138,9 @@ Python `src/vietnamese_nlp/`, stdlib thuần, chạy TRƯỚC LLM — cố đị
 - **Thu audio thật 3 miền** — mở khóa Phase 4
 - **Cài APK + test tại điểm bán** — cần người thật
 - **LLM upstream thật** — 2 quyết định user (result15): Zen nạp payment method hay bỏ upstream;
+- **Fix bug credit-note (result20 §4)** — `listUnpaidInvoices` lọc `outstanding_amount > 0` loại luôn
+  credit note âm → "còn nợ" thiếu tiền khách đã trả ngược: **chờ user duyệt hướng** `> 0` → `!== 0`
+  trong `mcp-erpnext/src/skills/customer.mjs` + `sales.mjs` + test hồi quy (vùng tiền — không tự sửa);
   Gemini giữ free tier (20 req/phút) hay nâng paid. Mock giữ làm contract test; dsh trỏ router
   qua cordis patch (skill `erpn-dsh-setup`)
 

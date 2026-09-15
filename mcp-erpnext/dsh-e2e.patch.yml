@@ -48,6 +48,15 @@
 # LLM: dsh's model traffic goes to the local router. Rows are addressed BY ID
 # (source of truth: @deepseek-ai/dsh-base/cordis.patch.yml) — settings.yaml has
 # no effect on adapter registration, and `models` must be a list of objects.
+#
+# The ROUTER routes by model name, so the model requested here selects the
+# upstream chain (see scripts/llm-router.e2e.json):
+#   E2E_LLM_MODEL unset / anything else → oc/big-pickle  → mac-custom (default:
+#       self-hosted, NO provider quota — daily dev/test)
+#   E2E_LLM_MODEL=real-gemini           → gemini-3.6-flash → gemini-openai (real
+#       provider compat verify: thought_signature; free tier RPD=20)
+# The router provider's apiKeyEnv stays GEMINI_API_KEY — it is never sent to
+# mac-custom (the router replaces Authorization per-upstream from MAC_LLM_API_KEY).
 - id: llm-pi-ai
   config:
     providers:
@@ -56,8 +65,10 @@
         api: openai-completions
         baseURL: http://127.0.0.1:8900/v1
         models:
+          - id: oc/big-pickle
           - id: gemini-3.6-flash
 - id: agent-default-model
   config:
     provider: router
-    model: gemini-3.6-flash
+    model: !!js >-
+      process.env.E2E_LLM_MODEL === 'real-gemini' ? 'gemini-3.6-flash' : 'oc/big-pickle'
