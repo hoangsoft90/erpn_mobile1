@@ -1,7 +1,7 @@
 # checklist.md — ERPNext Vietnamese Voice Copilot (erpn_mobile1)
 
 Danh sách kiểm tra nhanh: **đã làm / chưa làm / cần hỏi lại**.
-Bằng chứng chi tiết: `result*.txt` (mới nhất = result9) + `.plan/phases/*-result.md`.
+Bằng chứng chi tiết: `result*.txt` (mới nhất = result15) + `.plan/phases/*-result.md`.
 Trạng thái roadmap chi tiết nằm ở `next.md` — file này KHÔNG nhân bản, chỉ tóm tắt.
 
 ---
@@ -62,14 +62,14 @@ Trạng thái roadmap chi tiết nằm ở `next.md` — file này KHÔNG nhân 
 - 2 project skills (`.agents/skills/`, local-only vì repo gitignore `.agents/`):
   `erpnext-mcp-connect` (kết nối/authorize ERPNext MCP) + `erpn-verify-first` (quy trình
   chống "code xong đi sửa" — 5 phiên bài học)
-- Bộ tài liệu phiên mới: `.project/` (kiến thức tĩnh) + memory files root; `.project/openspec.md`
-  là pointer (không nhân bản progress với checklist/next)
 
 ---
 
 ## Chưa làm / đang làm (thứ tự)
 
 ### Đang làm
+- [x] **Code review sâu chuỗi client (result16, 2026-09-15): 7 lỗi thật đã sửa** — 3 crash router (upstream stream không error listener / client ngắt giữa request / models path — đều giết process), 2 stuck (http-ask không deadline → socket treo vô hạn; NLP fetch không AbortSignal), 2 logic Flutter (cold-start race ghi đè lịch sử; mounted guard sau await). **+3 regression test. Node 49/49 (9s) · router 8/8 · Flutter analyze 0 · Flutter 14/14.** 4 lỗi của chính agent trong đợt này (finding sai, Promise.race timer không clear, test thiếu override, str_replace miss) đã vào skill mục 6. Chờ duyệt commit
+- [x] **Phase 5 — LLM Router nối upstream thật** (result15, 2026-09-15): endpoint chính thức điền xong (zen `opencode.ai/zen/v1` · gemini `generativelanguage.googleapis.com/v1beta/openai`); **2 bug router tự bắt khi chạy thật** (https transport + field `store` Gemini từ chối → `stripFields`) + `LLM_ROUTER_DEBUG=1`; **Gemini verify generate thật 200** qua router · **Zen bị chặn billing** (CreditsError: No payment method — glm-5.3-flash là PAID, big-pickle chỉ chạy trong OpenCode client); cơ chế dsh thật = cordis patch row (settings.yaml result6 lỗi thời) → skill mới `erpn-dsh-setup`; **E2E dsh→router→Gemini flaky do free tier 20 req/phút** (1 session dsh tốn 2–3 calls: 429 quota + 503 high demand nguyên văn trong result15 §6)
 - [x] GH Actions run #2 ✅ **SUCCESS** (`result10.txt`): [run 34826575147](https://github.com/hoangsoft90/erpn_mobile1/actions/runs/34826575147) — build_runner/Analyze/Test/Build APK đều xanh; artifact `erpn-chat-debug-apk` (80MB zip) đã tải về VPS `/home/kythuat_hoangweb/erpn-apk/app-debug.apk`
 - [x] **APK nối được VPS — endpoint security** ✅ (`result11.txt`, commit `c3d74c3`): http-ask bind policy (non-loopback BẮT BUỘC basic auth, public cần ASK_ALLOW_PUBLIC=1 — server tự từ chối cấu hình unsafe) + Flutter client gửi auth qua dart-define + CI build APK từ repo Variables/Secret. Verify thật: 401 không auth → 200 có auth → trả lời 269.000đ qua ERPNext thật. ⚠️ **Port 8788 bị cloud firewall hosting chặn từ internet** (read_url timeout) — cần user mở port HOẶC dùng Tailscale (đã cài, chờ login)
 - [x] **Mandatory Sign-off Phase 5 ĐÃ KÝ (2026-09-15)**: `SIGNOFF-phase5-pii.md` — 4/4 quyết định đã điền. Hoàng xác nhận qua trao đổi trực tiếp: **KHÔNG PII scrubbing, KHÔNG LLM Router 2-tier** — gửi thẳng tên khách/số tiền cho LLM, free tier được dùng (rủi ro pháp lý chủ dự án tự chấp nhận, đã ghi minh bạch trong sign-off). **Gate MỞ** → phạm vi Phase 5 còn: LLM Router đơn giản + audit log (bỏ mục scrub)
@@ -83,7 +83,7 @@ Trạng thái roadmap chi tiết nằm ở `next.md` — file này KHÔNG nhân 
       key cũ vẫn hợp lệ (HTTP 200), rotation chưa hiệu lực (`result9.txt` §1)
 - [ ] **Thu 100–200 câu audio thật 3 miền** — điều kiện còn thiếu của Phase 1, chặn Phase 4 (STT)
 - [ ] **Cài APK lên thiết bị thật tại điểm bán + test** — cần người thật. Endpoint đã có đường sống: tunnel `erpn8788.loca.lt` verify E2E (result13) — dùng ngay khi `lt` chạy; lâu dài chọn 1 trong 3 (result11 §5): Tailscale login (khuyến nghị) / hosting mở port 8788 / tunnel giữ nguyên. Sau đó user dán 3 giá trị GitHub Settings → CI build APK cài được
-- [ ] **LLM gateway thật (OpenAI-compatible)** — chờ user cấp; chỉ sửa `/tmp/dsh-home/settings.yaml`
+- [ ] **LLM upstream thật** — 2 quyết định user: ① Zen nạp payment method (CreditsError) hay bỏ upstream ② Gemini giữ free tier (20 req/phút, E2E flaky) hay nâng paid; mock giữ làm contract test; dsh trỏ router qua cordis patch (skill `erpn-dsh-setup`)
 
 ### Các phase kế tiếp (chi tiết ở `next.md`)
 - Phase 4 (STT) — chặn bởi audio · Phase 5 (Gateway) — ĐÃ MỞ (sign-off 2026-09-15), router bản đơn giản đã code (result14) ·
@@ -102,6 +102,7 @@ Trạng thái roadmap chi tiết nằm ở `next.md` — file này KHÔNG nhân 
 ## Cần hỏi lại / chờ user quyết định
 
 - [ ] **Review `.project/ai-rules.md`** (MỚI 2026-09-14): file bạn nhắc tới KHÔNG tồn tại trước đó — agent đã tổng hợp từ AGENTS.md + operating_rules + thực tế result1→11. Duyệt hoặc sửa theo ý bạn; sau đó đây là nguồn quy tắc số 1 của `.project/`
+- [ ] **Upstream LLM (result15):** ① Zen — nạp payment method hay bỏ? ② Gemini — giữ free tier (20 req/phút, E2E dsh flaky theo thiết kế) hay nâng paid?
 - [ ] **4 câu của Phase 15 (monetization):** ad provider · múi giờ tính "hết ngày" ·
       danh sách tính năng pro · có IAP bỏ ad không
 - [ ] **`bạc` mệnh giá** (`ch-003`) + có chấp nhận `m` = triệu không (`ch-004`)

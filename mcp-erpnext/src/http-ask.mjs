@@ -178,12 +178,31 @@ export function createAskServer({ port = 8788, host = "127.0.0.1", policy = null
         sendJson(res, 400, { ok: false, error: "missing required field: text" });
         return;
       }
+      let deadlineTimer;
       try {
-        const result = await answerQuestion(text);
+        // Server-side deadline: a slow/hung pipeline (ERPNext via tunnel can
+        // stall) must not hold the socket open forever. The Flutter client
+        // times out at 15s and shows "Hết thời gian chờ", but without this
+        // the server-side request would linger indefinitely, piling up
+        // connections. 120s = generous multiple of the client timeout.
+        // The losing timer is cleared in finally: Promise.race does NOT
+        // cancel it, and an uncleared timer keeps the event loop alive for
+        // the full 120s per request (broke node --test + clean shutdown).
+        const result = await Promise.race([
+          answerQuestion(text),
+          new Promise((_, reject) => {
+            deadlineTimer = setTimeout(
+              () => reject(new Error("ask deadline exceeded (120s)")),
+              120_000,
+            );
+          }),
+        ]);
         sendJson(res, 200, { ok: true, result });
       } catch (err) {
         // message only — never a stack trace, never env contents
         sendJson(res, 500, { ok: false, error: `ask failed: ${err?.message ?? err}` });
+      } finally {
+        if (deadlineTimer) clearTimeout(deadlineTimer);
       }
       return;
     }

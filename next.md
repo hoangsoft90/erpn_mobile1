@@ -83,6 +83,7 @@ Python `src/vietnamese_nlp/`, stdlib thuần, chạy TRƯỚC LLM — cố đị
   → `590b1b2` → `119edd4`; `.env` git-ignored, secret scan trước mỗi commit
   (result9 đã redact key lộ khỏi file evidence trước khi commit)
 - 2 project skills (`.agents/skills/`, local-only): `erpnext-mcp-connect` + `erpn-verify-first`
+  + `erpn-dsh-setup` (result15 — cài/chạy dsh + cơ chế cordis patch, thay công thức result6)
 - Tài liệu phiên mới: `.project/` (kiến thức tĩnh) + memory files; `.project/openspec.md`
   là pointer — **1 nguồn sự thật duy nhất**: checklist.md (trạng thái) + next.md (roadmap)
   + result*.txt (bằng chứng)
@@ -102,13 +103,23 @@ Python `src/vietnamese_nlp/`, stdlib thuần, chạy TRƯỚC LLM — cố đị
    KHÔNG scrub, KHÔNG 2-tier; free tier chấp nhận — `SIGNOFF-phase5-pii.md`). LLM Router
    bản đơn giản đã code (`scripts/llm-router.mjs` + config JSON + audit JSONL, 7/7 test,
    E2E smoke qua mock-llm — result14)
+3. **LLM Router nối upstream thật** — ✅ result15 (2026-09-15): endpoint chính thức điền xong
+   (zen `opencode.ai/zen/v1` · gemini `…/v1beta/openai`); 2 bug router tự bắt khi chạy thật
+   (https transport + field `store` Gemini từ chối → `stripFields` per-upstream) +
+   `LLM_ROUTER_DEBUG=1`; **Gemini verify generate thật 200** qua router · **Zen bị chặn
+   billing** (CreditsError: No payment method — glm-5.3-flash PAID, big-pickle chỉ chạy
+   trong OpenCode client); cơ chế dsh thật = **cordis patch row override** (công thức
+   settings.yaml của result6 lỗi thời) → skill mới `erpn-dsh-setup`; **E2E dsh→router→Gemini
+   flaky do free tier 20 req/phút** (1 session dsh tốn 2–3 calls — 429 quota + 503 high
+   demand, nguyên văn trong result15 §6). Còn lại Phase 5: user quyết định upstream
+   (Zen nạp payment / bỏ; Gemini free hay paid)
 
 ### Theo phase
 
 | Phase | Nội dung | Write? | Điều kiện tiên quyết |
 |---|---|---|---|
 | 4 | Voice input/STT (hybrid): 🎤 → STT → user xem lại/sửa text → Gửi | Không | ⚠️ **Chặn bởi audio thật 3 miền** (100–200 câu, chờ người thật thu) |
-| 5 | AI Gateway core: auth, PII scrub, LLM Router, audit | **ĐANG LÀM** — sign-off ĐÃ KÝ 2026-09-15 (không scrub, không 2-tier → phạm vi còn: router đơn giản + audit); LLM Router proxy đã code + 7/7 test (result14) | Còn: nối dsh → router, verify baseURL/key thật |
+| 5 | AI Gateway core: auth, LLM Router, audit (scrub ĐÃ BỎ theo sign-off 2026-09-15) | **ĐANG LÀM** — router đơn giản + upstream thật: gemini verify 200, zen billing-blocked, E2E dsh flaky do free tier 20 req/min (result15) | Chờ user: Zen nạp payment hay bỏ · Gemini free hay paid |
 | 6 | Entity resolution + Action Proposal card (xác nhận tiếng Việt + Risk Level) | Không | Exit criteria Phase 5 |
 | 7 | **`create_payment_entry` + idempotency** | **Có** | ⚠️ **Go/No-Go gate: Phase 1–6 exit criteria ĐỦ** — write đầu tiên chạm tiền |
 | 8 | Background jobs + push notification + TTS readback | Có | Phase 7 |
@@ -126,7 +137,9 @@ Python `src/vietnamese_nlp/`, stdlib thuần, chạy TRƯỚC LLM — cố đị
   result9 §1). Sau khi rotate: update `.env` qua SSH + probe lại + xóa giá trị cũ khỏi mọi file
 - **Thu audio thật 3 miền** — mở khóa Phase 4
 - **Cài APK + test tại điểm bán** — cần người thật
-- **LLM gateway thật** — chờ user cấp; chỉ sửa settings.yaml, mock giữ làm contract test
+- **LLM upstream thật** — 2 quyết định user (result15): Zen nạp payment method hay bỏ upstream;
+  Gemini giữ free tier (20 req/phút) hay nâng paid. Mock giữ làm contract test; dsh trỏ router
+  qua cordis patch (skill `erpn-dsh-setup`)
 
 ### Nợ kỹ thuật Phase 1 (khi có dữ liệu quyết định)
 

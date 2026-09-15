@@ -8,6 +8,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:erpn_mobile/app/providers.dart';
+import 'package:erpn_mobile/features/chat/application/chat_controller.dart';
+import 'package:erpn_mobile/features/chat/data/chat_history_service.dart';
+import 'package:erpn_mobile/features/chat/data/chat_models.dart';
 import 'package:erpn_mobile/features/chat/data/copilot_api_client.dart';
 import 'package:erpn_mobile/features/chat/presentation/screens/chat_screen.dart';
 import 'package:erpn_mobile/features/chat/presentation/widgets/chat_bubble.dart';
@@ -71,6 +74,45 @@ Future<void> _pumpApp(
 }
 
 void main() {
+  test('cold-start race: send during history load must NOT overwrite storage',
+      () async {
+    final service = _DelayedHistoryService();
+    final container = ProviderContainer(
+      overrides: [
+        chatHistoryServiceProvider.overrideWithValue(service),
+        copilotApiClientProvider.overrideWithValue(
+          CopilotApiClient(
+            dio: Dio(BaseOptions(baseUrl: 'http://mock.local'))
+              ..httpClientAdapter = _MockAdapter(
+                  (options) async => _json({'ok': true, 'result': _answerResult})),
+          ),
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    // Kick off build() (loads history with an artificial delay)…
+    container.listen(chatControllerProvider, (_, _) {}, fireImmediately: true);
+    // …and send BEFORE the load finishes. Without the isLoading guard the
+    // append would treat the state as empty and overwrite stored history.
+    final rejected = await container
+        .read(chatControllerProvider.notifier)
+        .send('câu hỏi mới');
+    expect(rejected, isFalse,
+        reason: 'send must be refused while history is still loading');
+
+    // After build() completes the same send succeeds…
+    await container.read(chatControllerProvider.future);
+    final accepted = await container
+        .read(chatControllerProvider.notifier)
+        .send('câu hỏi mới');
+    expect(accepted, isTrue);
+
+    // …and the saved history contains BOTH the loaded turn and the new one.
+    final savedQuestions = service.savedTurns.map((t) => t.question);
+    expect(savedQuestions, containsAll(<String>['câu hỏi cũ', 'câu hỏi mới']));
+  });
+
   testWidgets('empty state shows example hint', (WidgetTester tester) async {
     await _pumpApp(tester, handler: (options) async => _json({'ok': true}));
     expect(find.textContaining('chị Lan còn nợ bao nhiêu'), findsOneWidget);
@@ -144,6 +186,32 @@ void main() {
     expect(find.text('câu trả lời cũ'), findsNothing);
     expect(prefs.store.containsKey('chat_history_v1'), isFalse);
   });
+}
+
+/// History service whose load() is delayed — reproduces the cold-start window
+/// where build() has not resolved yet. Captures save() calls for assertions.
+class _DelayedHistoryService extends ChatHistoryService {
+  _DelayedHistoryService() : super(prefs: null);
+
+  List<ChatTurn> savedTurns = const [];
+
+  @override
+  Future<List<ChatTurn>> load() async {
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    return [
+      ChatTurn(
+        question: 'câu hỏi cũ',
+        answer: 'câu trả lời cũ',
+        ok: true,
+        ts: DateTime.parse('2026-09-14T10:00:00.000'),
+      ),
+    ];
+  }
+
+  @override
+  Future<void> save(List<ChatTurn> turns) async {
+    savedTurns = turns;
+  }
 }
 
 /// Minimal SharedPreferences fake (no plugin channel in unit tests).

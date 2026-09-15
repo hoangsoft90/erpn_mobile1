@@ -40,6 +40,10 @@
  */
 
 import http from "node:http";
+import https from "node:https";
+
+/** http.request chỉ nói http — upstream thật (zen/gemini) là https (bug thật: "Protocol https: not supported"). */
+const httpModuleFor = (url) => (url.protocol === "https:" ? https : http);
 import { readFileSync, appendFileSync, mkdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -146,7 +150,7 @@ function attempt(up, authHeader, body) {
     const apiKey = up.apiKeyEnv ? process.env[up.apiKeyEnv] : undefined;
     if (apiKey) headers.authorization = `Bearer ${apiKey}`;
     else if (authHeader) headers.authorization = authHeader;
-    const req = http.request(
+    const req = httpModuleFor(url).request(
       url,
       // agent:false — no keep-alive sockets that would hold the event loop
       // (and node --test) open after shutdown; per-request connect cost is
@@ -196,11 +200,15 @@ export function createRouterServer({ config, pool, auditPath }) {
       const up = healthy[0];
       try {
         const data = await new Promise((resolve, reject) => {
-          const r = http.request(upstreamUrl(up, "/models"), { method: "GET", timeout: up.timeoutMs, agent: false }, resolve);
+          const r = httpModuleFor(upstreamUrl(up, "/models")).request(upstreamUrl(up, "/models"), { method: "GET", timeout: up.timeoutMs, agent: false }, resolve);
           r.on("timeout", () => r.destroy(new Error("models timeout")));
           r.on("error", reject);
           r.end();
         });
+        if (res.destroyed) return; // client gone while awaiting upstream
+        // Same uncaught-'error' rule as chat/completions: a mid-stream abort
+        // on the models proxy must never kill the process.
+        data.on("error", () => res.destroy());
         res.writeHead(data.statusCode ?? 502, { "Content-Type": "application/json" });
         data.pipe(res);
       } catch (err) {
@@ -211,14 +219,21 @@ export function createRouterServer({ config, pool, auditPath }) {
     }
 
     if (req.method === "POST" && pathOnly === "/v1/chat/completions") {
+      // Client disconnect guard: dsh may time out/abort mid-flight (upstream
+      // retries are slow). Writing to a destroyed socket = uncaught error =
+      // process death. After the await, the socket may already be gone.
+      if (res.destroyed) return;
       let body;
       try {
         body = (await readBody(req)).toString("utf8");
       } catch (err) {
-        res.writeHead(413, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: { message: err.message } }));
+        if (!res.destroyed) {
+          res.writeHead(413, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: { message: err.message } }));
+        }
         return;
       }
+      if (res.destroyed) return; // client vanished while we awaited the body
 
       let parsed = {};
       try {
@@ -232,26 +247,57 @@ export function createRouterServer({ config, pool, auditPath }) {
 
       for (const up of chain) {
         tried.push(up.name);
+        // Per-upstream field stripping (gateway duty): some OpenAI-only fields
+        // (e.g. "store") are rejected by Gemini's OpenAI-compat endpoint.
+        let sendBody = body;
+        if (up.stripFields?.length) {
+          try {
+            const obj = JSON.parse(body);
+            for (const f of up.stripFields) delete obj[f];
+            sendBody = JSON.stringify(obj);
+          } catch {
+            /* unparsable body: forward as-is, upstream will answer */
+          }
+        }
         let res2;
         try {
-          res2 = await attempt(up, req.headers.authorization ?? null, body);
+          res2 = await attempt(up, req.headers.authorization ?? null, sendBody);
         } catch (err) {
           pool.markUnhealthy(up.name, up.cooldownMs);
           process.stderr.write(`[llm-router] ${id} ${up.name} transport error: ${err.message}\n`);
           continue; // transport-level failure → next upstream
         }
         const status = res2.statusCode ?? 502;
+        if (process.env.LLM_ROUTER_DEBUG === "1") {
+          process.stderr.write(`[llm-router][debug] ${id} -> ${up.name} model=${wantModel} reqBytes=${body.length} reqHead=${body.slice(0, 300).replace(/\s+/g, " ")}\n`);
+        }
         if (RETRY_STATUS.has(status)) {
           pool.markUnhealthy(up.name, up.cooldownMs);
-          // Drain so the socket can be reused/destroyed cleanly, then fall through.
-          res2.resume();
-          process.stderr.write(`[llm-router] ${id} ${up.name} HTTP ${status} → next upstream\n`);
+          // Single drain path: in debug mode capture the first bytes of the
+          // error body for diagnosis; without debug just drain. (The previous
+          // shape attached an extra 'data' listener here AND piped/resumed —
+          // consuming the stream twice / racing the 'end' event.)
+          const dbg = process.env.LLM_ROUTER_DEBUG === "1" ? [] : null;
+          res2.on("data", (c) => { if (dbg && dbg.length < 8) dbg.push(c); });
+          res2.on("end", () => {
+            if (dbg) {
+              process.stderr.write(`[llm-router][debug] ${id} ${up.name} status=${status} body0=${Buffer.concat(dbg).toString().slice(0, 800)}\n`);
+            }
+            process.stderr.write(`[llm-router] ${id} ${up.name} HTTP ${status} → next upstream\n`);
+          });
           continue;
         }
         const headers = { ...res2.headers };
         headers["x-llm-router-upstream"] = up.name;
         headers["x-llm-router-id"] = id;
         res.writeHead(status, headers);
+        // Upstream response MUST have an 'error' listener once piped: a mid-stream
+        // abort (free-tier upstreams drop connections often) otherwise surfaces as
+        // an uncaught 'error' event on the socket → whole router process dies.
+        res2.on("error", () => {
+          process.stderr.write(`[llm-router] ${id} ${up.name} response stream error — aborting client response\n`);
+          res.destroy();
+        });
         res2.pipe(res);
         res2.on("end", () => {
           audit({

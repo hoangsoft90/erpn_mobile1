@@ -74,10 +74,14 @@ async function waitForNlpService(timeoutMs = 3000) {
 
 /** Call the Python normalize bridge; throws when the service is unreachable. */
 async function normalizeText(text) {
+  // AbortSignal timeout: Node's undici fetch can hang past TCP connect when
+  // the peer accepts but never answers (half-open socket) — without an
+  // AbortSignal the /ask request would hang forever (no Node default).
   const res = await fetch(NLP_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ text }),
+    signal: AbortSignal.timeout(30_000),
   });
   if (!res.ok) {
     const body = await res.text().catch(() => "");

@@ -30,13 +30,15 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     if (text.trim().isEmpty) return;
     final controller = ref.read(chatControllerProvider.notifier);
     final ok = await controller.send(text);
+    // After the await the widget may have been unmounted (user navigated
+    // away) — touching controllers/context here would throw.
+    if (!mounted) return;
     if (ok) {
       _textController.clear();
       _scrollToBottom();
-    }
-    // On failure the typed text is kept (tasks.md 2.5); the error surfaces
-    // via ref.listen below — no blocking dialog.
-    if (!ok && mounted) {
+    } else {
+      // On failure the typed text is kept (tasks.md 2.5); the error surfaces
+      // via ref.listen below — no blocking dialog.
       _textController.selection = TextSelection.fromPosition(
         TextPosition(offset: _textController.text.length),
       );

@@ -25,3 +25,11 @@
 - [x] 4.1 UI-checkpoint: widget test 13/13 + mô tả UI → user duyệt UI → commit `590b1b2` (2026-09-14).
 - [x] 4.2 Cập nhật result7.txt (số liệu thật: analyze/test/wrapper test), checklist.md, features.md, next.md, handoff mới.
 - [ ] 4.3 `/opsx:verify` → sync/archive OpenSpec change khi APK chạy OK trên thiết bị thật (chờ: user xử lý endpoint — Tailscale/mở port — + dán 3 giá trị GitHub Settings + cài thử).
+
+## 5. Phase 5 mở rộng (ngoài scope gốc của change — user chỉ đạo 2026-09-15 sau khi ký sign-off)
+
+- [x] 5.1 Sign-off Phase 5 ký (không scrub, không 2-tier) → gate mở; LLM Router bản đơn giản `scripts/llm-router.mjs` + config JSON + audit JSONL (7/7 test, E2E smoke mock — result14, commit `87fcbb1`).
+- [x] 5.2 Nối upstream thật (result15): endpoint chính thức zen/gemini; fix 2 bug router chạy thật (https transport, `stripFields` cho field `store` Gemini từ chối) + `LLM_ROUTER_DEBUG`; Gemini verify generate 200 · Zen billing-blocked (CreditsError).
+- [x] 5.3 Cơ chế dsh thật (cordis patch row) → skill `erpn-dsh-setup`; mock qua router chạy thật 269.000đ.
+- [ ] 5.4 **Chờ user**: quyết định upstream (Zen nạp payment hay bỏ · Gemini free 20 req/phút hay paid) → E2E dsh→router→upstream xanh ổn định.
+- [ ] 5.5 Router + config sửa thêm (result15) chưa commit — chờ user duyệt (vùng tiền/phân quyền).

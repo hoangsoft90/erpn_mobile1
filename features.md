@@ -6,7 +6,7 @@ Bằng chứng code + test: `resultNN.txt`, `.plan/phases/phase-0N-result.md`, `
 **Ý tưởng sản phẩm (1 câu):** nói chuyện với ERPNext như nói chuyện với một nhân viên kế toán/bán hàng —
 `"Anh Nam vừa trả 10 triệu tiền cám"` → AI tra khách, kiểm tra công nợ, đề xuất phiếu thu, chờ user xác nhận, rồi ghi vào ERPNext.
 
-**Trạng thái tổng:** xong **Phase 0 + 1 + 2 (read-only, ERPNext thật, **accuracy thật 18/18 = 100%** — `result9.txt`) + cầu nối dsh + **Flutter chat MVP** (`result7.txt`, commit `590b1b2`). 6 commits đã push GH; **CI XANH 2 lần liên tiếp** (run #2 `4c5bd26`, run #3 `c3d74c3` — result10/11). **Endpoint /ask có bảo mật bind + basic auth, verify thật 401→200→269.000đ** (`result11.txt`). Chưa có STT; chờ user: dán 3 giá trị GitHub Settings + chọn đường endpoint (Tailscale/mở port/ngrok) + cài APK thiết bị thật + ký sign-off Phase 5.
+**Trạng thái tổng:** xong **Phase 0 + 1 + 2 (read-only, ERPNext thật, **accuracy thật 18/18 = 100%** — `result9.txt`) + cầu nối dsh + **Flutter chat MVP** (`result7.txt`, commit `590b1b2`). 6 commits đã push GH; **CI XANH 2 lần liên tiếp** (run #2 `4c5bd26`, run #3 `c3d74c3` — result10/11). **Endpoint /ask có bảo mật bind + basic auth, verify thật 401→200→269.000đ** (`result11.txt`). **Phase 5: sign-off đã ký (không scrub) + LLM Router đã nối upstream thật — Gemini verify generate 200, Zen billing-blocked, E2E dsh flaky do free tier** (`result15.txt`). Chưa có STT; chờ user: dán 3 giá trị GitHub Settings + chọn đường endpoint + cài APK thiết bị thật + quyết định upstream LLM (result15).
 
 ---
 
@@ -75,6 +75,14 @@ Lớp chuẩn hóa chạy **TRƯỚC** LLM, cố định bằng code chứ khôn
 - **Mandatory Sign-off Phase 5 đã soạn** (`SIGNOFF-phase5-pii.md`): 4 phương án scrubbing khảo sát, bảng quyết định 0/4 — **gate ĐÓNG, chờ ký**
 - Test: Node 48/48 (thêm 8 test auth) · Python 58/58 · Flutter 13/13 · analyze 0 issue
 
+### Phase 5 — AI Gateway core (bản đơn giản theo sign-off) — 2026-09-14/15 (`result14.txt`, `result15.txt`)
+- **Sign-off ĐÃ KÝ 2026-09-15 (Hoàng, trao đổi trực tiếp): KHÔNG PII scrubbing, KHÔNG 2-tier** — gửi thẳng tên/số tiền cho LLM, free tier được dùng (rủi ro pháp lý chủ dự án chấp nhận, ghi minh bạch trong `SIGNOFF-phase5-pii.md`) → **gate MỞ**, phạm vi còn: router đơn giản + audit
+- **LLM Router** (`scripts/llm-router.mjs`): proxy OpenAI-compatible 127.0.0.1:8900; fallback chain config-driven JSON (mock → zen → gemini-openai); cooldown upstream lỗi 429/5xx/timeout; audit JSONL **không chép nội dung câu hỏi** (có test); `LLM_ROUTER_DEBUG=1` in reqHead + body lỗi upstream (dsh nuốt body → không có cái này không bóc được lỗi thật)
+- **Upstream thật (result15):** endpoint chính thức điền xong (zen `opencode.ai/zen/v1` · gemini `generativelanguage.googleapis.com/v1beta/openai`); **Gemini verify generate thật 200** qua router ("250000 nhân 1000 bằng 250000000."); **Zen bị chặn billing** (CreditsError: No payment method — glm-5.3-flash PAID, big-pickle chỉ chạy trong OpenCode client)
+- **2 bug router tự bắt khi chạy thật:** https upstream gọi bằng http.request (`Protocol not supported`) → chọn module theo protocol; Gemini từ chối field OpenAI-only `store` dsh gửi → `stripFields` per-upstream trong config. Router tests 7/7 · mcp-erpnext 49/49
+- **Cơ chế dsh thật đào ra từ source** (khác công thức result6): cordis **patch row override theo id** (`- id: llm-pi-ai`), `models` là list object — mock qua router chạy thật 269.000đ; đóng gói thành skill `erpn-dsh-setup`
+- **E2E dsh → router → Gemini:** flaky do **free tier 20 req/phút** (1 session dsh tốn 2–3 calls: session-title + agent) — 429 quota + 503 high demand là THIẾT KẾ free tier, nguyên văn trong result15 §6
+
 ---
 
 ## Chưa làm / Tương lai
@@ -96,7 +104,7 @@ Lớp chuẩn hóa chạy **TRƯỚC** LLM, cố định bằng code chứ khôn
 - **Phase 11 — Mở rộng write skills:** sales order, inventory, purchase
 
 ### An toàn & tin cậy (không cắt để rút ngắn thời gian)
-- **Phase 5 — AI Gateway core:** auth, **PII scrubbing trước LLM**, LLM Router config-driven, audit log; client mobile **không bao giờ** giữ ERPNext/LLM key
+- **Phase 5 — AI Gateway core:** ✅ bản đơn giản ĐÃ XONG theo sign-off (không scrub): auth, LLM Router config-driven, audit log; client mobile **không bao giờ** giữ ERPNext/LLM key. Còn: user quyết upstream thật (Zen payment / Gemini free-paid)
 - **Phase 6 — Entity resolution + Action Proposal card:** "Anh A" → đúng customer nào khi trùng tên/liên chi nhánh; card xác nhận tiếng Việt dễ hiểu + Risk Level
 - **Phase 7 — Idempotency** — chống double-tap ghi tiền 2 lần
 - **Phase 9 — Proposal state machine:** expiry, re-validation, saga/compensation (undo không phải `delete document`)

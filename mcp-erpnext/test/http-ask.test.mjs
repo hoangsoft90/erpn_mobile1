@@ -95,9 +95,14 @@ test("/ask wrapper: health, happy path, and error contracts", async () => {
     assert.equal(bad.status, 400);
     assert.equal((await bad.json()).ok, false);
 
-    // unknown path -> 404
+    // unknown path -> 404, shape {ok:false,error} (Flutter maps error string
+    // from this shape — a bare-text 404 would become a generic network error)
     const nf = await fetch(`${base}/nope`);
     assert.equal(nf.status, 404);
+    const nfBody = await nf.json();
+    assert.equal(nfBody.ok, false);
+    assert.match(nfBody.error, /no such path/);
+    assert.match(nf.headers.get("content-type") ?? "", /application\/json/);
   } finally {
     server.close();
     nlp.child.kill();

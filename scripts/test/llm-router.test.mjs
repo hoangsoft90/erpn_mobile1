@@ -177,6 +177,38 @@ function closeAll(...servers) {
   }
 }
 
+test("router: debug mode drains retry-status bodies once, still falls back (regression: no double-consume)", async () => {
+  const failing = await mockUpstream({ failFirst: 99, statusAfterFail: 429 });
+  const working = await mockUpstream();
+  working.name = "up-b2";
+
+  const auditDir = mkdtempSync(path.join(tmpdir(), "router-audit-"));
+  const cfg = {
+    port: 0, host: "127.0.0.1", cooldownMs: 30_000, timeoutMs: 5_000,
+    upstreams: [
+      { name: "up-a2", baseUrl: `http://127.0.0.1:${failing.port()}/v1` },
+      { name: "up-b2", baseUrl: `http://127.0.0.1:${working.port()}/v1` },
+    ],
+  };
+  const pool = new UpstreamPool(cfg.upstreams, { timeoutMs: cfg.timeoutMs, cooldownMs: cfg.cooldownMs });
+  const { server: router } = createRouterServer({ config: cfg, pool, auditPath: path.join(auditDir, "a.jsonl") });
+  await new Promise((r) => router.listen(0, "127.0.0.1", r));
+
+  const prevDebug = process.env.LLM_ROUTER_DEBUG;
+  process.env.LLM_ROUTER_DEBUG = "1";
+  try {
+    const res = await post(router, "/v1/chat/completions", { model: "any", messages: [{ role: "user", content: "debug-drain" }] });
+    assert.equal(res.status, 200);
+    assert.match(res.body, /ok-from-up-b2/);
+    assert.equal(failing.calls(), 1);
+    assert.equal(working.calls(), 1);
+  } finally {
+    if (prevDebug === undefined) delete process.env.LLM_ROUTER_DEBUG;
+    else process.env.LLM_ROUTER_DEBUG = prevDebug;
+    closeAll(failing, working, router);
+  }
+});
+
 test("router: chain exhausted → 502 with tried list, audit records failure", async () => {
   const a = await mockUpstream({ failFirst: 99, statusAfterFail: 500 });
   const b = await mockUpstream({ failFirst: 99, statusAfterFail: 503 });

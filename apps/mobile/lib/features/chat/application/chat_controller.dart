@@ -49,6 +49,11 @@ class ChatController extends _$ChatController {
   Future<bool> send(String text) async {
     final trimmed = text.trim();
     if (trimmed.isEmpty) return false;
+    // Cold-start race guard: while build() is still loading history the state
+    // is AsyncLoading with value == null. Treating that as an empty state and
+    // appending would OVERWRITE the stored history with just this one turn.
+    // (AsyncValue.isLoading — not the ChatState field below.)
+    if (state.isLoading) return false;
     final current = state.value ?? const ChatState();
     if (current.isLoading) return false;
 
