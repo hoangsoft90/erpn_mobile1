@@ -44,6 +44,11 @@ const INVOICES = [
   { name: "SINV-0001", customer: "CUST-00001", posting_date: "2026-09-01", grand_total: 10_500_000, outstanding_amount: 2_500_000, docstatus: 1 },
   { name: "SINV-0002", customer: "CUST-00001", posting_date: "2026-09-05", grand_total: 320_000, outstanding_amount: 0, docstatus: 1 },
   { name: "SINV-0003", customer: "CUST-00002", posting_date: "2026-09-08", grand_total: 7_500_000, outstanding_amount: 7_500_000, docstatus: 1 },
+  // Credit note (is_return): outstanding is NEGATIVE. It must count toward
+  // "còn nợ" (net receivable) — result20: the `> 0` filter dropped it and
+  // overstated CUST-00002's balance by 320.000đ. Ground truth for the
+  // regression test: CUST-00002 = 7.500.000 − 320.000 = 7.180.000đ / 2 chứng từ.
+  { name: "SINV-0004", customer: "CUST-00002", posting_date: "2026-09-09", grand_total: -320_000, outstanding_amount: -320_000, docstatus: 1, is_return: 1 },
 ];
 
 const STOCK = [
@@ -80,7 +85,7 @@ const TOOLS = {
   },
   erpnext_sales_invoice_list: (args) => {
     const rows = INVOICES.filter(
-      (i) => (!args?.customer || i.customer === args.customer) && (args?.outstanding_only === false || i.outstanding_amount > 0),
+      (i) => (!args?.customer || i.customer === args.customer) && (args?.outstanding_only === false || i.outstanding_amount !== 0),
     );
     return { doctype: "Sales Invoice", count: rows.length, data: rows };
   },

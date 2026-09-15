@@ -78,13 +78,21 @@ export async function getCustomerBalance(mcp, customerId, knownIds) {
   });
 }
 
-/** Shared by balance + sales skill: unpaid invoices of one customer. */
+/** Shared by balance + sales skill: open (unsettled) invoices of one customer.
+ *
+ * `!== 0`, NOT `> 0`: credit notes carry NEGATIVE outstanding_amount and a
+ * negative balance is still money the customer is owed back. Filtering `> 0`
+ * turned "còn nợ" into gross receivables — result20: a customer with a
+ * −97.200đ credit note reported 269.000đ/3 instead of the correct 171.800đ/4.
+ * Every row here has outstanding_amount !== 0, i.e. the document still has an
+ * unsettled amount in either direction.
+ */
 async function listUnpaidInvoices(mcp, customerId, knownIds) {
   assertKnownId(customerId, knownIds);
   assertReadOnly("erpnext_sales_invoice_list");
   const res = await mcp.callTool("erpnext_sales_invoice_list", { customer: customerId, limit: 100 });
   const payload = res.data ?? res;
-  const rows = (payload.data ?? []).filter((r) => Number(r.outstanding_amount) > 0);
+  const rows = (payload.data ?? []).filter((r) => Number(r.outstanding_amount) !== 0);
   return markUntrusted("erpnext:erpnext_sales_invoice_list", {
     doctype: "Sales Invoice",
     count: rows.length,

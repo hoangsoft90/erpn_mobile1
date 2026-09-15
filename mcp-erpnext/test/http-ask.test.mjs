@@ -15,11 +15,15 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
-// Hermetic (result9 fix): strip leaked ERPNEXT_* from the parent shell so the
-// in-process createAskServer() also resolves the MOCK target, never the real
-// ERPNext — the in-process tests set NLP_SERVICE_PORT on process.env below.
+// Hermetic (result9 fix, widened in result21): strip leaked ERPNEXT_* AND ASK_*
+// from the parent shell so the in-process createAskServer() also resolves the
+// MOCK target and stays on the loopback bind policy. An interactive shell that
+// ran `set -a; source .env; set +a` exports ASK_USER/ASK_PASSWORD, which makes
+// resolveBindPolicy() THROW on a 127.0.0.1 bind — the whole file then died in
+// setup and leaked the spawned Python child, hanging `node --test` for minutes
+// instead of failing fast. Env that reaches a hermetic test must be stripped.
 for (const k of Object.keys(process.env)) {
-  if (/^ERPNEXT_/.test(k)) delete process.env[k];
+  if (/^(ERPNEXT_|ASK_)/.test(k)) delete process.env[k];
 }
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -45,14 +49,17 @@ async function startNlpService() {
 
 test("/ask wrapper: health, happy path, and error contracts", async () => {
   const nlp = await startNlpService();
-  process.env.NLP_SERVICE_PORT = String(nlp.port);
-  const { createAskServer } = await import("../src/http-ask.mjs");
-
-  const server = createAskServer({ port: 0, host: "127.0.0.1" });
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const base = `http://127.0.0.1:${server.address().port}`;
-
+  // Everything from here on runs inside try: if setup throws (bad bind policy,
+  // import failure), the finally below still kills the Python child. Setup
+  // before a try is how a fast failure became a suite-wide hang.
+  let server = null;
   try {
+    process.env.NLP_SERVICE_PORT = String(nlp.port);
+    const { createAskServer } = await import("../src/http-ask.mjs");
+
+    server = createAskServer({ port: 0, host: "127.0.0.1" });
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const base = `http://127.0.0.1:${server.address().port}`;
     // health
     const health = await fetch(`${base}/health`);
     assert.equal(health.status, 200);
@@ -69,7 +76,7 @@ test("/ask wrapper: health, happy path, and error contracts", async () => {
     assert.equal(ask.status, 200);
     const askBody = await ask.json();
     assert.equal(askBody.ok, true);
-    assert.equal(askBody.result.answer, "Nguyễn Thị Lan còn nợ 2.500.000đ (1 hóa đơn chưa trả).");
+    assert.equal(askBody.result.answer, "Nguyễn Thị Lan còn nợ 2.500.000đ (1 chứng từ chưa thanh toán).");
     assert.equal(askBody.result.outstanding_vnd, 2_500_000);
     assert.equal(askBody.result.routed.group, "customer");
     // Phase 1 really ran (bridge over HTTP, not a stub)
@@ -104,7 +111,7 @@ test("/ask wrapper: health, happy path, and error contracts", async () => {
     assert.match(nfBody.error, /no such path/);
     assert.match(nf.headers.get("content-type") ?? "", /application\/json/);
   } finally {
-    server.close();
+    server?.close();
     nlp.child.kill();
   }
 });
@@ -113,9 +120,10 @@ test("/ask CLI main(): ready line on stdout then exit on close", async () => {
   const nlp = await startNlpService();
   const child = spawn(process.execPath, [path.join(ROOT, "src", "http-ask.mjs"), "--port", "0"], {
     cwd: REPO,
-    // Hermetic: strip ERPNEXT_* — this file tests the MOCK path (a leaked env
-    // var from an earlier `source .env` shell flipped the target, result9 fix).
-    env: Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^ERPNEXT_/.test(k))),
+    // Hermetic: strip ERPNEXT_* and ASK_* — this file tests the MOCK path on a
+    // loopback bind (a leaked env var from an earlier `source .env` shell both
+    // flipped the target and tripped the bind-policy guard, result9/result21).
+    env: Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(ERPNEXT_|ASK_)/.test(k))),
     stdio: ["ignore", "pipe", "inherit"],
   });
   try {

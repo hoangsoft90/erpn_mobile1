@@ -129,7 +129,33 @@ test("copilot E2E: second customer resolves independently", async () => {
     await copilot.request("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } });
     const out = await copilot.call("Trần Văn Hai còn nợ bao nhiêu");
     assert.equal(out.customer.id, "CUST-00002");
-    assert.equal(out.outstanding_vnd, 7_500_000);
+    // CUST-00002 has a credit note (SINV-0004, −320.000): "còn nợ" is NET.
+    // result20 regression: the old `> 0` filter dropped the credit note and
+    // reported the gross 7.500.000đ instead of the true 7.180.000đ.
+    assert.equal(out.outstanding_vnd, 7_500_000 - 320_000);
+    assert.equal(out.open_invoices, 2); // invoice + credit note, not the settled one
+  } finally {
+    await copilot.close();
+    nlp.child.kill();
+  }
+});
+
+test("copilot E2E: credit note counts toward the receivable balance (result20 regression)", async () => {
+  // Direct skill-level check of the same ground truth, without NLP: the mock's
+  // SINV-0004 (−320.000đ) models the real −97.200đ credit note from result18 §F.
+  const nlp = await startNlpService();
+  const copilot = startCopilot(nlp.port);
+  try {
+    await copilot.request("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } });
+    const out = await copilot.call("Trần Văn Hai còn bao nhiêu hóa đơn chưa thanh toán");
+    assert.equal(out.customer.id, "CUST-00002");
+    const rows = out.rows ?? [];
+    assert.equal(rows.length, 2);
+    assert.deepEqual(
+      rows.map((r) => Number(r.outstanding_amount)).sort((a, b) => a - b),
+      [-320_000, 7_500_000],
+    );
+    assert.ok(out.answer.includes("7.180.000"), out.answer);
   } finally {
     await copilot.close();
     nlp.child.kill();

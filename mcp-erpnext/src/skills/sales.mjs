@@ -21,16 +21,19 @@ export async function stockBalance(mcp, itemCode, knownIds) {
 }
 
 /**
- * Unpaid sales invoices (receivables) for a customer.
+ * Open (unsettled) sales invoices for a customer — includes credit notes.
  * Real params for erpnext_sales_invoice_list: customer / limit (+client-side
  * outstanding filter, mirroring what the real handler exposes).
+ *
+ * `!== 0`, NOT `> 0` — same rule as the customer skill (result20): credit
+ * notes carry NEGATIVE outstanding and dropping them overstates the balance.
  */
 export async function listUnpaidInvoices(mcp, customerId, knownIds) {
   assertKnownId(customerId, knownIds);
   assertReadOnly("erpnext_sales_invoice_list");
   const res = await mcp.callTool("erpnext_sales_invoice_list", { customer: customerId, limit: 100 });
   const payload = res.data ?? res;
-  const rows = (payload.data ?? []).filter((r) => Number(r.outstanding_amount) > 0);
+  const rows = (payload.data ?? []).filter((r) => Number(r.outstanding_amount) !== 0);
   return markUntrusted("erpnext:erpnext_sales_invoice_list", {
     doctype: "Sales Invoice",
     count: rows.length,

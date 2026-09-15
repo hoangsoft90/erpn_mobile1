@@ -54,7 +54,7 @@ void main() {
         'customer': {'id': 'CUST-001', 'name': 'Nguyễn Thị Lan'},
         'outstanding_vnd': 2500000,
         'open_invoices': 1,
-        'answer': 'Nguyễn Thị Lan còn nợ 2.500.000đ (1 hóa đơn chưa trả).',
+        'answer': 'Nguyễn Thị Lan còn nợ 2.500.000đ (1 chứng từ chưa thanh toán).',
       });
       expect(r.hasAnswer, isTrue);
       expect(r.answer, contains('2.500.000đ'));

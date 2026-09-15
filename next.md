@@ -119,7 +119,7 @@ Python `src/vietnamese_nlp/`, stdlib thuần, chạy TRƯỚC LLM — cố đị
 | Phase | Nội dung | Write? | Điều kiện tiên quyết |
 |---|---|---|---|
 | 4 | Voice input/STT (hybrid): 🎤 → STT → user xem lại/sửa text → Gửi | Không | ⚠️ **Chặn bởi audio thật 3 miền** (100–200 câu, chờ người thật thu) |
-| 5 | AI Gateway core: auth, LLM Router, audit (scrub ĐÃ BỎ theo sign-off 2026-09-15) | **ĐANG LÀM** — upstream hàng ngày = **mac-custom** (LLM tự host trên Mac qua `llm9000.loca.lt`, KHÔNG quota — result20); gemini-openai giữ lại CHỈ để verify tương thích provider thật (thought_signature, `E2E_LLM_MODEL=real-gemini`); zen billing-blocked để sau. E2E thật qua mac-custom **XANH 2 tool-call** (result20 §3) | Còn lại: fix bug credit-note (chờ duyệt) · verify thought_signature live khi thuận tiện |
+| 5 | AI Gateway core: auth, LLM Router, audit (scrub ĐÃ BỎ theo sign-off 2026-09-15) | **ĐANG LÀM** — upstream hàng ngày = **mac-custom** (LLM tự host trên Mac qua `llm9000.loca.lt`, KHÔNG quota — result20); gemini-openai giữ lại CHỈ để verify tương thích provider thật (thought_signature, `E2E_LLM_MODEL=real-gemini`); zen billing-blocked để sau. E2E thật qua mac-custom **XANH 2 tool-call** (result20 §3); bug credit-note **đã fix + verify thật 457.875đ/171.800đ** (result21, chờ duyệt commit) | Còn lại: verify thought_signature live khi thuận tiện (chờ bật `lt`) |
 | 6 | Entity resolution + Action Proposal card (xác nhận tiếng Việt + Risk Level) | Không | Exit criteria Phase 5 |
 | 7 | **`create_payment_entry` + idempotency** | **Có** | ⚠️ **Go/No-Go gate: Phase 1–6 exit criteria ĐỦ** — write đầu tiên chạm tiền |
 | 8 | Background jobs + push notification + TTS readback | Có | Phase 7 |
@@ -138,11 +138,15 @@ Python `src/vietnamese_nlp/`, stdlib thuần, chạy TRƯỚC LLM — cố đị
 - **Thu audio thật 3 miền** — mở khóa Phase 4
 - **Cài APK + test tại điểm bán** — cần người thật
 - **LLM upstream thật** — 2 quyết định user (result15): Zen nạp payment method hay bỏ upstream;
-- **Fix bug credit-note (result20 §4)** — `listUnpaidInvoices` lọc `outstanding_amount > 0` loại luôn
-  credit note âm → "còn nợ" thiếu tiền khách đã trả ngược: **chờ user duyệt hướng** `> 0` → `!== 0`
-  trong `mcp-erpnext/src/skills/customer.mjs` + `sales.mjs` + test hồi quy (vùng tiền — không tự sửa);
-  Gemini giữ free tier (20 req/phút) hay nâng paid. Mock giữ làm contract test; dsh trỏ router
-  qua cordis patch (skill `erpn-dsh-setup`)
+- **Fix bug credit-note — ĐÃ ÁP DỤNG (result21), chờ duyệt commit**: `outstanding_amount > 0` →
+  `!== 0` trong `mcp-erpnext/src/skills/customer.mjs` (helper dùng chung cho cả `getCustomerBalance`
+  và sales) + `sales.mjs`; mock thêm credit note SINV-0004 để có test hồi quy; nhãn "hóa đơn chưa trả"
+  → "**chứng từ** chưa thanh toán" + nhánh "hiện dư X" khi outstanding âm. Verify THẬT bằng probe
+  gọi thẳng `answerQuestion` với ERPNext thật (không LLM): **457.875đ/1 ✓** và **171.800đ/4 ✓**
+- **Bật lại `lt` trên máy Mac** — tunnel `llm9000.loca.lt` (upstream `mac-custom`) đang TẮT
+  (3× HTTP 503 "Tunnel Unavailable", result21 §5) ⇒ E2E đầy đủ dsh → router → mac-custom chưa chạy lại được;
+  Gemini giữ free tier (không nâng paid). Mock giữ làm contract test; dsh trỏ router qua cordis patch
+  (skill `erpn-dsh-setup`)
 
 ### Nợ kỹ thuật Phase 1 (khi có dữ liệu quyết định)
 

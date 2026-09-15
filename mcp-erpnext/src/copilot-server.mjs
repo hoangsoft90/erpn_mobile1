@@ -274,20 +274,27 @@ export async function answerQuestion(rawText) {
       const inv = await skills.listUnpaidInvoices(customer.name, knownIds);
       const rows = inv.data?.data ?? [];
       const total = rows.reduce((s, r) => s + (Number(r.outstanding_amount) || 0), 0);
+      // result20: the set now includes credit notes (outstanding < 0). Say
+      // "chứng từ" (documents) and show each line with its signed amount so a
+      // negative line reads as a deduction instead of a wrong "hóa đơn" count.
+      const lines = rows.map((r) => `${r.name}: ${formatVnd(Number(r.outstanding_amount))}đ`).join(", ");
       const answer =
         rows.length > 0
-          ? `${customer.customer_name} còn ${rows.length} hóa đơn chưa trả, tổng ${formatVnd(total)}đ (${rows.map((r) => `${r.name}: ${formatVnd(Number(r.outstanding_amount))}đ`).join(", ")}).${ambNote}`
-          : `${customer.customer_name} không còn hóa đơn nào chưa trả.${ambNote}`;
+          ? `${customer.customer_name} còn ${rows.length} chứng từ chưa thanh toán, tổng ${formatVnd(total)}đ (${lines}).${ambNote}`
+          : `${customer.customer_name} không còn chứng từ nào chưa thanh toán.${ambNote}`;
       return { question: rawText, normalized: nlp, routed: { group: route.group, matched: route.matched }, customer: { id: customer.name, name: customer.customer_name }, rows, answer };
     }
 
-    // group === "customer": the receivable-balance question.
+    // group === "customer": the receivable-balance question. rows from the
+    // balance now include credit notes (negative) — "chứng từ" not "hóa đơn".
     const balance = await skills.getCustomerBalance(customer.name, knownIds);
     const b = balance.data;
     const answer =
       b.outstanding_vnd > 0
-        ? `${customer.customer_name} còn nợ ${formatVnd(b.outstanding_vnd)}đ (${b.open_invoices} hóa đơn chưa trả).${ambNote}`
-        : `${customer.customer_name} không còn nợ gì.${ambNote}`;
+        ? `${customer.customer_name} còn nợ ${formatVnd(b.outstanding_vnd)}đ (${b.open_invoices} chứng từ chưa thanh toán).${ambNote}`
+        : b.outstanding_vnd < 0
+          ? `${customer.customer_name} không còn nợ — hiện dư ${formatVnd(-b.outstanding_vnd)}đ (${b.open_invoices} chứng từ chưa thanh toán, phần dư từ ghi trừ/credit note).${ambNote}`
+          : `${customer.customer_name} không còn nợ gì.${ambNote}`;
     return {
       question: rawText,
       normalized: nlp,

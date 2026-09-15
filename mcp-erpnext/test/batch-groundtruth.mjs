@@ -6,8 +6,20 @@
  * Output: compact JSON on stdout (consumed by the batch-accuracy report).
  */
 
+import { fileURLToPath } from "node:url";
+import path from "node:path";
 import { createMcpClient } from "../src/client.mjs";
 import { pickServerScript } from "../src/copilot-server.mjs";
+
+// Guard (result21): see batch-accuracy.mjs — `node --test` discovers everything
+// under test/. Unattended this dumps REAL customer names, invoices and amounts
+// to stdout mid-`npm test` whenever ERPNEXT_* happens to be exported.
+if (process.env.NODE_TEST_CONTEXT || path.resolve(process.argv[1] ?? "") !== fileURLToPath(import.meta.url)) {
+  console.error(
+    "[batch-groundtruth] discovered by the test runner — skipped. Run: node test/batch-groundtruth.mjs (after sourcing .env)",
+  );
+  process.exit(0);
+}
 
 const mcp = createMcpClient({ serverScript: pickServerScript() });
 await mcp.initialize();

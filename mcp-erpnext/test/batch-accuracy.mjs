@@ -10,10 +10,30 @@
  *         node mcp-erpnext/test/batch-accuracy.mjs
  */
 
+import { fileURLToPath } from "node:url";
+import path from "node:path";
 import { answerQuestion } from "../src/copilot-server.mjs";
+
+// Guard (result21): `node --test` discovers EVERYTHING under test/, so without
+// this the unit suite executes this batch runner. Env-stripped that is a silent
+// no-op, but in a shell that ran `set -a; source .env; set +a` it fires 18
+// questions at the REAL ERPNext as part of `npm test`. Run on direct invocation
+// only, and say so out loud instead of silently passing.
+// NB: the runner spawns each file as a child with argv[1] = the file, so argv is
+// NOT a usable signal — NODE_TEST_CONTEXT is (verified: 'child-v8' vs unset).
+if (process.env.NODE_TEST_CONTEXT || path.resolve(process.argv[1] ?? "") !== fileURLToPath(import.meta.url)) {
+  console.error(
+    "[batch-accuracy] discovered by the test runner — skipped. Run: node test/batch-accuracy.mjs (after sourcing .env)",
+  );
+  process.exit(0);
+}
 
 const fmt = (n) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ".");
 const has = (hay, needle) => hay.includes(needle);
+// The document-count noun was made neutral ("hóa đơn" -> "chứng từ") once credit
+// notes entered the set (result20/21). Score the NUMBER and the COUNT, not the
+// wording — a cosmetic rename must not register as an accuracy regression.
+const DOC = /chứng từ|hóa đơn/;
 
 /**
  * Every case: id, question, why (what facet it exercises), expect() receives
@@ -24,27 +44,27 @@ const CASES = [
   {
     id: "b01", q: "Khách smoke 2026-09-13-p1done còn nợ bao nhiêu",
     why: "baseline công nợ (câu smoke đã verify ở result6)",
-    expect: (r) => [has(r.answer ?? "", "269.000") && has(r.answer ?? "", "(3 hóa đơn"), `outstanding 269000/count 3`],
+    expect: (r) => [has(r.answer ?? "", "269.000") && has(r.answer ?? "", "(3 ") && DOC.test(r.answer ?? ""), `outstanding 269000/count 3`],
   },
   {
     id: "b02", q: "Anh Nam ơi cho hỏi khách smoke 2026-09-13-p1done còn nợ bao nhiêu tiền",
     why: "kinship 'Anh Nam ơi' + lời vòng — không được làm hỏng nhận diện tên khách",
-    expect: (r) => [has(r.answer ?? "", "269.000") && has(r.answer ?? "", "(3 hóa đơn"), `kinship không phá tên khách`],
+    expect: (r) => [has(r.answer ?? "", "269.000") && has(r.answer ?? "", "(3 ") && DOC.test(r.answer ?? ""), `kinship không phá tên khách`],
   },
   {
     id: "b03", q: "bác Hai hỏi công nợ của khách smoke 2026-09-13-postfix",
     why: "kinship 'bác Hai' + từ khóa 'công nợ' → route customer",
-    expect: (r) => [has(r.answer ?? "", "1.049.000") && has(r.answer ?? "", "(3 hóa đơn"), `outstanding 1049000`],
+    expect: (r) => [has(r.answer ?? "", "1.049.000") && has(r.answer ?? "", "(3 ") && DOC.test(r.answer ?? ""), `outstanding 1049000`],
   },
   {
     id: "b04", q: "Công ty xây dựng ABC còn nợ bao nhiêu",
     why: "khách doanh nghiệp tên dài (2 hóa đơn: 179.205.000)",
-    expect: (r) => [has(r.answer ?? "", "179.205.000") && has(r.answer ?? "", "(2 hóa đơn"), `outstanding 179205000`],
+    expect: (r) => [has(r.answer ?? "", "179.205.000") && has(r.answer ?? "", "(2 ") && DOC.test(r.answer ?? ""), `outstanding 179205000`],
   },
   {
     id: "b05", q: "cho biết nợ của Trang trại Minh Anh",
     why: "khách tên không phải 'Khách …' (30.500.000, 1 hóa đơn)",
-    expect: (r) => [has(r.answer ?? "", "30.500.000") && has(r.answer ?? "", "(1 hóa đơn"), `outstanding 30500000`],
+    expect: (r) => [has(r.answer ?? "", "30.500.000") && has(r.answer ?? "", "(1 ") && DOC.test(r.answer ?? ""), `outstanding 30500000`],
   },
   {
     id: "b06", q: "Khách lẻ Minh Phát còn nợ không",

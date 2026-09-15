@@ -48,7 +48,7 @@ const _answerResult = {
   'customer': {'id': 'CUST-001', 'name': 'Nguyễn Thị Lan'},
   'outstanding_vnd': 2500000,
   'open_invoices': 1,
-  'answer': 'Nguyễn Thị Lan còn nợ 2.500.000đ (1 hóa đơn chưa trả).',
+  'answer': 'Nguyễn Thị Lan còn nợ 2.500.000đ (1 chứng từ chưa thanh toán).',
 };
 
 Future<void> _pumpApp(
@@ -131,7 +131,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(
-      find.text('Nguyễn Thị Lan còn nợ 2.500.000đ (1 hóa đơn chưa trả).'),
+      find.text('Nguyễn Thị Lan còn nợ 2.500.000đ (1 chứng từ chưa thanh toán).'),
       findsOneWidget,
     );
     expect(find.text('route: customer'), findsOneWidget);
