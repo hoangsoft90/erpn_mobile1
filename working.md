@@ -15,7 +15,8 @@
 
 ## Đã xong gần đây
 
-- [2026-09-15] Xong (CHƯA commit, chờ duyệt): **code review sâu result16** — 7 lỗi thật (3 crash router + 2 stuck server + 2 logic Flutter) + 3 regression test; Node 49/49 (9s) · router 8/8 · Flutter 0 issue 14/14; 4 lỗi của chính agent đã vào skill mục 6
+- [2026-09-15] Xong + commit **e2f5caf** (đã duyệt, đã push): result15 (router real upstreams + dsh cơ chế thật) + result16 (crash/hang review 7 lỗi + 3 regression test) — 16 files
+- [2026-09-15] Xong (CHƯA commit, chờ duyệt): **review vòng 2 trên fix của mình** (result16 §6C) — 5 window-sau-await còn sót trong router + stripFields validation; +2 regression test; router 10/10 · Node 49/49. **Quota verdict**: daily cap RPD=20 đã cạn (149 req, 429 tức thì sau 130s im lặng) — E2E xanh chờ reset ~nửa đêm giờ Pacific, chạy 1 session duy nhất. Quyết định user: Zen để sau, Gemini free chấp nhận
 - [2026-09-15] Xong + commit **87fcbb1** (đã duyệt, đã push): security review fixes (CGNAT boundary, constant-time auth, 401 UX, CI env-injection) + LLM Router bản đơn giản + sign-off Phase 5 (không scrub) + LOCAL-TEST doc — result14
 - [2026-09-15] Xong: **router nối upstream thật** (result15) — endpoint chính thức zen/gemini; tự bắt 2 bug router chạy thật (https transport, field `store` Gemini từ chối → stripFields) + LLM_ROUTER_DEBUG; **Gemini generate thật 200 qua router** · Zen chặn billing (CreditsError); cơ chế dsh thật = cordis patch row (result6 settings.yaml lỗi thời) → skill mới `erpn-dsh-setup`; E2E dsh→Gemini flaky do free tier 20 req/phút (429/503 nguyên văn result15 §6). Router tests 7/7 · mcp-erpnext 49/49
 

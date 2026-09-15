@@ -101,3 +101,46 @@ M docs (result16/checklist/features/next/working/handoff/skill/openspec tasks)
    cold-start race guard (+8 tests)"
 Lưu ý: đợt này gồm cả 2 file router của result15 chưa commit → gộp 1 commit
 hoặc tách 2 (result15 trước, result16 sau) — user chọn.
+
+== 6. ADDENDUM (2026-09-15 03:05) — DECISIONS + REVIEW VÒNG 2 + QUOTA VERDICT
+------------------------------------------------------------------------
+A) QUYẾT ĐỊNH USER (trao đổi trực tiếp 2026-09-15):
+   - Zen: ĐỂ SAU — không xử lý billing, giữ nguyên billing-blocked, KHÔNG
+     tắt/xóa config upstream.
+   - Gemini: free tier ĐƯỢC CHẤP NHẬN, không nâng paid. 429/503 khi E2E coi
+     là bình thường (giới hạn free tier), retry sau ~60s thay vì báo lỗi.
+B) COMMIT e2f5caf đã push (16 files): result15 + result16 batch (user duyệt).
+C) REVIEW VÒNG 2 trên chính fix của mình (re-read e2f5caf) — 5 lỗ hổng
+   window-sau-await còn sót, ĐÃ SỬA + TEST (router 10/10, 452ms):
+   1. Loop chain không check res.destroyed giữa các upstream → còn hammer
+      chain khi client đã biến mất → break ngay đầu loop iteration.
+   2. Models catch-path: 502 write sau await không guard destroyed → guard.
+   3. Exhausted-chain 502: write sau nhiều giây await → guard destroyed;
+      audit status = 499 (client closed) khi bị ngắt — trung thực hơn 502.
+   4. Debug drain path thiếu error listener trên res2 → uncaught error khi
+      upstream đứt GIỮA lúc drain → thêm listener (log, không crash).
+   5. loadConfig không validate stripFields: string "store" iterate từng
+      ký tự trong for..of → xóa nhầm key IM LẶM → hard-error ở boot.
+   +2 regression test: client-abort-mid-chain (process sống, /health sau
+   abort = 200) + stripFields validation (string/mixed-type → throw).
+D) QUOTA VERDICT (evidence-based, kết thúc việc đuổi E2E xanh hôm nay):
+   - 429 nguyên văn sau 130s IM LẶNG hoàn toàn: "generate_content_free_tier
+     _requests, limit: 20, model: gemini-3.6-flash. Please retry in 53.9s"
+   - Audit hôm nay: 149 requests, 10 gemini 200s + models probes + generate
+     trực tiếp → DAILY CAP (RPD=20) ĐÃ CẠN, không phải RPM (60s window đã
+     reset mà vẫn 429 tức thì). "Retry in Xs" của Google là template gây
+     hiểu nhầm cho daily quota.
+   - Kết luận: E2E xanh trọn vẹn CHỜ RESET DAILY (nửa đêm giờ Pacific —
+     ~14-15h giờ VN) rồi chạy DUY NHẤT 1 session (1 session = 2-3 calls ≤
+     trần 20), không retry-loop trong ngày. Router/cửa hàng đã chứng minh
+     chuỗi đúng bằng: gemini 200 qua router (result15 §3) + mock 269.000đ
+     nguyên vẹn qua cùng patch (result15 §5).
+E) Bài học mới vào skill mục 6 (4 mục): client-abort window là LỚP lỗi
+   (audit bằng grep, không trí nhớ) · config validate shape im-lặng · 429
+   daily-cap vs RPM kiểm chứng bằng evidence · grep absence claim phải
+   kiểm tra format log trước ("status=" vs "HTTP 429" từng làm tôi kết luận
+   sai request chưa tới router).
+F) Chưa commit (chờ duyệt): scripts/llm-router.mjs (5 fix vòng 2) +
+   scripts/test/llm-router.test.mjs (+2 test) + docs addendum này.
+   Đề xuất: "fix: router review round 2 — abort-window guards, stripFields
+   validation, 499 audit (+2 tests); record upstream decisions".

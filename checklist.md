@@ -83,7 +83,8 @@ Trạng thái roadmap chi tiết nằm ở `next.md` — file này KHÔNG nhân 
       key cũ vẫn hợp lệ (HTTP 200), rotation chưa hiệu lực (`result9.txt` §1)
 - [ ] **Thu 100–200 câu audio thật 3 miền** — điều kiện còn thiếu của Phase 1, chặn Phase 4 (STT)
 - [ ] **Cài APK lên thiết bị thật tại điểm bán + test** — cần người thật. Endpoint đã có đường sống: tunnel `erpn8788.loca.lt` verify E2E (result13) — dùng ngay khi `lt` chạy; lâu dài chọn 1 trong 3 (result11 §5): Tailscale login (khuyến nghị) / hosting mở port 8788 / tunnel giữ nguyên. Sau đó user dán 3 giá trị GitHub Settings → CI build APK cài được
-- [ ] **LLM upstream thật** — 2 quyết định user: ① Zen nạp payment method (CreditsError) hay bỏ upstream ② Gemini giữ free tier (20 req/phút, E2E flaky) hay nâng paid; mock giữ làm contract test; dsh trỏ router qua cordis patch (skill `erpn-dsh-setup`)
+- [x] **Quyết định upstream LLM (user 2026-09-15)**: Zen ĐỂ SAU (billing-blocked giữ nguyên, không xóa config) · Gemini free tier được chấp nhận (không nâng paid; 429/503 = bình thường, retry ~60s). ⚠️ **Evidence result16 §6D: trần NGÀY (RPD=20) đã cạn hôm nay** (149 requests, 10 gemini 200) — "retry in Xs" của Google gây hiểu nhầm cho daily quota; E2E xanh chạy DUY NHẤT 1 session sau reset (~nửa đêm giờ Pacific ≈ 14-15h giờ VN)
+- [x] **Review vòng 2 trên fix của mình (result16 §6C): 5 window-sau-await còn sót** — chain-loop abort check · models catch guard · exhausted-502 guard + audit 499 · debug-drain error listener · stripFields validation (string iterate ký tự xóa nhầm key im lặng). Router 10/10 (452ms) + 2 test mới (client-abort survival, stripFields). Chờ duyệt commit vòng 2
 
 ### Các phase kế tiếp (chi tiết ở `next.md`)
 - Phase 4 (STT) — chặn bởi audio · Phase 5 (Gateway) — ĐÃ MỞ (sign-off 2026-09-15), router bản đơn giản đã code (result14) ·

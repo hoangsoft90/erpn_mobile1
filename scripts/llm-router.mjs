@@ -81,6 +81,13 @@ export function loadConfig(file) {
     if (typeof u?.baseUrl !== "string" || !/^https?:\/\//.test(u.baseUrl)) {
       throw new Error(`upstreams[${i}].baseUrl must be an http(s) URL`);
     }
+    if (u.stripFields !== undefined) {
+      if (!Array.isArray(u.stripFields) || u.stripFields.some((f) => typeof f !== "string")) {
+        // A string here would iterate characters in for..of and silently
+        // delete the wrong keys — hard-fail at boot instead.
+        throw new Error(`upstreams[${i}].stripFields must be an array of field names`);
+      }
+    }
   }
   cfg.port = Number(cfg.port ?? 8900);
   cfg.host = String(cfg.host ?? "127.0.0.1");
@@ -212,6 +219,7 @@ export function createRouterServer({ config, pool, auditPath }) {
         res.writeHead(data.statusCode ?? 502, { "Content-Type": "application/json" });
         data.pipe(res);
       } catch (err) {
+        if (res.destroyed) return; // client gone during await — writing now would crash
         res.writeHead(502, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: { message: `llm-router: models via ${up.name} failed: ${err.message}` } }));
       }
@@ -246,6 +254,7 @@ export function createRouterServer({ config, pool, auditPath }) {
       const tried = [];
 
       for (const up of chain) {
+        if (res.destroyed) break; // client gone while we tried earlier upstreams — stop hammering the chain
         tried.push(up.name);
         // Per-upstream field stripping (gateway duty): some OpenAI-only fields
         // (e.g. "store") are rejected by Gemini's OpenAI-compat endpoint.
@@ -279,6 +288,11 @@ export function createRouterServer({ config, pool, auditPath }) {
           // consuming the stream twice / racing the 'end' event.)
           const dbg = process.env.LLM_ROUTER_DEBUG === "1" ? [] : null;
           res2.on("data", (c) => { if (dbg && dbg.length < 8) dbg.push(c); });
+          // A stream error during drain must not surface as an uncaught
+          // 'error' event (same process-death rule as the piped path).
+          res2.on("error", (err) => {
+            process.stderr.write(`[llm-router] ${id} ${up.name} error while draining HTTP ${status}: ${err.message}\n`);
+          });
           res2.on("end", () => {
             if (dbg) {
               process.stderr.write(`[llm-router][debug] ${id} ${up.name} status=${status} body0=${Buffer.concat(dbg).toString().slice(0, 800)}\n`);
@@ -321,15 +335,19 @@ export function createRouterServer({ config, pool, auditPath }) {
           type: "llm_router_no_upstream",
         },
       });
-      res.writeHead(502, { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body402) });
-      res.end(body402);
+      // Exhausted-chain 502: the chain walk awaited upstreams for seconds —
+      // the client may be long gone. Never write to a destroyed socket.
+      if (!res.destroyed) {
+        res.writeHead(502, { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body402) });
+        res.end(body402);
+      }
       audit({
         id,
         ts: new Date().toISOString(),
         upstream: null,
         model: wantModel,
         attempts: tried,
-        status: 502,
+        status: res.destroyed ? 499 : 502, // 499 = client closed before answer
         latencyMs: Date.now() - started,
         messages: Array.isArray(parsed?.messages) ? parsed.messages.length : null,
         stream: parsed?.stream === true,

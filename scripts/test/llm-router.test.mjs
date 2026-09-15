@@ -96,6 +96,21 @@ test("loadConfig: valid chain passes, defaults filled", () => {
   assert.equal(cfg.cooldownMs, 30000);
 });
 
+test("loadConfig: stripFields must be an array of strings (hard error — a string iterates chars)", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "router-cfg-"));
+  const f1 = path.join(dir, "strip-string.json");
+  writeFileSync(f1, JSON.stringify({ upstreams: [{ name: "x", baseUrl: "http://x/v1", stripFields: "store" }] }));
+  assert.throws(() => loadConfig(f1), /stripFields must be an array/);
+
+  const f2 = path.join(dir, "strip-num.json");
+  writeFileSync(f2, JSON.stringify({ upstreams: [{ name: "x", baseUrl: "http://x/v1", stripFields: [1] }] }));
+  assert.throws(() => loadConfig(f2), /stripFields must be an array/);
+
+  const f3 = path.join(dir, "strip-ok.json");
+  writeFileSync(f3, JSON.stringify({ upstreams: [{ name: "x", baseUrl: "http://x/v1", stripFields: ["store"] }] }));
+  assert.doesNotThrow(() => loadConfig(f3));
+});
+
 test("loadConfig: empty chain / bad URL / invalid JSON → hard error", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "router-cfg-"));
   const f1 = path.join(dir, "empty.json");
@@ -206,6 +221,48 @@ test("router: debug mode drains retry-status bodies once, still falls back (regr
     if (prevDebug === undefined) delete process.env.LLM_ROUTER_DEBUG;
     else process.env.LLM_ROUTER_DEBUG = prevDebug;
     closeAll(failing, working, router);
+  }
+});
+
+test("router: client aborts mid-chain → process survives, no 502 attempt on dead socket", async () => {
+  const slow = await mockUpstream();
+  slow.responses = [];
+  // Make the ONLY upstream hang until we abort the client side.
+  const origHandler = slow.listeners("request");
+  slow.removeAllListeners("request");
+  slow.on("request", (req, res) => {
+    if (req.url.endsWith("/models")) {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ object: "list", data: [] }));
+      return;
+    }
+    // never respond — hold the request open
+  });
+
+  const auditDir = mkdtempSync(path.join(tmpdir(), "router-audit-"));
+  const cfg = {
+    port: 0, host: "127.0.0.1", cooldownMs: 30_000, timeoutMs: 20_000,
+    upstreams: [{ name: "slow", baseUrl: `http://127.0.0.1:${slow.port()}/v1` }],
+  };
+  const pool = new UpstreamPool(cfg.upstreams, { timeoutMs: cfg.timeoutMs, cooldownMs: cfg.cooldownMs });
+  const { server: router } = createRouterServer({ config: cfg, pool, auditPath: path.join(auditDir, "a.jsonl") });
+  await new Promise((r) => router.listen(0, "127.0.0.1", r));
+
+  try {
+    const req = http.request(
+      { host: "127.0.0.1", port: router.address().port, path: "/v1/chat/completions", method: "POST", headers: { "content-type": "application/json", "content-length": 2, connection: "close" } },
+      () => {},
+    );
+    req.on("error", () => {}); // expected when we destroy
+    req.end("{}");
+    await new Promise((r) => setTimeout(r, 150)); // request reaches router + upstream
+    req.destroy(); // client aborts while the chain is stuck
+    await new Promise((r) => setTimeout(r, 100)); // give the router a beat
+    // If the router had crashed, this follow-up would ECONNREFUSE.
+    const h = await get(router, "/health");
+    assert.equal(h.status, 200);
+  } finally {
+    closeAll(slow, router);
   }
 });
 
