@@ -88,6 +88,9 @@ export function loadConfig(file) {
         throw new Error(`upstreams[${i}].stripFields must be an array of field names`);
       }
     }
+    if (u.geminiThoughtSignatures !== undefined && typeof u.geminiThoughtSignatures !== "boolean") {
+      throw new Error(`upstreams[${i}].geminiThoughtSignatures must be a boolean`);
+    }
   }
   cfg.port = Number(cfg.port ?? 8900);
   cfg.host = String(cfg.host ?? "127.0.0.1");
@@ -108,6 +111,26 @@ export class UpstreamPool {
   healthy() {
     const now = Date.now();
     return this.entries.filter((e) => (this.unhealthyUntil.get(e.name) ?? 0) <= now);
+  }
+  /**
+   * Ordered candidate chain for one request: healthy upstreams first (config
+   * order), then anything still cooling down, soonest-to-recover first.
+   *
+   * Cooldown DEPRIORITISES an upstream — it must never disable the only path
+   * that exists. Evidence (result17, 2026-09-15): a single transient 503 put
+   * the sole upstream into a 30s cooldown while a request already in flight to
+   * that SAME upstream returned 200. dsh's own six retries inside the window
+   * each got an instant 502 "(tried: none)" and the session aborted — the model
+   * was never down; the router refused to try.
+   */
+  candidates(wantModel) {
+    const matches = (u) => !wantModel || !u.model || u.model === wantModel;
+    const all = this.entries.filter(matches);
+    const now = Date.now();
+    const until = (e) => this.unhealthyUntil.get(e.name) ?? 0;
+    const healthy = all.filter((e) => until(e) <= now);
+    const cooling = all.filter((e) => until(e) > now).sort((a, b) => until(a) - until(b));
+    return [...healthy, ...cooling];
   }
   status() {
     const now = Date.now();
@@ -175,6 +198,145 @@ function attempt(up, authHeader, body) {
 
 const RETRY_STATUS = new Set([429, 500, 502, 503, 504]);
 
+/**
+ * Gemini 3.x requires the `thought_signature` it returned alongside a function
+ * call to be echoed back on the next turn; the OpenAI-compat endpoint carries it
+ * at `tool_calls[].extra_content.google.thought_signature`. OpenAI-shaped clients
+ * (dsh) drop that field, and the follow-up request then fails with
+ * `400 Function call is missing a thought_signature in functionCall parts`.
+ * Evidence (result17): reproduced with a minimal payload against a live key;
+ * every Gemini model offered to this key requires it (2.5-flash 404 for new
+ * users, flash-lite / flash-preview / 3.1-flash-lite all 400) — and dsh's very
+ * first tool call dies on the next turn, so a tool-using session can never
+ * complete without this. A gateway is the right place to carry it: capture the
+ * signature on the way out, re-inject it on the way in.
+ */
+export class ThoughtSignatureCache {
+  constructor(max = 500) {
+    this.max = max;
+    this.byId = new Map(); // tool_call id -> signature (insertion order = LRU)
+    this.partial = new Map(); // stream chunk index -> { id?, sig? } for the in-flight response
+  }
+
+  /**
+   * Clear per-response scratch state. Must be called when a new upstream
+   * response starts: stream indexes restart at 0 for every response, so a
+   * leftover { id, sig } from the previous one can be paired with the new
+   * response's id and cache a signature under the WRONG tool call.
+   */
+  beginResponse() {
+    this.partial.clear();
+  }
+
+  /** Learn from one `tool_calls` array (streamed delta or full message). */
+  record(toolCalls) {
+    if (!Array.isArray(toolCalls)) return;
+    for (const tc of toolCalls) {
+      const idx = tc?.index ?? 0;
+      let cur = this.partial.get(idx) ?? {};
+      // Two orderings are both real: (a) one chunk carries id + signature, and
+      // (b) the signature lands in an earlier chunk than the id — that is the
+      // SAME call, so the signature must survive. Only a DIFFERENT known id at
+      // the same index means the scratch state belongs to another call, and a
+      // signature reused across calls is exactly what the upstream 400s on.
+      if (tc?.id && cur.id && tc.id !== cur.id) cur = {};
+      if (tc?.id) cur.id = tc.id;
+      const sig = tc?.extra_content?.google?.thought_signature;
+      if (sig) cur.sig = sig;
+      this.partial.set(idx, cur);
+      if (cur.id && cur.sig) this.set(cur.id, cur.sig);
+    }
+  }
+
+  set(id, signature) {
+    this.byId.delete(id);
+    this.byId.set(id, signature);
+    while (this.byId.size > this.max) this.byId.delete(this.byId.keys().next().value);
+  }
+
+  /**
+   * Add signatures to the assistant tool_calls of an outgoing body.
+   * Deliberately does NOT overwrite a signature the client already sent: that
+   * one came from the same provider for the same function call. The gap being
+   * closed here is clients that drop the field entirely.
+   * @returns true when the body changed.
+   */
+  inject(parsedBody) {
+    let changed = false;
+    for (const msg of parsedBody?.messages ?? []) {
+      if (msg?.role !== "assistant" || !Array.isArray(msg.tool_calls)) continue;
+      for (const tc of msg.tool_calls) {
+        if (!tc?.id || tc.extra_content?.google?.thought_signature) continue;
+        const sig = this.byId.get(tc.id);
+        if (sig) {
+          tc.extra_content = { google: { thought_signature: sig } };
+          changed = true;
+        }
+      }
+    }
+    return changed;
+  }
+}
+
+/** String-body wrapper: returns the original string untouched when nothing to add. */
+export function injectThoughtSignatures(body, cache) {
+  try {
+    const parsed = JSON.parse(body);
+    return cache.inject(parsed) ? JSON.stringify(parsed) : body;
+  } catch {
+    return body; // unparsable body is forwarded as-is; the upstream will answer
+  }
+}
+
+/**
+ * Tee the upstream response and learn signatures from it. Attaching a 'data'
+ * listener next to `pipe` is safe (both receive the chunks; pipe does not
+ * consume exclusively) — but it must have its own 'error' listener, same rule
+ * as every other stream this router touches.
+ */
+export function captureThoughtSignatures(stream, { isStreaming, cache }) {
+  cache.beginResponse();
+  let buf = "";
+  const learn = (toolCalls) => {
+    try {
+      cache.record(toolCalls);
+    } catch {
+      /* never let signature bookkeeping break the client's stream */
+    }
+  };
+  stream.on("data", (chunk) => {
+    buf += chunk.toString("utf8");
+    if (!isStreaming) return; // whole body handled at 'end'
+    const lines = buf.split("\n");
+    buf = lines.pop() ?? ""; // keep the trailing partial line
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith("data:")) continue;
+      const payload = trimmed.slice(5).trim();
+      if (!payload || payload === "[DONE]") continue;
+      let evt;
+      try {
+        evt = JSON.parse(payload);
+      } catch {
+        continue; // partial/keep-alive line
+      }
+      learn(evt?.choices?.[0]?.delta?.tool_calls ?? evt?.choices?.[0]?.message?.tool_calls);
+    }
+  });
+  stream.on("error", () => {
+    /* the piped path already destroys the client response; bookkeeping is best-effort */
+  });
+  if (!isStreaming) {
+    stream.on("end", () => {
+      try {
+        learn(JSON.parse(buf)?.choices?.[0]?.message?.tool_calls);
+      } catch {
+        /* not JSON we can learn from */
+      }
+    });
+  }
+}
+
 export function createRouterServer({ config, pool, auditPath }) {
   const audit = (record) => {
     try {
@@ -184,6 +346,10 @@ export function createRouterServer({ config, pool, auditPath }) {
       process.stderr.write(`[llm-router] audit write failed: ${err.message}\n`);
     }
   };
+
+  // One cache per router process: signatures are keyed by tool_call id, which
+  // the upstream generates, so it survives across requests/sessions.
+  const signatures = new ThoughtSignatureCache();
 
   const server = http.createServer(async (req, res) => {
     const started = Date.now();
@@ -198,13 +364,12 @@ export function createRouterServer({ config, pool, auditPath }) {
     }
 
     if (req.method === "GET" && pathOnly === "/v1/models") {
-      const healthy = pool.healthy();
-      if (healthy.length === 0) {
+      const up = pool.candidates(null)[0];
+      if (!up) {
         res.writeHead(503, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ error: { message: "llm-router: no healthy upstream" } }));
+        res.end(JSON.stringify({ error: { message: "llm-router: no upstream configured" } }));
         return;
       }
-      const up = healthy[0];
       try {
         const data = await new Promise((resolve, reject) => {
           const r = httpModuleFor(upstreamUrl(up, "/models")).request(upstreamUrl(up, "/models"), { method: "GET", timeout: up.timeoutMs, agent: false }, resolve);
@@ -250,7 +415,9 @@ export function createRouterServer({ config, pool, auditPath }) {
         /* forwarded as-is; upstream will answer with its own 400 */
       }
       const wantModel = typeof parsed?.model === "string" ? parsed.model : null;
-      const chain = (wantModel ? pool.healthy().filter((u) => !u.model || u.model === wantModel) : pool.healthy()).slice();
+      // Cooldown deprioritises, never disables (result17) — the chain is empty
+      // only when no configured upstream serves the requested model name.
+      const chain = pool.candidates(wantModel).slice();
       const tried = [];
 
       for (const up of chain) {
@@ -267,6 +434,9 @@ export function createRouterServer({ config, pool, auditPath }) {
           } catch {
             /* unparsable body: forward as-is, upstream will answer */
           }
+        }
+        if (up.geminiThoughtSignatures === true) {
+          sendBody = injectThoughtSignatures(sendBody, signatures);
         }
         let res2;
         try {
@@ -304,6 +474,15 @@ export function createRouterServer({ config, pool, auditPath }) {
         const headers = { ...res2.headers };
         headers["x-llm-router-upstream"] = up.name;
         headers["x-llm-router-id"] = id;
+        if (up.geminiThoughtSignatures === true) {
+          // Prefer the upstream's own content-type over what the client asked
+          // for: if a provider streams anyway (or vice versa), parsing it as the
+          // wrong shape would silently never learn a signature. Only when the
+          // upstream sends no content-type at all do we fall back to the request.
+          const ctype = String(res2.headers["content-type"] ?? "");
+          const upstreamIsSse = ctype.includes("text/event-stream") || (ctype === "" && parsed?.stream === true);
+          captureThoughtSignatures(res2, { isStreaming: upstreamIsSse, cache: signatures });
+        }
         res.writeHead(status, headers);
         // Upstream response MUST have an 'error' listener once piped: a mid-stream
         // abort (free-tier upstreams drop connections often) otherwise surfaces as
@@ -329,10 +508,18 @@ export function createRouterServer({ config, pool, auditPath }) {
         return;
       }
 
+      // Honest failure reason: "no upstream serves this model" and "every
+      // upstream failed" are different operator problems. The old single
+      // message claimed "all upstreams failed (tried: none)" — reporting a
+      // failure for attempts that never happened (result17: wasted a whole
+      // debug cycle on a misleading 502).
+      const noMatch = chain.length === 0;
       const body402 = JSON.stringify({
         error: {
-          message: `llm-router: all upstreams failed (tried: ${tried.join(", ") || "none"})`,
-          type: "llm_router_no_upstream",
+          message: noMatch
+            ? `llm-router: no upstream serves model "${wantModel}" (configured: ${pool.entries.map((e) => e.model ?? "any").join(", ")})`
+            : `llm-router: all upstreams failed (tried: ${tried.join(", ")})`,
+          type: noMatch ? "llm_router_no_model_match" : "llm_router_all_failed",
         },
       });
       // Exhausted-chain 502: the chain walk awaited upstreams for seconds —

@@ -1,0 +1,18 @@
+{
+  "_note": "E2E variant of llm-router.config.json: ONE upstream, so a single dsh session spends the fewest provider requests (free tier Gemini is capped at 20 generate-requests/day — result16). Use it for dsh→router→LLM verification; keep llm-router.config.json as the production chain.",
+  "port": 8900,
+  "host": "127.0.0.1",
+  "timeoutMs": 60000,
+  "cooldownMs": 30000,
+  "upstreams": [
+    {
+      "name": "gemini-openai",
+      "baseUrl": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "model": "gemini-3.6-flash",
+      "apiKeyEnv": "GEMINI_API_KEY",
+      "stripFields": ["store"],
+      "geminiThoughtSignatures": true,
+      "_note": "Zen (opencode.ai/zen) is billing-blocked and deliberately absent here — a blocked upstream in the chain would burn an extra attempt per request."
+    }
+  ]
+}

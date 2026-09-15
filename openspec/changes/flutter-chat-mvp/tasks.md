@@ -32,5 +32,6 @@
 - [x] 5.2 Nối upstream thật (result15): endpoint chính thức zen/gemini; fix 2 bug router chạy thật (https transport, `stripFields` cho field `store` Gemini từ chối) + `LLM_ROUTER_DEBUG`; Gemini verify generate 200 · Zen billing-blocked (CreditsError).
 - [x] 5.3 Cơ chế dsh thật (cordis patch row) → skill `erpn-dsh-setup`; mock qua router chạy thật 269.000đ.
 - [x] 5.4 **User quyết định (2026-09-15)**: Zen ĐỂ SAU (billing-blocked giữ nguyên config) · Gemini free tier chấp nhận (429/503 = bình thường). Evidence result16 §6D: daily cap RPD=20 đã cạn 15/09 — E2E xanh chạy 1 session duy nhất sau reset (~nửa đêm giờ Pacific), không retry-loop trong ngày.
-- [x] 5.5 Review vòng 2 trên fix của mình: 5 window-sau-await + stripFields validation (+2 test; router 10/10). Chờ duyệt commit vòng 2.
-- [ ] 5.5 Router + config sửa thêm (result15) chưa commit — chờ user duyệt (vùng tiền/phân quyền).
+- [x] 5.5 Review vòng 2 trên fix của mình: 5 window-sau-await + stripFields validation (+2 test; router 10/10). → commit `49317a7` (đã duyệt, đã push).
+- [x] 5.6 **E2E thật XANH (result17 §K/L, 2026-09-15 14:40)**: 1 session trả đúng **457.875đ** từ ERPNext thật, khớp ground truth độc lập; fix 2 root cause chặn nó — cooldown không được disable đường duy nhất (router 13/13) + **gateway mang `thought_signature` của Gemini 3.x** (`ThoughtSignatureCache`, router 19/19); harness durable `mcp-erpnext/dsh-e2e.patch.yml` + `scripts/llm-router.e2e.json`.
+- [ ] 5.7 Đợt result17 (thought_signature + harness + docs) chưa commit — chờ user duyệt (vùng router/tiền).

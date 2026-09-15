@@ -1,0 +1,298 @@
+========================================================================
+RESULT 17 — E2E SAU RESET QUOTA: 1 SESSION (THẤT BẠI) → LỘ 2 BUG THẬT
+Timestamp: 2026-09-15 07:16-07:35 UTC = 14:16-14:35 giờ VN
+Env: Linux VPS, Node v24, Python 3.12, dsh 0.1.5-rc.1 (cài lại /tmp/dsh-run).
+Branch change/flutter-chat-mvp. Commit 49317a7 đã push.
+========================================================================
+
+== A) COMMIT VÒNG 2 (user duyệt result16 §6F)
+- Secret scan trên 6 file: CLEAN.
+- `node --test scripts/test/llm-router.test.mjs` → 10/10 pass · 521ms (trước commit).
+- Commit 49317a7 "fix: router review round 2 — abort-window guards, stripFields
+  validation, 499 audit (+2 tests); record upstream decisions" (6 files, +127/-6)
+  → push origin change/flutter-chat-mvp: e2f5caf..49317a7 OK.
+
+== B) TRẠNG THÁI TRƯỚC KHI CHẠY E2E
+- ERPNext THẬT (ngrok prevail-pantyhose-overvalue.ngrok-free.dev): HỎNG.
+  `GET /` → HTTP 500, `GET /api/method/ping` → 500, `GET /api/resource/Customer`
+  → 500 (HTML "Internal Server Error", 0.30s — tunnel ngrok sống nhưng site
+  Mac-side lỗi). Không có ERPNext local trên VPS (127.0.0.1:8080 → 000).
+  → Chặng "→ ERPNext thật" KHÔNG thể chạy hôm nay; dùng mock (đã báo user).
+
+== C) LẦN CHẠY DUY NHẤT (đúng 1 session, không retry)
+Giờ chạy thật: 2026-09-15 14:18:57 +07 (= 07:18:57 UTC, sau reset daily
+Pacific 07:00 UTC ~19 phút).
+Setup: nlp_service :8787 OK · llm-router :8900 (config 1 upstream gemini-only,
+LLM_ROUTER_DEBUG=1) ready:{"ready":true,"port":8900,"upstreams":1} · health:
+{"ok":true,...,"upstreams":[{"name":"gemini-openai","model":"gemini-3.6-flash",
+"healthy":true,"retryInMs":0}]}
+Prompt: "chị Lan còn nợ bao nhiêu"
+
+--- dsh output (nguyên văn, phần cuối) ---
+[copilot] ERPNext target: REAL -> prevail-pantyhose-overvalue.ngrok-free.dev
+[mcp-erpnext] Registered 125 tools
+[mcp-erpnext] Initialized — 125 tools
+[mcp-erpnext] stdio mode ready
+dsh: SERVER: 502: {"message":"llm-router: all upstreams failed (tried: none)","type":"llm_router_no_upstream"}
+=== dsh exit code: 1
+
+--- router stderr (nguyên văn) ---
+{"ready":true,"port":8900,"upstreams":1,"audit":"/tmp/audit17/audit-2026-09-15T07-18-58.jsonl"}
+[llm-router][debug] req_...5jb77c -> gemini-openai model=gemini-3.6-flash
+    reqBytes=681 reqHead={"model":"gemini-3.6-flash","messages":[...title...]}
+[llm-router][debug] req_...5jb77c gemini-openai status=503 body0=[{
+  "error": { "code": 503,
+    "message": "This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.",
+    "status": "UNAVAILABLE" } }]
+[llm-router] req_...5jb77c gemini-openai HTTP 503 → next upstream
+[llm-router][debug] req_...alt47x -> gemini-openai model=gemini-3.6-flash reqBytes=129342
+
+--- audit JSONL (nguyên văn, 8 dòng) ---
+{"id":"req_..._5jb77c","ts":"2026-09-15T07:19:03.104Z","upstream":null,"model":"gemini-3.6-flash","attempts":["gemini-openai"],"status":502,"latencyMs":1996,"messages":2,"stream":true}
+{"id":"req_..._alt47x","ts":"2026-09-15T07:19:05.024Z","upstream":"gemini-openai","model":"gemini-3.6-flash","attempts":["gemini-openai"],"status":200,"latencyMs":3931,"messages":5,"stream":true}
+{"id":"req_..._vn59fk","ts":"07:19:06.458","upstream":null,"attempts":[],"status":502,"latencyMs":2,...}
+{"id":"req_..._2hl2x2","ts":"07:19:07.029","upstream":null,"attempts":[],"status":502,"latencyMs":2,...}
+{"id":"req_..._fkxkgd","ts":"07:19:07.978","upstream":null,"attempts":[],"status":502,"latencyMs":2,...}
+{"id":"req_..._quxmqv","ts":"07:19:10.083","upstream":null,"attempts":[],"status":502,"latencyMs":3,...}
+{"id":"req_..._d5qpe4","ts":"07:19:13.867","upstream":null,"attempts":[],"status":502,"latencyMs":2,...}
+{"id":"req_..._mrr8ih","ts":"07:19:21.794","upstream":null,"attempts":[],"status":502,"latencyMs":3,...}
+
+== D) PHÂN TÍCH (evidence, không suy đoán)
+1. QUOTA RESET ĐÚNG NHƯ DỰ ĐOÁN: request thứ 2 (agent turn, 129KB) nhận **200**
+   từ gemini-3.6-flash lúc 07:19:05, latency 3.9s → daily cap của result16
+   (20 generate-req/ngày) đã reset. KHÔNG còn 429.
+2. NGUYÊN NHÂN THẤT BẠI KHÔNG PHẢI QUOTA, mà là BUG ROUTER:
+   - Request 1 (session-title) gặp **503 high-demand** (transient) → router
+     markUnhealthy(gemini-openai, 30s) — cooldown 30 GIÂY cho 1 spike tạm thời.
+   - `pool.healthy()` trả về RỖNG trong 30s đó → `chain = []` → vòng lặp không
+     chạy → `tried = []` → 502 ngay lập tức (latency 2-3ms).
+   - dsh tự retry 6 lần trong 15s (07:19:06 → 07:19:21) → cả 6 đều trúng cửa sổ
+     cooldown → cả 6 nhận 502 "tried: none" → session abort.
+   - Bằng chứng cùng-upstream-khỏe: request 2 bay SONG SONG với request 1 và
+     nhận 200 **trong lúc cooldown đang bật** → model không hề down.
+3. Hệ quả: 8 request dsh gửi → CHỈ 2 request thực sự tới provider
+   (1×503, 1×200), 6 request bị router từ chối mà không thử gì.
+   → Quota tiêu hôm nay: **2 generate request / 20**.
+
+== E) FIX (scripts/llm-router.mjs) + TEST
+Bug A — cooldown biến 1 lỗi tạm thời thành sự cố toàn hệ 30 giây:
+  Thêm `UpstreamPool.candidates(wantModel)`: healthy trước (theo thứ tự config),
+  rồi tới upstream đang cooldown xếp theo hồi phục sớm nhất. Cooldown chỉ
+  DEPRIORITISE, không bao giờ vô hiệu hoá đường duy nhất. `/v1/models` cũng
+  dùng candidates() thay vì từ chối khi mọi upstream đang cooldown.
+Bug B — thông báo lỗi SAI sự thật: "all upstreams failed (tried: none)" báo
+  thất bại cho những lần thử CHƯA HỀ XẢY RA (đúng ca này). Giờ phân biệt:
+  - không upstream nào phục vụ model yêu cầu → type `llm_router_no_model_match`,
+    message nêu tên model + danh sách model đã cấu hình;
+  - đã thử và hỏng hết → type `llm_router_all_failed`, message có danh sách đã thử.
+Test mới (+3, tổng 13):
+  - [result17] candidates(): healthy first, cooling soonest-first, never empty.
+  - [result17] 1 transient 503 KHÔNG được vô hiệu hoá upstream duy nhất — retry
+    trong cửa sổ cooldown phải tới được upstream (mô phỏng đúng ca hôm nay:
+    request 1 → 502 "tried: only", request 2 → 200).
+  - [result17] model không ai phục vụ → lỗi "no model match" nêu tên model,
+    KHÔNG được nói "tried:" (vì chưa thử gì).
+Kết quả: `node --test scripts/test/llm-router.test.mjs` → **13/13 pass · 562ms**.
+
+== F) PHÁT HIỆN THỨ 3 (nghiêm trọng): dsh TỰ LOAD .env → ý định "mock" bị ghi đè
+- Log dòng đầu của lần chạy ghi `[copilot] ERPNext target: REAL` DÙ đã
+  `unset ERPNEXT_URL ERPNEXT_API_KEY ERPNEXT_API_SECRET` trong môi trường chạy
+  dsh (đã kiểm chứng: `node -e "'ERPNEXT_URL' in process.env"` → false).
+- Probe không tốn quota (LLM trỏ vào port chết 127.0.0.1:1) chứng minh: MCP con
+  vẫn nhận `ERPNEXT_URL in env? true | empty? false`.
+- TRUY NGUỒN (đọc code trong node_modules, không đoán):
+  `@deepseek-ai/dsh-mcp-client` → `env: buildChildEnv(config.env)` với
+  `buildChildEnv = {...scrubbedParentEnv(), ...extra}`; `scrubbedParentEnv()`
+  đọc `process.env` LIVE. Vậy `extra` phải KHÔNG chứa giá trị rỗng…
+  → nguyên nhân thật nằm ở tầng trên: `@deepseek-ai/dsh-app-boot/lib/index.js:942`
+  ```
+  function loadEnv(binName, dir = process.cwd(), warn = ...) {
+      try { process.loadEnvFile(resolve(dir, ".env")); }
+      catch (error) { if (error?.code !== "ENOENT") warn(...); }
+  }
+  ```
+  **dsh tự `process.loadEnvFile(<cwd>/.env)` lúc boot.** cwd = repo root có .env
+  → dsh nạp ERPNEXT_* thật vào process.env của chính nó → biểu thức
+  `!!js process.env.ERPNEXT_URL || ''` trong patch resolve ra URL THẬT →
+  `pickServerScript` chọn REAL. `unset` ở shell là vô hiệu vì .env được đọc lại.
+- HỆ QUẢ AN TOÀN: bất kỳ patch nào dùng `!!js process.env.X || ''` để "ý định
+  mock" đều có thể âm thầm trỏ vào dữ liệu production (công nợ/tên khách thật).
+- FIX ĐÃ VERIFY (probe lại, 0 quota): đổi sang chuỗi rỗng LITERAL `''` →
+  `[probe] ERPNEXT_URL in env? true | empty? true` → copilot log:
+  `[copilot] ERPNext target: mock -> mock (in-memory)`.
+- Ghi chú ngược lại: đường REAL (`mcp-erpnext/dsh.cordis.patch.yml`) hoạt động
+  đúng nhờ chính cơ chế này — .env được nạp tự động, không cần export thủ công.
+
+== G) HARNESS E2E DURABLE (trước đây chỉ sống trong /tmp, mất mỗi lần reboot)
+Tạo mới, đã verify:
+- `mcp-erpnext/dsh-e2e.patch.yml` — MCP copilot row (ERPNEXT_* = '' literal →
+  LUÔN mock, an toàn cho E2E) + 2 row LLM trỏ về router local. Header ghi rõ vì
+  sao phải literal.
+- `scripts/llm-router.e2e.json` — chain 1 upstream (gemini-only) để 1 session dsh
+  tốn ít request provider nhất; `loadConfig()` kiểm tra hợp lệ:
+  "e2e router config OK — chain: gemini-openai/gemini-3.6-flash".
+- Verify patch (router cố ý KHÔNG chạy → 0 request provider):
+  `[copilot] ERPNext target: mock -> mock (in-memory)` + `dsh: TRANSPORT: Connection error.`
+
+== H) KẾT LUẬN VỀ E2E XANH
+- Hôm nay KHÔNG đạt (đúng lệnh: chỉ 1 session, không retry-loop) — nhưng lý do
+  đã xác định chính xác và đã sửa: với fix cooldown, 6 request sau sẽ THỰC SỰ
+  được thử (request 2 đã chứng minh cùng upstream trả 200 trong cửa sổ đó).
+- Chặng "→ ERPNext thật" vẫn treo vì site của user đang 500 (việc của user).
+- Lần chạy kế tiếp: dùng harness ở mục G, 1 session, sau reset daily.
+- Chứng minh chuỗi đúng (đã có từ trước): gemini 200 qua router (result15 §3) ·
+  mock 269.000đ qua cùng patch (result15 §5) · agent turn 200 hôm nay (§C).
+
+== J) VERIFY CUỐI + 1 BẪY MÔI TRƯỜNG (không phải lỗi code)
+- `node --test scripts/test/llm-router.test.mjs` → **13/13 pass · 566ms**.
+- `mcp-erpnext`: lần chạy đầu trong phiên này **FAIL 2 test** ("no ready line" +
+  `[http-ask] fatal: ASK_USER/ASK_PASSWORD make no sense on a loopback bind`)
+  trông như regression vừa gây ra. TRUY NGUỒN: **không phải lỗi code** —
+  `{ set -a; source .env; set +a; }` là GROUP COMMAND (`{}` ≠ subshell `()`),
+  chạy trong shell HIỆN TẠI → `.env` được export vào shell session và dính vào
+  mọi lệnh sau, kể cả test spawn tiến trình con. `env | grep -oE "^(ASK_|ERPNEXT_|…)"`
+  xác nhận 10 biến của .env còn nằm trong env (chỉ đọc TÊN, không in giá trị).
+- Chạy lại hermetic (strip CẢ `ERPNEXT_*` **và** `ASK_*`):
+  `env -u ERPNEXT_URL -u ERPNEXT_API_KEY -u ERPNEXT_API_SECRET -u ASK_USER -u ASK_PASSWORD -u ASK_ALLOW_PUBLIC node --test`
+  → **49/49 pass · 9.9s** ✅ (đúng bằng output của result16 → không có regression).
+- Bài học mới vào skill mục 4: hermetic run phải strip TẤT CẢ biến từ `.env`,
+  không chỉ ERPNEXT; nguyên nhân là `{}` không phải subshell.
+
+== K) E2E XANH — CHUỖI THẬT CHẠY HẾT (2026-09-15 14:40 giờ VN)
+User báo "erpnext đã hết lỗi 500" → verify trước bằng REST thật:
+  /api/method/ping → **HTTP 200** · logged_user → Administrator
+  Customer list → khách THẬT: "Anh Ba — xây nhà", "Chị Tư — thầu nhỏ", "Chú Bảy — chăn nuôi"
+GROUND TRUTH lấy độc lập trước khi chạy (không tốn quota):
+  "Khách làm tròn 2026-09-15-p1b-wf1-2" → ACC-SINV-2026-00047,
+  grand_total 457875, outstanding_amount **457875**
+
+--- Lệnh chạy (harness trong repo) ---
+  python3 -m nlp_service.server &
+  node scripts/llm-router.mjs --config scripts/llm-router.e2e.json &   # 1 upstream gemini
+  E2E_TARGET=real DSH_HOME=/tmp/dsh-home-real17c DSH_TELEMETRY_MODE=DISABLED \\
+    node /tmp/dsh-run/node_modules/@deepseek-ai/dsh/lib/bin.js --profile headless \\
+    --patch mcp-erpnext/dsh-e2e.patch.yml "Khách làm tròn 2026-09-15-p1b-wf1-2 còn nợ bao nhiêu"
+
+--- OUTPUT THẬT (nguyên văn) ---
+  [copilot] ERPNext target: REAL -> prevail-pantyhose-overvalue.ngrok-free.dev
+  [mcp-erpnext] Registered 125 tools
+  [mcp-erpnext] Initialized — 125 tools
+  [mcp-erpnext] stdio mode ready
+  Khách hàng **Khách làm tròn 2026-09-15-p1b-wf1-2** hiện còn nợ **457.875đ** (1 hóa đơn chưa thanh toán).
+  === dsh exit: 0
+
+→ **SỐ TIỀN KHỚP CHÍNH XÁC ground truth (457.875đ)** — chuỗi verify được:
+  dsh → router → Gemini 3.6-flash → MCP tool copilot_ask → Vietnamese NLP
+  → ERPNext THẬT (qua ngrok) → câu trả lời tiếng Việt.
+
+--- Provider thật trong session (từ log router) ---
+  **7 lần `gemini-openai status=503`** ("This model is currently experiencing high
+  demand. Spikes in demand are usually temporary.") → dsh tự retry + router vẫn
+  THỰC SỰ thử lại từng lần (`attempts:["gemini-openai"]`, không có `attempts: []`)
+  → các turn thắng nhận **200** → **session hoàn thành dù 7 spike 503**.
+  So sánh trực tiếp: TRƯỚC fix cooldown (§C) chỉ 1 spike 503 đã giết cả session
+  (6 request bị từ chối `attempts: []`); SAU fix 7 spike mà vẫn xong.
+
+== L) ROOT CAUSE THỨ 2 CỦA CHUỖI TOOL: Gemini 3.x bắt buộc `thought_signature`
+Session §K (bản chạy trước khi sửa, cùng ngày) chết ở turn THỨ HAI với:
+  `dsh: CONTEXT_WINDOW_EXCEEDED: 400 status code (no body)`
+(audit: request 129KB KHÔNG tool message = 200; request 130KB CÓ tool result = 400)
+
+TÁI HIỆN RẺ (không cần session mới) — payload tối giản assistant.tool_calls +
+role:tool gửi thẳng provider → **HTTP 400, nguyên văn**:
+  "Function call is missing a thought_signature in functionCall parts. This is
+   required for tools to work correctly... function call `default_api:copilot_ask`,
+   position 2. Please refer to https://ai.google.dev/gemini-api/docs/thought-signatures"
+
+KIỂM CHỨNG (không đoán):
+  1. Gemini CÓ trả signature trong response stream — gọi thật với 1 tool, grep SSE:
+     `tool_calls[0].extra_content.google.thought_signature` (có, 1 lần).
+     → dsh (OpenAI-shaped) DROP field này → turn sau 400.
+  2. Thử đường tắt "đổi model" — TẤT CẢ đều chặn:
+     gemini-2.5-flash → 404 "no longer available to new users" ·
+     gemini-flash-lite-latest → 400 · gemini-3.1-flash-lite → 400 ·
+     gemini-3-flash-preview → 400 (cùng message thought_signature)
+     → không có model nào trên key này thoát được ⇒ phải xử ở tầng gateway.
+
+FIX (đúng chức năng của gateway — phase-05), trong `scripts/llm-router.mjs`:
+  · `ThoughtSignatureCache`: học signature từ response, key theo **tool_call id**
+    (deltas có thể tách: id 1 chunk, signature chunk khác → gộp theo index).
+  · `captureThoughtSignatures(stream)`: tee stream upstream (SSE + chế độ JSON),
+    có error listener riêng (đúng luật stream của router này).
+  · `injectThoughtSignatures(body)`: chèn
+    `extra_content.google.thought_signature` vào assistant.tool_calls khi id khớp,
+    KHÔNG ghi đè signature đã có, không sửa body không parse được.
+  · Bật theo upstream: `"geminiThoughtSignatures": true` (thêm vào cả 2 config);
+    `loadConfig` hard-error nếu field không phải boolean (bài học shape im lặng).
+  · Cache có trần (500 id, LRU) — không phình vô hạn.
+
+TEST: **17/17 pass · 590ms** (từ 13), gồm:
+  - cache học từ delta tách chunk rồi inject · idempotent (không ghi đè) · trần LRU
+  - body rác/không parse được giữ nguyên
+  - **integration thật**: mock upstream SSE trả tool_call kèm signature → request
+    thứ hai (client echo lại tool_call KHÔNG có extra_content) → assert upstream
+    NHẬN được `extra_content.google.thought_signature`.
+
+== M) BÀI HỌC MỚI TỪ ĐỢT NÀY (đã ghi vào skill)
+1. `!!js` ternary inline trong YAML bị parse thành MAP vì dấu ": " →
+   env thành `{"[object Object]": ""}` và dsh từ chối boot. Dùng block scalar
+   `>-` (đúng convention file này). **Bắt được bằng lần chạy 0-quota trước khi
+   tiêu quota** — nếu không validate trước thì cả session quota hỏng vì lỗi YAML.
+2. Gemini 3.x: MỌI function call replay cần thought_signature → gateway phải
+   carry field này (`tool_calls[].extra_content.google.thought_signature`).
+3. Đường tắt "đổi model" phải được KIỂM CHỨNG cho từng model, không suy luận
+   từ tên (2.5-flash 404 cho user mới, mọi bản 3.x đều 400).
+4. `{ set -a; source .env; }` là GROUP COMMAND (không phải subshell) → biến .env
+   dính vào CẢ shell session → test suite fail với `ASK_USER/ASK_PASSWORD make
+   no sense on a loopback bind` (trông như regression). Chạy hermetic phải strip
+   CẢ `ERPNEXT_*` VÀ `ASK_*` → 49/49.
+
+== N) REVIEW LẠI CODE VỪA VIẾT (2026-09-15, theo yêu cầu user)
+Phạm vi: chỉ đợt vừa viết — `scripts/llm-router.mjs` (thought_signature) +
+`scripts/test/llm-router.test.mjs` + 2 harness + docs. OCR không khả dụng trong
+env này (đã ghi ở checklist) → **review thủ công**: đọc nguyên văn diff + tìm lỗi
+phổ biến (null/undefined, validate input, secret, race, stream).
+
+FINDING THẬT (3 cái, đã sửa + test):
+1. **Rò state giữa các response** — `partial` (scratch theo index) không bao giờ
+   được xoá, mà stream index **reset về 0 ở MỖI response** → signature của
+   response trước có thể ghép với id của response sau → cache signature dưới
+   SAI tool call (và signature dùng nhầm call chính là thứ provider 400).
+   Fix: `beginResponse()` clear scratch, gọi ở đầu `captureThoughtSignatures`.
+2. **Kế thừa signature sai trong nội dung 1 message** — tool_calls thứ hai ở cùng
+   index mà không có signature sẽ **thừa hưởng** signature của call trước.
+   Fix: id khác (khi đã biết id) → reset scratch.
+   ⚠️ Fix lần đầu của tôi QUÁ TAY (reset cả khi signature tới TRƯỚC id của cùng
+   một call — thứ tự này có thật khi stream) → test cũ bắt được ngay, sửa lại
+   thành "chỉ reset khi id KHÁC id đã biết". Bài học: test cũ là lưới an toàn,
+   đừng xoá/ nới nó cho vừa code mới.
+3. **Export chết + nhánh không được test** — `captureThoughtSignatures` export mà
+   không test nào dùng; nhánh **non-streaming (JSON)** hoàn toàn chưa có test.
+   Fix: thêm 2 test trực tiếp (SSE tách mid-event — đúng hiện tượng buffer dòng
+   dở; và JSON body) + 1 test hồi quy cho finding 1&2.
+
+CẢI THIỆN THÊM (không phải bug): dò SSE theo **content-type của upstream** thay
+vì theo `stream` client yêu cầu (provider stream khác ý client → parse sai shape
+→ im lặng không học được signature); fallback về cờ request chỉ khi upstream
+không gửi content-type. `inject()` cố ý KHÔNG ghi đè signature client đã gửi
+(ghi rõ lý do trong comment để người sau không "tối ưu" thành ghi đè).
+
+KIỂM TRA KHÁC (đều sạch):
+- Impact: không code nào import `llm-router.mjs` (chỉ test) → phạm vi ảnh hưởng
+  chỉ là script bản thân + test của nó.
+- Export: cả 3 đều có dùng thật (prod + test), không còn export chết.
+- Secret scan (docs + code đợt này): CLEAN · ports rảnh.
+- `openspec validate flutter-chat-mvp` → **valid** (đã dọn tiêu đề task trùng số).
+
+TEST sau review: **router 19/19 pass · 661ms** (trước review 17/17).
+Lưu ý trung thực: **session E2E xanh (§K) chạy bằng code TRƯỚC đợt review này** —
+cơ chế signature không đổi, và đường đi thật (SSE + content-type) đã được test
+integration bao đúng; nhưng muốn chắc 100% thì cần 1 session sống nữa (chưa chạy
+theo đúng kỷ luật "1 session/ngày" của user).
+
+== I) CHƯA COMMIT (chờ user duyệt — vùng router/tiền)
+Sửa: scripts/llm-router.mjs (2 bug fix), scripts/test/llm-router.test.mjs (+3 test)
+Mới: mcp-erpnext/dsh-e2e.patch.yml, scripts/llm-router.e2e.json, result17.txt
+Đề xuất message:
+"fix: e2e round — router cooldown must not disable the only upstream (13/13 tests);
+ honest failure types; durable dsh/router E2E harness"

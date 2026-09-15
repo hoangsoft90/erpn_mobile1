@@ -24,6 +24,7 @@
       "model": "gemini-3.6-flash",
       "apiKeyEnv": "GEMINI_API_KEY",
       "stripFields": ["store"],
+      "geminiThoughtSignatures": true,
       "_note": "gemini-2.5-flash retired for new users (provider 404 2026-09-15 names gemini-3.6-flash as replacement)"
     }
   ]

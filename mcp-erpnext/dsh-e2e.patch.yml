@@ -1,0 +1,63 @@
+# E2E patch: dsh → copilot MCP → Vietnamese NLP → (mock) ERPNext, with dsh's LLM
+# going through the local llm-router (scripts/llm-router.mjs) instead of a
+# provider directly.
+#
+# Usage (from repo root — cwd matters, see the warning below):
+#   python3 -m nlp_service.server &                                   # :8787
+#   { set -a; source .env; set +a; } \
+#     node scripts/llm-router.mjs --config scripts/llm-router.e2e.json &
+#   DSH_HOME=/tmp/dsh-home-$(date +%s) DSH_TELEMETRY_MODE=DISABLED \
+#     node /tmp/dsh-run/node_modules/@deepseek-ai/dsh/lib/bin.js \
+#     --profile headless --patch mcp-erpnext/dsh-e2e.patch.yml "chị Lan còn nợ bao nhiêu"
+#
+# TARGET SELECTION — MOCK IS THE DEFAULT (safety: never touch real customer data
+# by accident), real ERPNext is opt-in per run:
+#
+#   (no E2E_TARGET)      → mock   (three empty strings → pickServerScript → mock)
+#   E2E_TARGET=real      → real   (.env values passed through; .env is loaded by
+#                                  dsh itself, see below)
+#
+# WHY THE MOCK BRANCH NEEDS A LITERAL EMPTY STRING: dsh itself runs
+# `process.loadEnvFile(<cwd>/.env)` at boot (dsh-app-boot), so a bare
+# `!!js process.env.ERPNEXT_URL || ''` resolves to the REAL value from this repo's
+# .env even when the launcher environment has it unset — an E2E that intends to
+# use the mock silently targets production ERPNext (verified by probe, result17).
+# A literal '' is the only value dsh cannot overwrite from .env.
+- insert:
+    - id: erpn-copilot-mcp
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: erpn_copilot
+        transport: stdio
+        command: node
+        args:
+          - !!js >-
+            process.getBuiltinModule('node:path').join(process.cwd(), 'mcp-erpnext', 'src', 'copilot-server.mjs')
+        cwd: !!js process.cwd()
+        env:
+          NLP_SERVICE_PORT: '8787'
+          # Block scalar (`>-`) is REQUIRED here: an inline `!!js` expression
+          # containing ": " is parsed by YAML as a nested mapping, not a string
+          # (result17: env became {"[object Object]": ""} and dsh refused to boot).
+          ERPNEXT_URL: !!js >-
+            process.env.E2E_TARGET === 'real' ? (process.env.ERPNEXT_URL || '') : ''
+          ERPNEXT_API_KEY: !!js >-
+            process.env.E2E_TARGET === 'real' ? (process.env.ERPNEXT_API_KEY || '') : ''
+          ERPNEXT_API_SECRET: !!js >-
+            process.env.E2E_TARGET === 'real' ? (process.env.ERPNEXT_API_SECRET || '') : ''
+# LLM: dsh's model traffic goes to the local router. Rows are addressed BY ID
+# (source of truth: @deepseek-ai/dsh-base/cordis.patch.yml) — settings.yaml has
+# no effect on adapter registration, and `models` must be a list of objects.
+- id: llm-pi-ai
+  config:
+    providers:
+      router:
+        apiKeyEnv: GEMINI_API_KEY
+        api: openai-completions
+        baseURL: http://127.0.0.1:8900/v1
+        models:
+          - id: gemini-3.6-flash
+- id: agent-default-model
+  config:
+    provider: router
+    model: gemini-3.6-flash
