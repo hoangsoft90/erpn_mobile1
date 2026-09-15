@@ -98,16 +98,17 @@ Python `src/vietnamese_nlp/`, stdlib thuần, chạy TRƯỚC LLM — cố đị
    Variables/Secret. **Còn lại là việc user:** ① dán 3 giá trị GitHub Settings (token
    chỉ-đọc) ② chọn đường endpoint — port 8788 bị firewall hosting chặn từ internet
    (Tailscale khuyến nghị / mở port / ngrok) ③ cài APK thiết bị thật
-2. **Mandatory Sign-off Phase 5** — ✅ ĐÃ SOẠN `SIGNOFF-phase5-pii.md` (4 phương án
-   scrubbing, bảng quyết định 0/4). 🛑 **Gate pháp lý CỐ Ý — ĐÓNG**: KHÔNG code
-   LLM Router/PII scrubbing cho tới khi user ký duyệt rõ ràng trên tài liệu này
+2. **Mandatory Sign-off Phase 5** — ✅ ĐÃ KÝ 2026-09-15 (bảng 4/4 điền theo quyết định:
+   KHÔNG scrub, KHÔNG 2-tier; free tier chấp nhận — `SIGNOFF-phase5-pii.md`). LLM Router
+   bản đơn giản đã code (`scripts/llm-router.mjs` + config JSON + audit JSONL, 7/7 test,
+   E2E smoke qua mock-llm — result14)
 
 ### Theo phase
 
 | Phase | Nội dung | Write? | Điều kiện tiên quyết |
 |---|---|---|---|
 | 4 | Voice input/STT (hybrid): 🎤 → STT → user xem lại/sửa text → Gửi | Không | ⚠️ **Chặn bởi audio thật 3 miền** (100–200 câu, chờ người thật thu) |
-| 5 | AI Gateway core: auth, PII scrub, LLM Router, audit | Không | 🛑 **Mandatory Sign-off ĐƯỢC KÝ trước khi code router** |
+| 5 | AI Gateway core: auth, PII scrub, LLM Router, audit | **ĐANG LÀM** — sign-off ĐÃ KÝ 2026-09-15 (không scrub, không 2-tier → phạm vi còn: router đơn giản + audit); LLM Router proxy đã code + 7/7 test (result14) | Còn: nối dsh → router, verify baseURL/key thật |
 | 6 | Entity resolution + Action Proposal card (xác nhận tiếng Việt + Risk Level) | Không | Exit criteria Phase 5 |
 | 7 | **`create_payment_entry` + idempotency** | **Có** | ⚠️ **Go/No-Go gate: Phase 1–6 exit criteria ĐỦ** — write đầu tiên chạm tiền |
 | 8 | Background jobs + push notification + TTS readback | Có | Phase 7 |

@@ -5,9 +5,9 @@
 
 ## Đang mở (chờ người thật / việc nhỏ tiếp theo)
 
-- [ ] **Chờ user dán 3 giá trị GitHub Settings** (token chỉ-đọc, PUT 404 — result11 §6): Variables `COPILOT_BASE_URL=http://35.194.130.120:8788` + `COPILOT_AUTH_USER` (=`ASK_USER` trong `.env`) + Secret `COPILOT_AUTH_PASSWORD` (=`ASK_PASSWORD` trong `.env`) → CI build APK cài được luôn
-- [ ] **Chờ user chọn + xử lý đường endpoint** (result11 §5): Tailscale login trên VPS (link trong `tailscale status`, khuyến nghị) / hosting mở port 8788 / ngrok từ VPS. Hiện port 8788 bị cloud firewall hosting chặn từ internet; service nội bộ đã verify 401→200→269.000đ
-- [ ] **Chờ user ký `SIGNOFF-phase5-pii.md`** — gate pháp lý Phase 5 ĐÓNG; KHÔNG code LLM Router/PII scrubbing cho tới khi có chữ ký
+- [ ] **Chờ user dán 3 giá trị GitHub Settings** (token chỉ-đọc, PUT 404 — result11 §6): Variables `COPILOT_BASE_URL=https://erpn8788.loca.lt` (tunnel HTTPS verify E2E thật — result13; hoặc IP:8788 nếu hosting mở port/Tailscale) + `COPILOT_AUTH_USER` (=`ASK_USER` trong `.env`) + Secret `COPILOT_AUTH_PASSWORD` (=`ASK_PASSWORD` trong `.env`) → CI build APK cài được luôn. ⚠️ tunnel chỉ sống khi `lt` đang chạy trên Mac; lâu dài cần endpoint ổn định (Tailscale/hosting mở port)
+- [ ] **Chờ user chọn đường endpoint LÂU DÀI** (result11 §5): Tailscale login trên VPS (khuyến nghị) / hosting mở port 8788 / tunnel giữ như hiện tại. Tạm thời tunnel `erpn8788.loca.lt` ĐÃ verify E2E thật (result13) — dùng được ngay cho APK test khi `lt` đang chạy
+- [x] **Sign-off Phase 5 ĐÃ KÝ (2026-09-15, Hoàng — xác nhận trực tiếp: không scrub, không 2-tier)** — gate MỞ; LLM Router bản đơn giản đã code + test (result14): proxy 127.0.0.1:8900, fallback chain JSON, audit JSONL
 - [ ] **Chờ user rotate key ERPNext** (Hoàng làm trực tiếp trên server; key cũ vẫn hợp lệ — result9 §1)
 - [ ] **Chờ người thật thu audio 150 câu** — kịch bản sẵn: `docs/audio-collection-script.md` (blocker Phase 4)
 - [ ] Sau khi APK chạy thật OK: sync + archive OpenSpec change `flutter-chat-mvp` (task 4.3), merge branch về master

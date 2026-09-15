@@ -72,19 +72,21 @@ Trạng thái roadmap chi tiết nằm ở `next.md` — file này KHÔNG nhân 
 ### Đang làm
 - [x] GH Actions run #2 ✅ **SUCCESS** (`result10.txt`): [run 34826575147](https://github.com/hoangsoft90/erpn_mobile1/actions/runs/34826575147) — build_runner/Analyze/Test/Build APK đều xanh; artifact `erpn-chat-debug-apk` (80MB zip) đã tải về VPS `/home/kythuat_hoangweb/erpn-apk/app-debug.apk`
 - [x] **APK nối được VPS — endpoint security** ✅ (`result11.txt`, commit `c3d74c3`): http-ask bind policy (non-loopback BẮT BUỘC basic auth, public cần ASK_ALLOW_PUBLIC=1 — server tự từ chối cấu hình unsafe) + Flutter client gửi auth qua dart-define + CI build APK từ repo Variables/Secret. Verify thật: 401 không auth → 200 có auth → trả lời 269.000đ qua ERPNext thật. ⚠️ **Port 8788 bị cloud firewall hosting chặn từ internet** (read_url timeout) — cần user mở port HOẶC dùng Tailscale (đã cài, chờ login)
-- [ ] **Tài liệu Mandatory Sign-off Phase 5 (PII/Nghị định 13/2023)** — ✅ ĐÃ SOẠN: `SIGNOFF-phase5-pii.md` (root) — 4 phương án scrubbing khảo sát, bảng quyết định 0/4, **gate ĐÓNG**. 🛑 KHÔNG code LLM Router/PII scrubbing cho tới khi user KÝ file này (gate pháp lý cố ý, không phải gate kỹ thuật)
-- [ ] **Chờ user dán 3 giá trị vào GitHub Settings** (token hiện tại chỉ-đọc, PUT 404): Variables `COPILOT_BASE_URL=http://35.194.130.120:8788` + `COPILOT_AUTH_USER=copilot` (user lấy từ `.env` ASK_USER), Secret `COPILOT_AUTH_PASSWORD` (= ASK_PASSWORD trong `.env`) → CI build APK cài được luôn
+- [x] **Mandatory Sign-off Phase 5 ĐÃ KÝ (2026-09-15)**: `SIGNOFF-phase5-pii.md` — 4/4 quyết định đã điền. Hoàng xác nhận qua trao đổi trực tiếp: **KHÔNG PII scrubbing, KHÔNG LLM Router 2-tier** — gửi thẳng tên khách/số tiền cho LLM, free tier được dùng (rủi ro pháp lý chủ dự án tự chấp nhận, đã ghi minh bạch trong sign-off). **Gate MỞ** → phạm vi Phase 5 còn: LLM Router đơn giản + audit log (bỏ mục scrub)
+- [x] **Phase 5 khởi động — LLM Router bản đơn giản** ✅ (result14): `scripts/llm-router.mjs` (proxy OpenAI-compatible 127.0.0.1:8900, fallback chain config-driven JSON, cooldown upstream lỗi 429/5xx/timeout) + `scripts/llm-router.config.json` (mock → zen → gemini-openai, 2 upstream thật còn PENDING verify key/baseURL) + audit JSONL `llm-router-audit/` (không chép nội dung câu hỏi). **Test: 7/7 router + 49/49 mcp-erpnext; E2E smoke thật qua mock-llm.** Còn lại Phase 5: nối dsh → router, verify rate limit/baseURL thật khi có key
+- [x] **Tunnel localtunnel verify E2E thật (2026-09-14)** ✅: user chạy `lt -s erpn8788 --port 8788` trên **máy Mac** (forward qua SSH tới VPS) → từ VPS test qua tunnel: `/health` 3/3 = 200 · `/ask` HTTP 200 · **"Khách smoke 2026-09-13-p1done còn nợ 269.000đ (3 hóa đơn chưa trả)" khớp ground-truth result9**. Lưu ý: curl phải kèm header `bypass-tunnel-reminder: 1` (không có → 502 Bad Gateway từ tunnel server, dễ nhầm là service chết). Quy trình chuẩn hóa ở `mcp-erpnext/LOCAL-TEST.md` + npm script `start:ask`. ⚠️ URL tunnel public KHÔNG auth (http-ask bind loopback) — chỉ bật khi test, Ctrl-C ngay khi xong. COPILOT_BASE_URL cho APK có thể trỏ tunnel này (HTTPS qua firewall)
+- [ ] **Chờ user dán 3 giá trị vào GitHub Settings** (token hiện tại chỉ-đọc, PUT 404): Variables `COPILOT_BASE_URL=https://erpn8788.loca.lt` (tunnel HTTPS đã verify E2E thật — result13; hoặc IP:8788 nếu hosting mở port/Tailscale) + `COPILOT_AUTH_USER=copilot` (user lấy từ `.env` ASK_USER), Secret `COPILOT_AUTH_PASSWORD` (= ASK_PASSWORD trong `.env`) → CI build APK cài được luôn. ⚠️ Tunnel chỉ sống khi `lt` đang chạy trên máy Mac của user — endpoint lâu dài cần Tailscale/hosting mở port
 - [x] **Kịch bản thu âm** ✅ `docs/audio-collection-script.md`: 150 câu 3 miền có ground truth (A-G), chỉ tài liệu
 
 ### Bị chặn — chờ người thật (không phải việc agent)
 - [ ] **Rotate key ERPNext** — user (Hoàng) làm trực tiếp trên server; trạng thái 2026-09-14:
       key cũ vẫn hợp lệ (HTTP 200), rotation chưa hiệu lực (`result9.txt` §1)
 - [ ] **Thu 100–200 câu audio thật 3 miền** — điều kiện còn thiếu của Phase 1, chặn Phase 4 (STT)
-- [ ] **Cài APK lên thiết bị thật tại điểm bán + test** — cần người thật. Trước hết xử lý 1 trong 3 đường endpoint (`result11.txt` §5): Tailscale login (khuyến nghị) / hosting mở port 8788 / ngrok từ VPS. Sau đó user dán 3 giá trị GitHub Settings → CI build APK cài được
+- [ ] **Cài APK lên thiết bị thật tại điểm bán + test** — cần người thật. Endpoint đã có đường sống: tunnel `erpn8788.loca.lt` verify E2E (result13) — dùng ngay khi `lt` chạy; lâu dài chọn 1 trong 3 (result11 §5): Tailscale login (khuyến nghị) / hosting mở port 8788 / tunnel giữ nguyên. Sau đó user dán 3 giá trị GitHub Settings → CI build APK cài được
 - [ ] **LLM gateway thật (OpenAI-compatible)** — chờ user cấp; chỉ sửa `/tmp/dsh-home/settings.yaml`
 
 ### Các phase kế tiếp (chi tiết ở `next.md`)
-- Phase 4 (STT) — chặn bởi audio · Phase 5 (Gateway) — chặn bởi Sign-off ký duyệt ·
+- Phase 4 (STT) — chặn bởi audio · Phase 5 (Gateway) — ĐÃ MỞ (sign-off 2026-09-15), router bản đơn giản đã code (result14) ·
   Phase 6 (Entity resolution + Proposal card) · Phase 7 (**write đầu tiên** — Go/No-Go gate) ·
   Phase 8–15 (jobs/TTS, proposal state machine, multi-user, write mở rộng, multi-tenant,
   hardening, store, monetization-ads giữa 13 và 14)
@@ -114,6 +116,6 @@ Trạng thái roadmap chi tiết nằm ở `next.md` — file này KHÔNG nhân 
 
 - Đừng báo "xong" bằng lời — mọi claim cần lệnh + output thật (`erpn-verify-first` skill).
 - **Vùng tiền/số/phân quyền: AI KHÔNG tự ký duyệt, KHÔNG tự commit** — chờ user review.
-- **Gate pháp lý Phase 5 là gate ký duyệt của user**, không tự chuyển sang code.
+- **Gate pháp lý Phase 5: ĐÃ KÝ 2026-09-15 (không scrub)** — quyết định lưu ở `SIGNOFF-phase5-pii.md`; các gate ký duyệt TƯƠNG TỰ về sau vẫn chờ user.
 - Tool đang hỏng trong env này: AgentMemory (down) · MCP cocoindex/codebase-memory (không
   expose) · OCR (không chạy được) · Simplenote (không có) → Code Review thủ công, không tự cài.

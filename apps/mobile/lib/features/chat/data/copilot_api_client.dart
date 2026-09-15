@@ -72,6 +72,17 @@ class CopilotApiClient {
       if (data is Map<String, dynamic>) {
         final serverError = data['error'];
         if (serverError is String && serverError.isNotEmpty) {
+          // 401 is actionable, not just an error string: it means the APK was
+          // built without COPILOT_AUTH_* dart-defines while the server requires
+          // auth. Say what to DO, in Vietnamese (server's "unauthorized" alone
+          // is not actionable for the shop owner).
+          if (err.response?.statusCode == 401) {
+            throw const CopilotServerException(
+              'Máy chủ yêu cầu xác thực nhưng app không có thông tin đăng nhập. '
+              'APK cần build lại với --dart-define=COPILOT_AUTH_USER và '
+              'COPILOT_AUTH_PASSWORD trỏ đúng máy chủ.',
+            );
+          }
           throw CopilotServerException(serverError);
         }
       }

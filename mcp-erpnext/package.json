@@ -12,6 +12,7 @@
   },
   "scripts": {
     "start": "node src/index.mjs",
+    "start:ask": "node src/http-ask.mjs --port 8788",
     "test": "node --test"
   }
 }

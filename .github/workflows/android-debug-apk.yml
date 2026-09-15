@@ -64,12 +64,20 @@ jobs:
       #   vars:   COPILOT_AUTH_USER      basic-auth user for /ask
       #   secret: COPILOT_AUTH_PASSWORD  basic-auth password (>=8 chars)
       # Empty vars fall back to the in-app defaults (loopback build).
+      # NOTE (review 2026-09-14): values are passed via env + quoted "${VAR}"
+      # interpolation, NOT direct ${{ }} into the command text — a value
+      # containing spaces/quotes/$ would otherwise break or inject into the
+      # flutter command line.
       - name: Build debug APK (dart-define endpoint + auth)
-        run: >-
-          flutter build apk --debug
-          --dart-define=COPILOT_BASE_URL=${{ vars.COPILOT_BASE_URL }}
-          --dart-define=COPILOT_AUTH_USER=${{ vars.COPILOT_AUTH_USER }}
-          --dart-define=COPILOT_AUTH_PASSWORD=${{ secrets.COPILOT_AUTH_PASSWORD }}
+        env:
+          COPILOT_BASE_URL: ${{ vars.COPILOT_BASE_URL }}
+          COPILOT_AUTH_USER: ${{ vars.COPILOT_AUTH_USER }}
+          COPILOT_AUTH_PASSWORD: ${{ secrets.COPILOT_AUTH_PASSWORD }}
+        run: |
+          flutter build apk --debug \
+            --dart-define=COPILOT_BASE_URL="${COPILOT_BASE_URL}" \
+            --dart-define=COPILOT_AUTH_USER="${COPILOT_AUTH_USER}" \
+            --dart-define=COPILOT_AUTH_PASSWORD="${COPILOT_AUTH_PASSWORD}"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4

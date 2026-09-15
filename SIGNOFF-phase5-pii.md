@@ -1,11 +1,12 @@
 # SIGN-OFF — Phase 5: PII & Nghị định 13/2023 (Mandatory Sign-off, gate pháp lý)
 
-> **Trạng thái: CHỜ KÝ DUYỆT.** Tài liệu này là điều kiện giải phóng gate C.1 của
-> `phase-05-ai-gateway-core.md`. **Không code LLM Router / PII scrubbing cho tới khi
-> bảng ở mục 6 được điền đủ và có chữ ký.** Đây là gate pháp lý CỐ Ý, không phải gate kỹ thuật.
+> **Trạng thái: ĐÃ KÝ DUYỆT — GATE MỞ (2026-09-15).** Bảng quyết định ở mục 6 đã điền đủ 4 dòng
+> theo xác nhận của chủ dự án: **"Hoàng xác nhận qua trao đổi trực tiếp, không scrub"** —
+> KHÔNG PII scrubbing, KHÔNG LLM Router 2-tier theo dữ liệu nhạy cảm; gửi thẳng tên khách/số
+> tiền cho LLM. Được phép code LLM Router (Gateway Phase 5, bản đơn giản, không lớp scrub/mapping).
 >
-> Người soạn: agent (Buffy) · Ngày soạn: 2026-09-14 · Người review/ký: chủ dự án (user)
-> Sau khi ký: commit file này để lưu vết — dấu vết pháp lý cần nằm trong git history.
+> Người soạn: agent (Buffy) · Ngày soạn: 2026-09-14 · Người ký: Hoàng (chủ dự án) · Ngày ký: 2026-09-15
+> Sau khi ký: agent commit file này để lưu vết pháp lý — gộp vào đợt commit đang chờ duyệt.
 
 ---
 
@@ -66,6 +67,12 @@ C là mở rộng khi cần. Nhưng quyết định thuộc về người ký.
 chỉ điền quyết định còn thiếu, không được phá các nguyên tắc sau:
 
 1. **Free tier Gemini/OpenCode KHÔNG nhận PII thật** — bắt buộc scrub hoặc route trước production.
+
+   > **[2026-09-15] Ràng buộc 1 bị SUPERSEDED bởi quyết định của người ký** (bảng mục 6):
+   > chủ dự án chọn gửi thẳng tên khách/số tiền cho LLM, không scrub, không route theo PII.
+   > Rủi ro được ghi nhận minh bạch: PII sẽ rời hạ tầng tự chủ (VPS/ERPNext) tới endpoint LLM
+   > (có thể đặt ngoài VN, free tier có thể dùng dữ liệu để train — xem mục 1). Trách nhiệm
+   > pháp lý thuộc chủ dự án; agent chỉ ghi nhận lại quyết định.
 2. Mobile client **không bao giờ giữ** ERPNext key/secret hay LLM key (verify bằng inspect network traffic).
 3. PII scrubbing phải có **test case đo được**: gửi câu chứa tên + SĐT + số tiền → xác nhận
    LLM chỉ nhận placeholder **và** xác nhận không request nào chứa PII thật chạm free-tier endpoint.
@@ -74,6 +81,10 @@ chỉ điền quyết định còn thiếu, không được phá các nguyên t�
 ---
 
 ## 5. Việc Phase 5 SẼ làm sau khi gate mở (để người ký biết mình đang duyệt cái gì)
+
+> **[2026-09-15] Điều chỉnh phạm vi theo chữ ký:** mục 1 (scrub layer + mapping store) và
+> mục 2 (test placeholder/network-level) **BỎ — không code**. Phase 5 chỉ còn: LLM Router
+> bản đơn giản (mục 3, không 2-tier theo PII) + audit log (mục 4).
 
 1. PII scrub layer (dsh plugin, chạy trước gọi LLM) + mapping store — **code thật, có test**
 2. Test case bắt buộc mục 4.3 (placeholder verifiable + network-level check không PII tới free tier)
@@ -88,14 +99,14 @@ chỉ điền quyết định còn thiếu, không được phá các nguyên t�
 
 ## 6. BẢNG QUYẾT ĐỊNH — điền đủ 4 dòng + chữ ký mới được mở gate
 
-| # | Câu hỏi chặn | Trả lời (điền) | Người chịu trách nhiệm | Ngày |
+| # | Câu hỏi chặn | Trả lời | Người chịu trách nhiệm | Ngày |
 |---|---|---|---|---|
-| 1 | **Chiến lược PII scrubbing:** placeholder scrub TRƯỚC khi gọi LLM, hay chỉ route paid/zero-retention/self-host khi câu có PII, hay cả hai (C)? *(tham khảo mục 3)* | | | |
-| 2 | **Có được dùng free tier Gemini/OpenCode cho dữ liệu chứa tên khách/số tiền KHÔNG?** Nếu không → đường thay thế là gì? | | | |
-| 3 | Nếu PII **bắt buộc** phải ra khỏi hạ tầng (route paid): đã có đánh giá tác động chuyển dữ liệu ra nước ngoài chưa? (khoản 2 Điều 13 NĐ13) | | | |
-| 4 | Mapping placeholder → tên thật lưu **ở đâu, ai được đọc, xoá khi nào**? (đề xuất: dsh plugin state trên VPS, chỉ operator, TTL xoá sau session) | | | |
+| 1 | **Chiến lược PII scrubbing:** placeholder scrub TRƯỚC khi gọi LLM, hay chỉ route paid/zero-retention/self-host khi câu có PII, hay cả hai (C)? *(tham khảo mục 3)* | **KHÔNG scrub** — gửi thẳng tên khách/số tiền cho LLM; không placeholder, không route theo PII | Hoàng | 2026-09-15 |
+| 2 | **Có được dùng free tier Gemini/OpenCode cho dữ liệu chứa tên khách/số tiền KHÔNG?** Nếu không → đường thay thế là gì? | **CÓ** — chấp nhận gửi dữ liệu chứa PII qua free tier; không cần đường thay thế | Hoàng | 2026-09-15 |
+| 3 | Nếu PII **bắt buộc** phải ra khỏi hạ tầng (route paid): đã có đánh giá tác động chuyển dữ liệu ra nước ngoài chưa? (khoản 2 Điều 13 NĐ13) | **Chưa làm DPIA** — chủ dự án tự chấp nhận rủi ro pháp lý, quyết định gửi thẳng; agent không tự làm DPIA thay | Hoàng | 2026-09-15 |
+| 4 | Mapping placeholder → tên thật lưu **ở đâu, ai được đọc, xoá khi nào**? (đề xuất: dsh plugin state trên VPS, chỉ operator, TTL xoá sau session) | **KHÔNG áp dụng** — không dùng placeholder/mapping theo quyết định dòng 1 | Hoàng | 2026-09-15 |
 
-**Người ký duyệt gate:** ____________________  Ngày ký: __________
+**Người ký duyệt gate:** Hoàng (chủ dự án) — xác nhận qua trao đổi trực tiếp, không scrub · Ngày ký: 2026-09-15
 
 > Sau khi ký: agent commit file này (`docs: phase 5 mandatory sign-off signed`) và MỚI được
 > bắt đầu mục C (LLM Router) + mục B (PII scrubbing) của phase-05. Thiếu 1 trong 2
@@ -108,3 +119,7 @@ chỉ điền quyết định còn thiếu, không được phá các nguyên t�
 - [2026-09-14] Tài liệu soạn xong, gửi user review. Gate: **ĐÓNG**.
 - Bảng mục 6: 0/4 dòng đã điền. Chưa có chữ ký.
 - Việc đang làm song song KHÔNG thuộc gate: CI APK (run #2), docs — an toàn vì không đụng LLM Router/PII.
+- **[2026-09-15] Hoàng ký duyệt qua trao đổi trực tiếp: KHÔNG PII scrubbing, KHÔNG LLM Router
+  2-tier theo dữ liệu nhạy cảm — gửi thẳng tên/số tiền cho LLM. Gate: **MỞ** — được code LLM
+  Router (Gateway Phase 5, bản đơn giản: fallback chain config-driven, không lớp scrub/mapping).**
+  Bảng mục 6: 4/4 đã điền. Phạm vi Phase 5 điều chỉnh theo mục 5.

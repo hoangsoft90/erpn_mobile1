@@ -54,3 +54,6 @@ __pycache__/
 venv/
 *.egg-info/
 .pytest_cache/
+
+# LLM Router runtime audit (Phase 5, result14) — runtime artifacts, not source
+llm-router-audit/

@@ -29,7 +29,7 @@
  */
 
 import http from "node:http";
-import { timingSafeEqual } from "node:crypto";
+import { timingSafeEqual, createHash } from "node:crypto";
 import { answerQuestion } from "./copilot-server.mjs";
 
 const MAX_BODY = 1_000_000; // one utterance is ~200 chars; 1MB is generous
@@ -69,13 +69,18 @@ export function resolveBindPolicy({ host, env = process.env }) {
     /^10\./.test(host) ||
     /^192\.168\./.test(host) ||
     /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
-    /^100\./.test(host); // Tailscale CGNAT range 100.64.0.0/10
+    /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(host); // Tailscale CGNAT 100.64.0.0/10 ONLY
+  // (100.0–100.63 and 100.128+ are PUBLIC address space — must not count as private)
   if (!isPrivate && env.ASK_ALLOW_PUBLIC !== "1") {
     throw new Error(
       `refusing to bind public interface ${host}: pass ASK_ALLOW_PUBLIC=1 only if you understand the exposure (prefer a VPN/Tailscale IP)`,
     );
   }
-  return { loopback: false, user: String(user), password: String(password) };
+  return { loopback: false, public: !isPrivate, user: String(user), password: String(password) };
+}
+
+function sha256(buf) {
+  return createHash("sha256").update(buf).digest();
 }
 
 function basicAuthOk(req, policy) {
@@ -90,13 +95,14 @@ function basicAuthOk(req, policy) {
   }
   const idx = decoded.indexOf(":");
   if (idx < 0) return false;
-  const user = Buffer.from(decoded.slice(0, idx));
-  const pass = Buffer.from(decoded.slice(idx + 1));
-  const eu = Buffer.from(policy.user);
-  const ep = Buffer.from(policy.password);
-  const okUser = user.length === eu.length && timingSafeEqual(user, eu);
-  const okPass = pass.length === ep.length && timingSafeEqual(pass, ep);
-  return okUser && okPass;
+  // Hash both sides to a fixed 32-byte digest before comparing: no length
+  // equality gate (which leaks credential length via timing), no
+  // timingSafeEqual length-mismatch exception risk.
+  const givenUser = sha256(Buffer.from(decoded.slice(0, idx)));
+  const givenPass = sha256(Buffer.from(decoded.slice(idx + 1)));
+  const wantUser = sha256(Buffer.from(policy.user));
+  const wantPass = sha256(Buffer.from(policy.password));
+  return timingSafeEqual(givenUser, wantUser) && timingSafeEqual(givenPass, wantPass);
 }
 
 function sendJson(res, status, payload) {
@@ -197,6 +203,13 @@ export async function main(argv = process.argv.slice(2)) {
   process.stdout.write(
     JSON.stringify({ ready: true, port: server.address().port, host, auth: !policy.loopback }) + "\n",
   );
+  if (policy.public) {
+    process.stderr.write(
+      "[http-ask] WARNING: bound to a PUBLIC interface without TLS — credentials and " +
+        "answers (customer names, debt amounts) travel in plaintext. Prefer a " +
+        "Tailscale/VPN bind; Phase 5 gateway will own real transport security.\n",
+    );
+  }
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

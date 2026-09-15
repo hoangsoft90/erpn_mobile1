@@ -1,0 +1,29 @@
+{
+  "port": 8900,
+  "host": "127.0.0.1",
+  "timeoutMs": 60000,
+  "cooldownMs": 30000,
+  "upstreams": [
+    {
+      "name": "mock",
+      "baseUrl": "http://127.0.0.1:8899/v1",
+      "model": "mock-copilot-1",
+      "timeoutMs": 10000,
+      "cooldownMs": 5000
+    },
+    {
+      "name": "zen",
+      "baseUrl": "https://api.opencode.ai/v1",
+      "model": "big-pickle",
+      "apiKeyEnv": "ZEN_API_KEY",
+      "_note": "PENDING: verify real base URL + model id from opencode.ai/docs/zen at build time (phase-05 §C) and set ZEN_API_KEY before use"
+    },
+    {
+      "name": "gemini-openai",
+      "baseUrl": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "model": "gemini-2.0-flash",
+      "apiKeyEnv": "GEMINI_API_KEY",
+      "_note": "PENDING: verify current model id + OpenAI-compat surface at build time; free tier per SIGNOFF 2026-09-15 is allowed (no scrub)"
+    }
+  ]
+}

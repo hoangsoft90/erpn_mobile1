@@ -58,6 +58,18 @@ test("policy: private interfaces (RFC1918 + Tailscale CGNAT) bind with creds", (
   }
 });
 
+test("policy: Tailscale CGNAT boundary — 100.64.0.0/10 is private, rest of 100/8 is PUBLIC", () => {
+  // Private: 100.64.0.0 – 100.127.255.255
+  for (const host of ["100.64.0.1", "100.100.0.1", "100.127.255.254"]) {
+    const p = resolveBindPolicy({ host, env: ENV });
+    assert.equal(p.public, false, host);
+  }
+  // Public (regression for review 2026-09-14: old code treated ALL of 100/8 as private):
+  for (const host of ["100.0.1.1", "100.63.255.254", "100.128.0.1", "100.200.1.1"]) {
+    assert.throws(() => resolveBindPolicy({ host, env: ENV }), /refusing to bind public/, host);
+  }
+});
+
 test("policy: public interface refused unless ASK_ALLOW_PUBLIC=1", () => {
   assert.throws(
     () => resolveBindPolicy({ host: "35.194.130.120", env: ENV }),
