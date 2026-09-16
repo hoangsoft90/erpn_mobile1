@@ -222,3 +222,43 @@ test("copilot E2E: unknown customer is reported, no invented IDs", async () => {
     nlp.child.kill();
   }
 });
+
+// ---- Phase 6: every routed answer carries a v1 Action Proposal.
+
+test("copilot E2E: receivable answer carries a READ-level erpn.proposal/v1", async () => {
+  const nlp = await startNlpService();
+  const copilot = startCopilot(nlp.port);
+  try {
+    await copilot.request("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } });
+    const out = await copilot.call("chị Lan còn nợ bao nhiêu");
+    const p = out.proposal;
+    assert.ok(p, "proposal present on the customer route");
+    assert.equal(p.schema, "erpn.proposal/v1");
+    assert.equal(p.action, "read_balance");
+    assert.equal(p.risk, "READ");
+    assert.equal(p.need_confirm, false);
+    assert.equal(p.entity.id, "CUST-00001");
+    assert.equal(p.entity.name, "Nguyễn Thị Lan");
+    assert.equal(p.params.outstanding_vnd, 2_500_000);
+    assert.ok(typeof p.summary === "string" && p.summary.includes("Nguyễn Thị Lan"), p.summary);
+  } finally {
+    await copilot.close();
+    nlp.child.kill();
+  }
+});
+
+test("copilot E2E: no-route and not-found answers carry proposal: null (honest absence)", async () => {
+  const nlp = await startNlpService();
+  const copilot = startCopilot(nlp.port);
+  try {
+    await copilot.request("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } });
+    const unroutable = await copilot.call("xin chào");
+    assert.equal(unroutable.proposal, undefined); // early return, no proposal key
+
+    const unknown = await copilot.call("chị Hằng còn nợ bao nhiêu");
+    assert.equal(unknown.proposal, null); // routed but nothing to propose about
+  } finally {
+    await copilot.close();
+    nlp.child.kill();
+  }
+});

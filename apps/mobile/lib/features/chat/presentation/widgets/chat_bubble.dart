@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../../../app/theme/app_theme.dart';
 import '../../data/chat_models.dart';
+import 'proposal_card.dart';
 
 /// One chat turn rendered as a PAIR of bubbles: the user's question (right)
 /// and the copilot's response (left). Response shows the answer, or the
@@ -97,6 +98,8 @@ class _CopilotBubble extends StatelessWidget {
                 ),
               ),
             ],
+            // Phase 6: proposal summary card below the answer (display-only).
+            if (turn.proposal != null) ProposalCard(proposal: turn.proposal!),
           ],
         ),
       ),

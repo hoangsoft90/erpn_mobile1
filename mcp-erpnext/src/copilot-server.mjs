@@ -21,6 +21,7 @@
 import { createMcpClient, MOCK_SERVER } from "./client.mjs";
 import { routeIntent } from "./router.mjs";
 import { realServerScript } from "./index.mjs";
+import { buildProposal, readProposal } from "./action-proposal.mjs";
 
 /**
  * ERPNext target selection (user decision 2026-09-14: "khi tôi cung cấp
@@ -130,13 +131,19 @@ export async function resolveCustomer(skills, cleanedText) {
   const customers = list.data?.data ?? [];
   const cands = nameCandidates(cleanedText);
   let fallback = null;
+  // Phase 6: a ONE-word fragment matching SEVERAL customers is the spec's
+  // "≥2 candidate gần nhau" case — the answer is ASK, not pick and not a bare
+  // "not found". Track it so the caller can tell the user what was ambiguous
+  // (result9 taught us never to ANSWER for such a fragment; this makes the
+  // refusal explicit instead of silently indistinguishable from a miss).
+  let multiHitNoPick = null; // { fragment, candidates: [customer_name...] }
   for (const cand of cands) {
     const hits = customers.filter(
       (c) =>
         c.customer_name?.toLowerCase() === cand.toLowerCase() ||
         c.name?.toLowerCase() === cand.toLowerCase(),
     );
-    if (hits.length === 1) return { customer: hits[0], ambiguous: false };
+    if (hits.length === 1) return { customer: hits[0], ambiguous: false, candidates: [] };
     if (hits.length > 1 && !fallback) fallback = hits[0];
   }
   for (const cand of cands) {
@@ -145,14 +152,19 @@ export async function resolveCustomer(skills, cleanedText) {
         c.customer_name?.toLowerCase().includes(cand.toLowerCase()) ||
         c.name?.toLowerCase().includes(cand.toLowerCase()),
     );
-    if (hits.length === 1) return { customer: hits[0], ambiguous: false };
-    // result9 (b07): a ONE-word fragment like "khách" matches 19 customers —
-    // picking the first of those is answering for an arbitrary customer.
-    // The ambiguous fallback only accepts fragments of ≥ 2 words; otherwise
-    // stay null and ask.
-    if (hits.length > 1 && !fallback && cand.includes(" ")) fallback = hits[0];
+    if (hits.length === 1) return { customer: hits[0], ambiguous: false, candidates: [] };
+    if (hits.length > 1) {
+      if (!fallback && cand.includes(" ")) fallback = hits[0];
+      if (!multiHitNoPick && !cand.includes(" ")) {
+        multiHitNoPick = { fragment: cand, candidates: hits.map((h) => h.customer_name ?? h.name) };
+      }
+    }
   }
-  return fallback ? { customer: fallback, ambiguous: true } : { customer: null, ambiguous: false };
+  if (fallback) return { customer: fallback, ambiguous: true, candidates: [] };
+  if (multiHitNoPick) {
+    return { customer: null, ambiguous: true, candidates: multiHitNoPick.candidates };
+  }
+  return { customer: null, ambiguous: false, candidates: [] };
 }
 
 function reply(id, result) {
@@ -180,7 +192,6 @@ export async function answerQuestion(rawText) {
         reason: "no skill route matched — Phase 2 router covers customer/sales/payment/inventory only",
       };
     }
-
     const skills = route.factory(mcp, knownIds);
 
     // Inventory needs no customer. When the question names an item (e.g.
@@ -231,29 +242,51 @@ export async function answerQuestion(rawText) {
       }
       const lines = rows.map((r) => `${r.item_code}: ${r.actual_qty} (kho ${r.warehouse})`);
       const answer = note ? [...lines, note] : lines;
+      // Phase 6: informational proposal for the inventory read (entity = the
+      // named item when exactly one matched, else none).
+      const itemEntity =
+        named.length === 1
+          ? { kind: "item", id: named[0].item_code ?? named[0].name, name: named[0].item_name ?? named[0].item_code }
+          : { kind: "item", id: null, name: null };
+      const proposal = readProposal({
+        action: "read_stock_balance",
+        entity: itemEntity,
+        params: rows.length > 0 ? { rows: rows.length, warehouses: [...new Set(rows.map((r) => r.warehouse))] } : {},
+        summary: named.length === 1 ? `Xem tồn kho: ${itemEntity.name}` : "Xem tồn kho",
+      });
       return {
         question: rawText,
         normalized: nlp,
         routed: { group: route.group, matched: route.matched },
         answer,
         rows,
+        proposal,
       };
     }
 
     // Customer-bound intents: resolve the name first — IDs only ever come from
     // a tool result (the guard refuses invented ones).
-    const { customer, ambiguous } = await resolveCustomer(skills, nlp.text);
+    const { customer, ambiguous, candidates } = await resolveCustomer(skills, nlp.text);
     if (!customer) {
       return {
         question: rawText,
         normalized: nlp,
         routed: { group: route.group, matched: route.matched },
         answer: null,
-        reason: `không tìm thấy khách hàng trong "${nlp.text}" (fuzzy matching đầy đủ là Phase 6)`,
+        // Phase 6 distinction (spec: "≥2 candidate gần nhau: hỏi lại user"):
+        // ambiguous ⇒ say WHICH names collided, never a bare "not found".
+        reason: ambiguous
+          ? `tên khách trong "${nlp.text}" khớp nhiều kết quả (${(candidates ?? []).slice(0, 5).join(", ")}) — cần nói rõ tên đầy đủ`
+          : `không tìm thấy khách hàng trong "${nlp.text}" (entity resolution mở rộng là Phase 6.5)`,
+        proposal: null,
+        ambiguous,
+        candidates: candidates ?? [],
       };
     }
 
-    const ambNote = ambiguous ? " (⚠️ tên khách trùng nhiều kết quả — đã lấy kết quả đầu tiên, entity resolution đúng là Phase 6)" : "";
+    const ambNote = ambiguous
+      ? " (⚠️ tên khách trùng nhiều kết quả — đã lấy kết quả đầu tiên, entity resolution mở rộng là Phase 6.5)"
+      : "";
 
     if (route.group === "payment") {
       const pays = await skills.listPaymentEntries(customer.name, knownIds);
@@ -267,7 +300,18 @@ export async function answerQuestion(rawText) {
         rows.length > 0
           ? `${customer.customer_name} đã có ${rows.length} phiếu thu, tổng ${formatVnd(total)}đ (mới nhất: ${rows[0].id} ngày ${rows[0].date}). Ghi nhận phiếu thu mới là Phase 7 — Phase 2 chỉ đọc.${ambNote}`
           : `${customer.customer_name} chưa có phiếu thu nào trong hệ thống. Ghi nhận phiếu thu mới là Phase 7 — Phase 2 chỉ đọc.${ambNote}`;
-      return { question: rawText, normalized: nlp, routed: { group: route.group, matched: route.matched }, customer: { id: customer.name, name: customer.customer_name }, rows, answer };
+      // Phase 6: the read itself is READ-level; the FUTURE write this question
+      // points at (create_payment_entry) is HIGH — surfaced in the proposal so
+      // the UI can show what a confirmation would guard from Phase 7 on.
+      const proposal = buildProposal({
+        action: "read_payment_history",
+        risk: "READ",
+        entity: { kind: "customer", id: customer.name, name: customer.customer_name },
+        params: { entries: rows.length, total_vnd: total },
+        summary: `Xem lịch sử phiếu thu: ${customer.customer_name}`,
+        extra: { next_action_hint: { action: "create_payment_entry", risk: "HIGH" } },
+      });
+      return { question: rawText, normalized: nlp, routed: { group: route.group, matched: route.matched }, customer: { id: customer.name, name: customer.customer_name }, rows, answer, proposal };
     }
 
     if (route.group === "sales") {
@@ -282,7 +326,14 @@ export async function answerQuestion(rawText) {
         rows.length > 0
           ? `${customer.customer_name} còn ${rows.length} chứng từ chưa thanh toán, tổng ${formatVnd(total)}đ (${lines}).${ambNote}`
           : `${customer.customer_name} không còn chứng từ nào chưa thanh toán.${ambNote}`;
-      return { question: rawText, normalized: nlp, routed: { group: route.group, matched: route.matched }, customer: { id: customer.name, name: customer.customer_name }, rows, answer };
+      const proposal = buildProposal({
+        action: "read_open_invoices",
+        risk: "READ",
+        entity: { kind: "customer", id: customer.name, name: customer.customer_name },
+        params: { documents: rows.length, outstanding_vnd: total },
+        summary: `Xem chứng từ chưa thanh toán: ${customer.customer_name}`,
+      });
+      return { question: rawText, normalized: nlp, routed: { group: route.group, matched: route.matched }, customer: { id: customer.name, name: customer.customer_name }, rows, answer, proposal };
     }
 
     // group === "customer": the receivable-balance question. rows from the
@@ -295,6 +346,13 @@ export async function answerQuestion(rawText) {
         : b.outstanding_vnd < 0
           ? `${customer.customer_name} không còn nợ — hiện dư ${formatVnd(-b.outstanding_vnd)}đ (${b.open_invoices} chứng từ chưa thanh toán, phần dư từ ghi trừ/credit note).${ambNote}`
           : `${customer.customer_name} không còn nợ gì.${ambNote}`;
+    const proposal = buildProposal({
+      action: "read_balance",
+      risk: "READ",
+      entity: { kind: "customer", id: customer.name, name: customer.customer_name },
+      params: { outstanding_vnd: b.outstanding_vnd, open_documents: b.open_invoices, ambiguous },
+      summary: `Xem công nợ: ${customer.customer_name}`,
+    });
     return {
       question: rawText,
       normalized: nlp,
@@ -303,6 +361,7 @@ export async function answerQuestion(rawText) {
       outstanding_vnd: b.outstanding_vnd,
       open_invoices: b.open_invoices,
       answer,
+      proposal,
     };
   } finally {
     await mcp.close();

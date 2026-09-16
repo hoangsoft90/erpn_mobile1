@@ -22,6 +22,7 @@ class AskResult {
     this.normalizedText,
     this.amount,
     this.reason,
+    this.proposal,
   });
 
   factory AskResult.fromJson(Map<String, dynamic> json) {
@@ -59,6 +60,14 @@ class AskResult {
       amount = (normalized['amount'] as num?)?.toInt();
     }
 
+    // Phase 6: the erpn.proposal/v1 object (copilot-server.mjs
+    // action-proposal.mjs). Absent on early returns, explicit null when a
+    // route matched but nothing could be proposed.
+    final rawProposal = json['proposal'];
+    final proposal = rawProposal is Map<String, dynamic>
+        ? ActionProposal.fromJson(rawProposal)
+        : null;
+
     return AskResult(
       question: json['question'] as String? ?? '',
       answer: answerText,
@@ -71,6 +80,7 @@ class AskResult {
       normalizedText: normalizedText,
       amount: amount,
       reason: json['reason'] as String?,
+      proposal: proposal,
     );
   }
 
@@ -86,6 +96,10 @@ class AskResult {
   final int? amount;
   final String? reason;
 
+  /// Phase 6 action proposal (erpn.proposal/v1) — display-only for now;
+  /// the confirm-execute flow arrives with Phase 7.
+  final ActionProposal? proposal;
+
   bool get hasAnswer => answer != null && answer!.trim().isNotEmpty;
 }
 
@@ -98,6 +112,7 @@ class ChatTurn {
     required this.ok,
     required this.ts,
     this.routedGroup,
+    this.proposal,
   });
 
   /// [typedQuestion] is what the user actually typed — preferred over the
@@ -112,6 +127,7 @@ class ChatTurn {
         ok: r.hasAnswer,
         ts: DateTime.now(),
         routedGroup: r.routedGroup,
+        proposal: r.proposal,
       );
 
   factory ChatTurn.fromJson(Map<String, dynamic> json) => ChatTurn(
@@ -120,6 +136,9 @@ class ChatTurn {
         ok: json['ok'] as bool? ?? false,
         ts: DateTime.tryParse(json['ts'] as String? ?? '') ?? DateTime.now(),
         routedGroup: json['routed_group'] as String?,
+        proposal: json['proposal'] is Map<String, dynamic>
+            ? ActionProposal.fromJson(json['proposal'] as Map<String, dynamic>)
+            : null,
       );
 
   final String question;
@@ -128,11 +147,109 @@ class ChatTurn {
   final DateTime ts;
   final String? routedGroup;
 
+  /// Phase 6 proposal card source (null = no proposal this turn).
+  final ActionProposal? proposal;
+
   Map<String, dynamic> toJson() => {
         'question': question,
         'answer': answer,
         'ok': ok,
         'ts': ts.toIso8601String(),
         if (routedGroup != null) 'routed_group': routedGroup,
+        if (proposal != null) 'proposal': proposal!.toJson(),
+      };
+}
+
+/// Phase 6 — one action proposal (erpn.proposal/v1, action-proposal.mjs).
+///
+/// Display-only in Phase 6: the card renders [riskIcon], [riskLabel],
+/// [summary] and the entity. There is deliberately NO confirm button yet —
+/// nothing exists to confirm-execute until Phase 7.
+@immutable
+class ActionProposal {
+  const ActionProposal({
+    required this.schema,
+    required this.action,
+    required this.risk,
+    required this.riskIcon,
+    required this.riskLabel,
+    required this.needConfirm,
+    required this.needDoubleConfirm,
+    required this.executable,
+    required this.entityKind,
+    this.entityId,
+    this.entityName,
+    this.summary,
+  });
+
+  factory ActionProposal.fromJson(Map<String, dynamic> json) {
+    // Fail-CLOSED parsing (review 2026-09-16): a missing/invalid risk field
+    // must NOT quietly render as the green READ badge. Unknown risk ⇒ UNKNOWN
+    // styling via _riskColor's default branch and needConfirm = true, so a
+    // corrupted payload can never look safer than it is.
+    final rawRisk = json['risk'];
+    final risk = rawRisk is String && rawRisk.isNotEmpty
+        ? rawRisk
+        : 'UNKNOWN';
+    final display = json['risk_display'];
+    final entity = json['entity'];
+    final parsedNeedConfirm = json['need_confirm'];
+    final parsedNeedDouble = json['need_double_confirm'];
+    final parsedExecutable = json['executable'];
+    return ActionProposal(
+      schema: json['schema'] as String? ?? 'erpn.proposal/v1',
+      action: json['action'] as String? ?? '',
+      risk: risk,
+      riskIcon: display is Map<String, dynamic>
+          ? display['icon'] as String? ?? ''
+          : '',
+      riskLabel: display is Map<String, dynamic>
+          ? display['label'] as String? ?? ''
+          : (risk == 'UNKNOWN' ? 'Không rõ mức rủi ro' : ''),
+      needConfirm: parsedNeedConfirm is bool
+          ? parsedNeedConfirm
+          : risk != 'READ', // unknown ⇒ treat as needing confirmation
+      needDoubleConfirm: parsedNeedDouble is bool
+          ? parsedNeedDouble
+          : risk == 'UNKNOWN',
+      executable: parsedExecutable is bool
+          ? parsedExecutable
+          : false, // unknown ⇒ never claim executable
+      entityKind:
+          entity is Map<String, dynamic> ? entity['kind'] as String? : null,
+      entityId: entity is Map<String, dynamic> ? entity['id'] as String? : null,
+      entityName:
+          entity is Map<String, dynamic> ? entity['name'] as String? : null,
+      summary: json['summary'] as String?,
+    );
+  }
+
+  final String schema;
+  final String action;
+  final String risk; // READ / LOW / HIGH / CRITICAL
+  final String riskIcon;
+  final String riskLabel;
+  final bool needConfirm;
+  final bool needDoubleConfirm;
+  final bool executable;
+  final String? entityKind;
+  final String? entityId;
+  final String? entityName;
+  final String? summary;
+
+  Map<String, dynamic> toJson() => {
+        'schema': schema,
+        'action': action,
+        'risk': risk,
+        'risk_display': {'icon': riskIcon, 'label': riskLabel},
+        'need_confirm': needConfirm,
+        'need_double_confirm': needDoubleConfirm,
+        'executable': executable,
+        'entity': {
+          'kind': entityKind,
+          'id': entityId,
+          'name': entityName,
+        },
+        if (summary != null) 'summary': summary,
       };
 }
