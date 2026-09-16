@@ -106,6 +106,24 @@ export function formatVnd(n) {
  * candidates made names like "Trang trại Minh Anh" unreachable).
  * Fuzzy matching stays a Phase 6 concern; this is deliberately crude and honest.
  */
+/**
+ * Vocatives that are never a customer NAME on their own. Mirrors the Python
+ * stripper (src/vietnamese_nlp/kinship.py): the stripper only removes a title
+ * at the START of the utterance (mid-utterance titles are kept because they
+ * are usually part of a stored name — batch finding b12), so a title like
+ * "chị" survives in "thu tiền cho chị Lan" and must not be treated as a name.
+ *
+ * Real failure this guards (2026-09-16, found while writing faq.md): the demo
+ * site has a customer literally named "Chị Tư — thầu nhỏ". The fragment "chị"
+ * matched EXACTLY ONE customer, so the app answered a question about
+ * "chị Lan" with Chị Tư's account — a confident wrong-customer answer with no
+ * ambiguity flag. A title may only match as part of a longer fragment.
+ */
+const KINSHIP_TITLES = new Set([
+  "anh", "chị", "em", "cô", "chú", "bác", "ông", "bà", "cậu", "dì", "mợ",
+  "thím", "dượng", "bố", "ba", "má", "mẹ", "con", "cháu", "cụ", "thầy",
+]);
+
 export function nameCandidates(cleanedText) {
   const tokens = cleanedText.split(/\s+/).filter(Boolean);
   const cands = [];
@@ -129,7 +147,10 @@ export function nameCandidates(cleanedText) {
 export async function resolveCustomer(skills, cleanedText) {
   const list = await skills.findCustomer("");
   const customers = list.data?.data ?? [];
-  const cands = nameCandidates(cleanedText);
+  // Bare kinship titles are dropped as candidates (see KINSHIP_TITLES). They
+  // are handled BEFORE scoring so they can neither win as a unique hit nor set
+  // the ambiguity fallback.
+  const cands = nameCandidates(cleanedText).filter((c) => !KINSHIP_TITLES.has(c.toLowerCase()));
   let fallback = null;
   // Phase 6: a ONE-word fragment matching SEVERAL customers is the spec's
   // "≥2 candidate gần nhau" case — the answer is ASK, not pick and not a bare

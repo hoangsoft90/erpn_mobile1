@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -41,7 +40,10 @@ class _ProposalCardState extends ConsumerState<ProposalCard> {
     });
     try {
       final dio = ref.read(dioProvider);
-      final commandId = _generateCommandId();
+      // Stable per proposal instance (user decision 2026-09-16): every retry on
+      // this card reuses the SAME key, so an error-then-retry cannot write a
+      // second payment — the server replays the first result instead.
+      final commandId = proposal.commandId;
       final res = await dio.post<Map<String, dynamic>>(
         '/execute',
         data: jsonEncode({'command_id': commandId, 'proposal': proposal.toJson()}),
@@ -62,17 +64,6 @@ class _ProposalCardState extends ConsumerState<ProposalCard> {
     } finally {
       if (mounted) setState(() => _confirming = false);
     }
-  }
-
-  /// UUID v4 (random) — the spec's client-generated idempotency key.
-  /// Pure Dart (Random.secure), no extra dependency.
-  String _generateCommandId() {
-    final rng = Random.secure();
-    final b = List<int>.generate(16, (_) => rng.nextInt(256));
-    b[6] = (b[6] & 0x0f) | 0x40; // version 4
-    b[8] = (b[8] & 0x3f) | 0x80; // variant 10
-    final h = b.map((x) => x.toRadixString(16).padLeft(2, '0')).join();
-    return '${h.substring(0, 8)}-${h.substring(8, 12)}-${h.substring(12, 16)}-${h.substring(16, 20)}-${h.substring(20)}';
   }
 
   Color _riskColor(ColorScheme scheme) {

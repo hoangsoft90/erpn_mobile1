@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:flutter/foundation.dart';
 
 /// Parsed body of one POST /ask response (`result` field).
@@ -176,10 +178,12 @@ class ActionProposal {
     required this.needConfirm,
     required this.needDoubleConfirm,
     required this.executable,
-    required this.entityKind,
+    required    this.entityKind,
     this.entityId,
     this.entityName,
     this.summary,
+    this.commandIdSeed,
+    this.createdAt,
   });
 
   factory ActionProposal.fromJson(Map<String, dynamic> json) {
@@ -221,6 +225,13 @@ class ActionProposal {
       entityName:
           entity is Map<String, dynamic> ? entity['name'] as String? : null,
       summary: json['summary'] as String?,
+      // Restored history carries the key it was FIRST confirmed with, so a card
+      // reopened after an app restart keeps its identity (see commandId).
+      commandIdSeed: json['command_id'] as String?,
+      // Phase 9: the server's build time MUST survive the round-trip too —
+      // /execute refuses a proposal without it (or older than the TTL), so
+      // dropping it here would make every confirm fail.
+      createdAt: json['created_at'] as String?
     );
   }
 
@@ -237,6 +248,15 @@ class ActionProposal {
   final String? entityName;
   final String? summary;
 
+  /// The idempotency key this proposal was restored with, if any. Null for a
+  /// proposal that just arrived from /ask (a fresh intent).
+  final String? commandIdSeed;
+
+  /// When the SERVER built this proposal (ISO-8601). Phase 9 age gate: the
+  /// server refuses to execute a proposal older than PROPOSAL_TTL_MS (default
+  /// 10 minutes) or one missing this field entirely.
+  final String? createdAt;
+
   Map<String, dynamic> toJson() => {
         'schema': schema,
         'action': action,
@@ -251,6 +271,9 @@ class ActionProposal {
           'name': entityName,
         },
         if (summary != null) 'summary': summary,
+        if (createdAt != null) 'created_at': createdAt,
+        // Persist the key so history restore cannot re-key the same card.
+        'command_id': commandId,
       };
 
   /// The confirm button shows ONLY for HIGH-risk payment proposals — the one
@@ -258,4 +281,39 @@ class ActionProposal {
   /// later phase and would demand double-confirm UI anyway.
   bool get confirmable =>
       action == 'create_payment_entry' && risk == 'HIGH' && entityId != null;
+
+  /// Idempotency key for the confirm flow — ONE per proposal INSTANCE.
+  ///
+  /// User decision 2026-09-16, implementing phase-07 spec "mất mạng → bấm
+  /// Confirm lại → không ghi 2 lần": the key is created on first use and kept
+  /// for every later press on the SAME card, so a retry after a network error
+  /// sends the SAME key and the gateway store replays the first result instead
+  /// of writing a second payment. A new /ask answer builds a new
+  /// ActionProposal instance → a new key, because that is a new intent.
+  ///
+  /// The key is cached in an Expando rather than a field so ActionProposal
+  /// stays @immutable, and rather than in widget state so a rebuilt/recycled
+  /// card cannot silently lose it (which would re-open the double-write
+  /// window this exists to close).
+  ///
+  /// Per-INSTANCE is not enough on its own (review 2026-09-16): the chat
+  /// history is stored as JSON and re-parsed on app start, which builds a NEW
+  /// ActionProposal — a fresh key for the same card, i.e. the same double-write
+  /// window with a longer fuse. Hence [commandIdSeed]: `toJson` pins the key
+  /// and `fromJson` restores it, so a card is keyed once for its whole life
+  /// (including across restarts).
+  String get commandId => commandIdSeed ?? (_commandIds[this] ??= _newUuidV4());
+}
+
+/// Per-instance idempotency keys — lifetime == the proposal object's lifetime.
+final Expando<String> _commandIds = Expando<String>('commandId');
+
+/// UUID v4 (random). Pure Dart (Random.secure), no extra dependency.
+String _newUuidV4() {
+  final rng = Random.secure();
+  final b = List<int>.generate(16, (_) => rng.nextInt(256));
+  b[6] = (b[6] & 0x0f) | 0x40; // version 4
+  b[8] = (b[8] & 0x3f) | 0x80; // variant 10
+  final h = b.map((x) => x.toRadixString(16).padLeft(2, '0')).join();
+  return '${h.substring(0, 8)}-${h.substring(8, 12)}-${h.substring(12, 16)}-${h.substring(16, 20)}-${h.substring(20)}';
 }

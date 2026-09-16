@@ -114,7 +114,8 @@ Lớp chuẩn hóa chạy **TRƯỚC** LLM, cố định bằng code chứ khôn
 - **Phase 5 — AI Gateway core:** ✅ bản đơn giản ĐÃ XONG theo sign-off (không scrub): auth, LLM Router config-driven, audit log; client mobile **không bao giờ** giữ ERPNext/LLM key. Còn: user quyết upstream thật (Zen payment / Gemini free-paid)
 - **Phase 6 — Entity resolution + Action Proposal card:** "Anh A" → đúng customer nào khi trùng tên/liên chi nhánh; card xác nhận tiếng Việt dễ hiểu + Risk Level
 - **Phase 7 — Idempotency** — chống double-tap ghi tiền 2 lần
-- **Phase 9 — Proposal state machine:** expiry, re-validation, saga/compensation (undo không phải `delete document`)
+- **Phase 9 — Proposal state machine:** expiry (TTL 10 phút → 409 `PROPOSAL_EXPIRED`) + re-validation (drift → 409 `PROPOSAL_STALE`, không clamp im lặng) + khoá ý định trùng PENDING (409 kèm `clash_command_id`) — ✅ phần an toàn XONG kỹ thuật (`result29.txt`, ĐÃ DUYỆT — chờ tách commit); còn thiếu: route `/execute/cancel` (giải zombie PENDING — ĐÃ DUYỆT, đang làm) · saga/compensation (undo không phải `delete document`) + UI hiển thị lý do STALE trên card
+- **Nối ghi vào luồng chat (Phase 7b — ĐÃ DUYỆT 2026-09-16, đang làm):** `routeIntent()` nhận nhóm payment_write ⇒ "thu tiền cho <khách> <số tiền>" → proposal create_payment_entry/HIGH → nút [Xác nhận] hiện thật trên Flutter; kết thúc khoảng trống result28 §3
 
 ### Vận hành & quy mô
 - **Phase 8 — Background jobs + push notification:** "ra lệnh rồi đi chỗ khác" (job queue, thông báo kèm mã phiếu)

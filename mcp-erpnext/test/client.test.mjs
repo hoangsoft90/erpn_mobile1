@@ -71,10 +71,10 @@ test("tool-reported error (isError) surfaces as TOOL_ERROR", async () => {
 test("JSON-RPC error (unknown tool name on the server) surfaces as MCP_ERROR", async () => {
   const client = createMcpClient();
   try {
-    // "erpnext_doc_get" IS whitelisted but NOT implemented by the mock ->
+    // "erpnext_ar_aging" IS whitelisted but NOT implemented by the mock ->
     // server answers a JSON-RPC error — the client must reject, not hang.
     await assert.rejects(
-      () => client.callTool("erpnext_doc_get", { doctype: "X", name: "Y" }),
+      () => client.callTool("erpnext_ar_aging", {}),
       /MCP_ERROR -32602/,
     );
   } finally {

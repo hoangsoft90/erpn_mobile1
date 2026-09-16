@@ -19,6 +19,16 @@
  */
 
 import readline from "node:readline";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+
+/**
+ * Optional persistence. The client spawns a FRESH mock process per request, so
+ * without this every request would see an empty ledger — and a reconcile query
+ * would answer "nothing was written" even after a real write. A real ERPNext
+ * keeps its data, so the mock must too when a test needs that (reconcile /
+ * crash-recovery paths): set MOCK_ERP_STATE=<file> to opt in.
+ */
+const STATE_FILE = process.env.MOCK_ERP_STATE;
 
 /** Fake ERPNext data — shape mirrors real handler payloads. */
 const DB = {
@@ -60,6 +70,49 @@ const PAYMENTS = [
   { name: "PE-0001", party: "CUST-00001", posting_date: "2026-09-06", paid_amount: 8_000_000, received_amount: 8_000_000, docstatus: 1 },
 ];
 
+function saveState() {
+  if (!STATE_FILE) return;
+  try {
+    writeFileSync(STATE_FILE, JSON.stringify({ payments: PAYMENTS }), "utf8");
+  } catch {
+    // A mock that cannot persist must not crash the request.
+  }
+}
+
+if (STATE_FILE && existsSync(STATE_FILE)) {
+  try {
+    const saved = JSON.parse(readFileSync(STATE_FILE, "utf8"));
+    if (Array.isArray(saved.payments)) PAYMENTS.push(...saved.payments);
+  } catch {
+    // ignore a torn/invalid state file — start from the fixtures
+  }
+}
+
+/**
+ * Accounting fixtures for the REAL Payment Entry payload (Stage B).
+ * Values mirror what the real ERPNext returns for `erpnext_doc_get` on a
+ * Sales Invoice / Mode of Payment — the write path reads these at execute
+ * time instead of hardcoding account names.
+ */
+const COMPANY = "Demo Feed Co";
+const RECEIVABLE_ACCOUNT = "1310 - Debtors - DFC";
+/**
+ * Deliberately mirrors the real site: the Vietnamese label "Tiền mặt" is NOT
+ * a stored Mode of Payment — only "Cash" / "Chuyển khoản" are. Anything that
+ * hardcodes the label instead of resolving it fails here, exactly like ERPNext
+ * rejected the write with LinkValidationError on 2026-09-16.
+ */
+const MODES = [
+  { name: "Chuyển khoản", enabled: 1, type: "Cash" },
+  { name: "Cash", enabled: 1, type: "Cash" },
+  { name: "Wire Transfer", enabled: 1, type: "Bank" },
+];
+const MODE_ACCOUNTS = {
+  Cash: "1110 - Cash - DFC",
+  "Chuyển khoản": "1120 - Bank - DFC",
+  "Wire Transfer": "1120 - Bank - DFC",
+};
+
 /** result9: the copilot inventory filter needs item_name — mirror the real tool's shape. */
 const ITEMS = [
   { name: "CAM-HEO-25KG", item_code: "CAM-HEO-25KG", item_name: "Cám heo tăng trọng 25kg" },
@@ -69,23 +122,107 @@ const ITEMS = [
 /** Handlers mirror the real 3.0.4 handlers' return shapes. */
 const TOOLS = {
   /**
-   * Phase 7 Stage A: the ONE write the mock exposes. The real @casys 3.0.4
-   * server's create-payment tool has a DIFFERENT contract (its own params/
-   * account resolution) — Stage B (real ERPNext) will map to it explicitly
-   * and is user-gated; this handler only mimics the ledger semantics we need
-   * for idempotency tests: unique name + reference_no dedupe.
+   * Phase 7 write — the REAL shape (verified in @casys 3.0.4 source: there is
+   * no `erpnext_create_payment_entry`; the create tool is `erpnext_doc_create`
+   * with {doctype, data}). One code path for mock and real server: the mock
+   * must accept exactly what ERPNext accepts, or the tests prove nothing.
    */
-  create_payment_entry: (args) => {
-    const reference = String(args?.reference_no ?? "");
+  erpnext_doc_create: (args) => {
+    // Fault injection for the "lost response / transient failure" path: the
+    // real client cannot tell whether ERPNext wrote the document, which is the
+    // exact ambiguity the resume+reconcile flow exists for. Opt-in only.
+    if (process.env.MOCK_ERP_FAIL_WRITE) {
+      throw new Error(`simulated ERPNext failure (MOCK_ERP_FAIL_WRITE=${process.env.MOCK_ERP_FAIL_WRITE})`);
+    }
+    if (args?.doctype !== "Payment Entry") {
+      throw new Error(`mock only creates Payment Entry (got ${args?.doctype})`);
+    }
+    const data = args?.data ?? {};
+    const reference = String(data.reference_no ?? "");
     if (!reference) throw new Error("reference_no is required (idempotency key)");
-    const dup = PAYMENTS.find((p) => p.reference_no === reference);
-    if (dup) return { name: dup.name }; // server-side dedupe — same doc back
-    if (!args?.customer || !DB[args.customer]) throw new Error(`Customer ${args?.customer} not found`);
-    const paid = Number(args?.paid_amount);
+    // NO reference_no dedupe here on purpose: real ERPNext has no unique
+    // constraint on reference_no, so a mock that dedupes would hide exactly
+    // the double-write bug this phase exists to prevent (hit for real on
+    // 2026-09-16 — two Payment Entries, one command_id).
+    for (const required of ["party", "paid_from", "paid_to", "company"]) {
+      if (!data[required]) throw new Error(`${required} is mandatory`);
+    }
+    const paid = Number(data.paid_amount);
     if (!Number.isFinite(paid) || paid <= 0) throw new Error("paid_amount must be positive");
-    const doc = { name: `PE-M${String(PAYMENTS.length + 1).padStart(3, "0")}`, party: args.customer, posting_date: new Date().toISOString().slice(0, 10), paid_amount: paid, received_amount: paid, docstatus: 0, reference_no: reference, mode_of_payment: args?.mode_of_payment ?? "Tiền mặt" };
+    const doc = {
+      doctype: "Payment Entry",
+      name: `PE-M${String(PAYMENTS.length + 1).padStart(3, "0")}`,
+      payment_type: data.payment_type ?? "Receive",
+      party_type: data.party_type ?? "Customer",
+      party: data.party,
+      posting_date: data.posting_date ?? new Date().toISOString().slice(0, 10),
+      paid_amount: paid,
+      received_amount: Number(data.received_amount ?? paid),
+      paid_from: data.paid_from,
+      paid_to: data.paid_to,
+      company: data.company,
+      mode_of_payment: data.mode_of_payment ?? "Tiền mặt",
+      reference_no: reference,
+      reference_date: data.reference_date,
+      references: data.references ?? [],
+      docstatus: 0, // created as DRAFT — submitting is a separate decision
+    };
     PAYMENTS.push(doc);
-    return { name: doc.name };
+    saveState();
+    // "ERPNext committed, the response never arrived" — the single most
+    // dangerous real-world case, because the caller cannot tell whether the
+    // write landed. The document IS in the ledger; only the reply is lost.
+    if (process.env.MOCK_ERP_FAIL_AFTER_WRITE) {
+      throw new Error(
+        "simulated LOST RESPONSE after the document was committed (MOCK_ERP_FAIL_AFTER_WRITE)",
+      );
+    }
+    return { data: doc, message: `Payment Entry ${doc.name} created successfully` };
+  },
+  /**
+   * Real-server list path: Payment Entry by reference_no (reconcile) and Mode
+   * of Payment (the write path resolves the real mode document name).
+   */
+  erpnext_doc_list: (args) => {
+    // ERPNext unreachable exactly when we need it to reconcile.
+    if (process.env.MOCK_ERP_FAIL_LIST) {
+      throw new Error("simulated ERPNext read failure (MOCK_ERP_FAIL_LIST)");
+    }
+    const source =
+      args?.doctype === "Payment Entry" ? PAYMENTS : args?.doctype === "Mode of Payment" ? MODES : null;
+    if (!source) throw new Error(`mock doc_list does not support doctype ${args?.doctype}`);
+    const filters = args?.filters ?? [];
+    const rows = source
+      .filter((row) =>
+        filters.every(([field, op, value]) => {
+          const actual = row[field];
+          if (op === "=") return String(actual ?? "") === String(value ?? "");
+          if (op === "!=") return String(actual ?? "") !== String(value ?? "");
+          throw new Error(`mock supports only = and != (got ${op})`);
+        }),
+      )
+      .slice(0, args?.limit ?? 20);
+    return { doctype: args?.doctype, count: rows.length, data: rows };
+  },
+  /** Generic get: the write path resolves company/accounts from live data. */
+  erpnext_doc_get: (args) => {
+    const name = String(args?.name ?? "");
+    if (args?.doctype === "Sales Invoice") {
+      const inv = INVOICES.find((i) => i.name === name);
+      if (!inv) throw new Error(`Sales Invoice ${name} not found`);
+      return { data: { ...inv, company: COMPANY, debit_to: RECEIVABLE_ACCOUNT } };
+    }
+    if (args?.doctype === "Mode of Payment") {
+      const account = MODE_ACCOUNTS[name];
+      if (!account) throw new Error(`Mode of Payment ${name} not found`);
+      return { data: { name, accounts: [{ company: COMPANY, default_account: account }] } };
+    }
+    if (args?.doctype === "Payment Entry") {
+      const pe = PAYMENTS.find((p) => p.name === name);
+      if (!pe) throw new Error(`Payment Entry ${name} not found`);
+      return { data: pe };
+    }
+    throw new Error(`mock doc_get does not support doctype ${args?.doctype}`);
   },
   erpnext_customer_list: (args) => {
     const docs = Object.values(DB).filter((c) => !args?.customer_group || c.customer_group === args.customer_group);
@@ -111,11 +248,6 @@ const TOOLS = {
   erpnext_payment_entry_list: (args) => {
     const rows = PAYMENTS.filter((p) => !args?.party || p.party === args.party);
     return { doctype: "Payment Entry", count: rows.length, data: rows };
-  },
-  /** PENDING-reconcile lookup: by reference_no (Phase 7 crash recovery). */
-  erpnext_payment_entry_get_by_reference: (args) => {
-    const row = PAYMENTS.find((p) => p.reference_no === String(args?.reference_no ?? ""));
-    return { doctype: "Payment Entry", count: row ? 1 : 0, data: row ? [row] : [] };
   },
   erpnext_item_list: () => {
     // No server-side name filtering (the real 3.0.4 tool has no txt param either):

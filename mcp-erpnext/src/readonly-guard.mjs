@@ -38,10 +38,17 @@ export const READ_ONLY_TOOLS = Object.freeze([
   "erpnext_payment_entry_get",
   "erpnext_doc_list",
   "erpnext_doc_get",
+  "erpnext_account_list",
   "erpnext_ar_aging",
 ]);
 
-/** Substrings that mark a tool as a WRITE tool. Never reachable in Phase 2. */
+/**
+ * Substrings that mark a tool as a WRITE tool. Never reachable in Phase 2.
+ *
+ * `erpnext_doc_create` lands here on purpose: it is the ONE create tool the
+ * project may reach, and only through the client's separate, doctype-gated
+ * `callWriteTool` — never through this read path.
+ */
 const WRITE_VERBS = Object.freeze([
   "create",
   "update",

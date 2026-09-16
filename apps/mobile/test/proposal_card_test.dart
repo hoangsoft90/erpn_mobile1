@@ -190,8 +190,144 @@ void main() {
     expect(find.textContaining('Đã ghi phiếu thu: PE-M001'), findsOneWidget);
   });
 
-  testWidgets('server replay response shows the anti-duplicate message',
+  testWidgets(
+      'network error then retry on the SAME card → ONE stable command_id, '
+      'retry is served as replay (phase-07: no second write)', (tester) async {
+    final requests = <dynamic>[];
+    var attempt = 0;
+    final proposal = _proposal('HIGH', action: 'create_payment_entry');
+    await tester.pumpWidget(_hostWithMock(proposal, (options) async {
+      requests.add(options.data);
+      attempt++;
+      if (attempt == 1) {
+        // The write may or may not have reached the server — from the client
+        // it looks exactly like a lost network call.
+        throw DioException.connectionError(
+          requestOptions: options,
+          reason: 'simulated network drop',
+        );
+      }
+      return _json({
+        'ok': true,
+        'replay': true,
+        'result': {'erpnext_doc': 'PE-M001', 'paid_vnd': 2500000},
+      });
+    }));
+
+    await tester.tap(find.byType(FilledButton));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Không gửi được lệnh xác nhận'), findsOneWidget,
+        reason: 'first press fails at the network layer');
+    expect(find.byType(FilledButton), findsOneWidget,
+        reason: 'button stays available so the user can retry');
+
+    await tester.tap(find.byType(FilledButton));
+    await tester.pumpAndSettle();
+
+    expect(requests.length, 2, reason: 'two HTTP attempts were made');
+    final first = jsonDecode(requests[0] as String) as Map<String, dynamic>;
+    final second = jsonDecode(requests[1] as String) as Map<String, dynamic>;
+    expect(second['command_id'], first['command_id'],
+        reason: 'the SAME idempotency key must be reused on retry — a fresh '
+            'key would let the gateway write a second payment');
+    expect(first['command_id'], proposal.commandId,
+        reason: 'the key belongs to the proposal instance, not to the press');
+    expect(find.textContaining('chống trùng'), findsOneWidget,
+        reason: 'the server replayed the first write instead of writing again');
+  });
+
+  testWidgets(
+      'a NEW /ask answer (new proposal instance) gets a NEW command_id',
       (tester) async {
+    final first = _proposal('HIGH', action: 'create_payment_entry');
+    final second = _proposal('HIGH', action: 'create_payment_entry');
+    expect(first.commandId, isNot(second.commandId),
+        reason: 'same-looking proposals are separate intents — reusing the key '
+            'would make the second payment a replay of the first');
+    // Stability inside one instance, across repeated reads.
+    expect(first.commandId, first.commandId);
+  });  testWidgets(
+      'a card restored from history keeps its ORIGINAL command_id (regression: '
+      're-parsing history used to mint a new key ⇒ second write)',
+      (tester) async {
+    // 1. A proposal arrives from /ask. Its key is what the confirm flow uses.
+    final original = _proposal('HIGH', action: 'create_payment_entry');
+    final originalKey = original.commandId;
+
+    // 2. The turn goes to prefs (toJson) and the app restarts: the history is
+    //    parsed back into a NEW ActionProposal instance.
+    final persisted =
+        jsonDecode(jsonEncode(original.toJson())) as Map<String, dynamic>;
+    final restored = ActionProposal.fromJson(persisted);
+    expect(identical(restored, original), isFalse,
+        reason: 'a restore really does build a fresh instance');
+    expect(restored.commandId, originalKey,
+        reason: 'the restored card must reuse the key it was persisted with — '
+            'a fresh key would make the same debt payable twice');
+
+    // 3. Pressing confirm on the restored card sends that same key, so the
+    //    gateway replays the first write instead of writing a second payment.
+    final requests = <dynamic>[];
+    await tester.pumpWidget(_hostWithMock(restored, (options) async {
+      requests.add(options.data);
+      return _json({
+        'ok': true,
+        'replay': true,
+        'result': {'erpnext_doc': 'PE-M001', 'paid_vnd': 2500000},
+      });
+    }));
+    await tester.tap(find.byType(FilledButton));
+    await tester.pumpAndSettle();
+
+    final sent = jsonDecode(requests.single as String) as Map<String, dynamic>;
+    expect(sent['command_id'], originalKey,
+        reason: 'confirm after restart must keep the original idempotency key');
+    expect(find.textContaining('chống trùng'), findsOneWidget);
+  });
+
+  testWidgets('a proposal round-trip keeps created_at (Phase 9 age gate)',
+      (tester) async {
+    // /execute refuses a proposal with no created_at, or older than the TTL, so
+    // the field must survive both the API parse and the history round-trip.
+    final json = {
+      'schema': 'erpn.proposal/v1',
+      'action': 'create_payment_entry',
+      'risk': 'HIGH',
+      'need_confirm': true,
+      'entity': {'kind': 'customer', 'id': 'CUST-00001', 'name': 'Lan'},
+      'params': {'amount_vnd': 500000, 'invoice': 'SINV-1', 'outstanding_vnd': 500000},
+      'created_at': '2026-09-16T04:00:00.000Z',
+    };
+    final parsed = ActionProposal.fromJson(Map<String, dynamic>.from(json));
+    expect(parsed.createdAt, '2026-09-16T04:00:00.000Z');
+
+    final again = ActionProposal.fromJson(
+        jsonDecode(jsonEncode(parsed.toJson())) as Map<String, dynamic>);
+    expect(again.createdAt, parsed.createdAt,
+        reason: 'dropping created_at would make every confirm fail server-side');
+  });
+
+  testWidgets('ChatTurn history round-trip preserves the proposal command_id',
+      (tester) async {
+    final turn = ChatTurn(
+      question: 'chị Lan còn nợ bao nhiêu',
+      answer: 'Còn 2.500.000đ',
+      ok: true,
+      ts: DateTime.now(),
+      proposal: _proposal('HIGH', action: 'create_payment_entry'),
+    );
+    final key = turn.proposal!.commandId;
+
+    final restored = ChatTurn.fromJson(
+        jsonDecode(jsonEncode(turn.toJson())) as Map<String, dynamic>);
+
+    expect(restored.proposal, isNotNull,
+        reason: 'the restored turn must still render its confirm card');
+    expect(restored.proposal!.commandId, key);
+  });
+
+  testWidgets('server replay response shows the anti-duplicate message'
+      , (tester) async {
     await tester.pumpWidget(
         _hostWithMock(_proposal('HIGH', action: 'create_payment_entry'),
             (options) async {

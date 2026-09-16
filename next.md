@@ -93,6 +93,27 @@ Python `src/vietnamese_nlp/`, stdlib thuần, chạy TRƯỚC LLM — cố đị
 
 ## Sắp tới
 
+### ĐÃ DUYỆT — đang làm (2026-09-16, thứ tự cố định; trạng thái chi tiết ở checklist + result30)
+
+1. **Tách 3 commit a/b/c** (result29 §6, đã duyệt) → push `change/flutter-chat-mvp`.
+   5 file dùng chung Stage B↔Phase 9 phải tách surgical; nếu quá rủi ro → hỏi user gộp 1 commit.
+2. **Nối `buildPaymentProposal()` vào `routeIntent()`** (nhóm payment_write) — câu
+   "thu tiền cho <khách> <số tiền>" sinh proposal create_payment_entry/HIGH thật; sửa text
+   cũ "Phase 2 chỉ đọc"; verify /ask thật + widget test nút [Xác nhận]; cập nhật faq §3.2/§3.3/§9
+   (dây nối không còn thiếu — thay 2 hàng đầu bảng §9).
+3. **Route `/execute/cancel`** — chỉ huỷ PENDING sau khi `reconcilePaymentEntry()` xác nhận
+   0 chứng từ; thấy chứng từ ⇒ từ chối huỷ. Giải quyết zombie PENDING (result29 §10-F2).
+4. **Xoá 2 PE demo ACC-PAY-2026-00114/00115** — đọc source @casys/mcp-erpnext tìm tool
+   thật trước (không đoán); không có tool thì báo user xoá tay. Verify outstanding hóa đơn gốc
+   không đổi.
+5. result31 + docs + handoff sau mỗi bước lớn. Submit phiếu thu: user để sau.
+
+### Đã xong trong phiên docs-sync (2026-09-16)
+
+- openspec tasks.md: 5.9 → [x] (`6054458`) + mục §6 Phase 6–9 pointer — validate OK.
+- **`LESSONS_LEARNED.md` (mới)**: chỉ mục 6 nhóm lỗi lặp + top bài học, nguồn đầy đủ = skill `erpn-verify-first`.
+- handoff_20260916-0725.md · result30.txt.
+
 ### Đang chạy (không cần quyết thêm)
 
 1. ~~GH Actions run #2~~ ✅ **XONG — run #2 + #3 đều SUCCESS** (`result10.txt`, `result11.txt`):
@@ -123,9 +144,9 @@ Python `src/vietnamese_nlp/`, stdlib thuần, chạy TRƯỚC LLM — cố đị
 | 4 | Voice input/STT (hybrid): 🎤 → STT → user xem lại/sửa text → Gửi | Không | ⚠️ **Chặn bởi audio thật 3 miền** (100–200 câu, chờ người thật thu) |
 | 5 | AI Gateway core: auth, LLM Router, audit (scrub ĐÃ BỎ theo sign-off 2026-09-15) | **ĐANG LÀM** — upstream hàng ngày = **mac-custom** (LLM tự host trên Mac qua `llm9000.loca.lt`, KHÔNG quota — result20); gemini-openai giữ lại CHỈ để verify tương thích provider thật (thought_signature, `E2E_LLM_MODEL=real-gemini`); zen billing-blocked để sau. E2E mac-custom có bằng chứng hợp lệ = **result22** (4×200, `attempts=['mac-custom']`; claim audit của result20 đã bị đính chính — xem result22 §9B); bug credit-note **đã fix + commit `6054458` + verify thật 457.875đ/171.800đ** (result21); E2E đầy đủ qua `mac-custom` **đã XANH** (result22) | Còn lại: verify thought_signature live khi thuận tiện (chờ quota reset) |
 | 6 | Entity resolution + Action Proposal card (xác nhận tiếng Việt + Risk Level) | Không | Exit criteria Phase 5 |
-| 7 | **`create_payment_entry` + idempotency** | **Có** | **Giai đoạn A XONG + ĐÃ COMMIT `8ebfc0e` (result23)**: proposal HIGH dừng ở xác nhận + idempotency store + `/execute` MOCK + nút Flutter. ⚠️ **Giai đoạn B (ghi ERPNext thật) CHƯA chạy** — chờ user quyết thời điểm/cách thức; trước khi replay thật phải implement tra `reference_no` |
-| 8 | Background jobs + push notification + TTS readback | Có | Phase 7 |
-| 9 | Proposal state machine (expiry, re-validation, saga/compensation) | Có | Undo ≠ delete document |
+| 7 | **`create_payment_entry` + idempotency** | **Có** | **Giai đoạn A XONG + ĐÃ COMMIT `8ebfc0e` (result23)**: proposal HIGH dừng ở xác nhận + idempotency store + `/execute` MOCK + nút Flutter. ✅ Fix `command_id` ổn định theo proposal — đã xong + test (`result24.txt`). ✅ **Giai đoạn B ĐÃ CHẠY (user duyệt, ERPNext demo, quy trình như production — `result25.txt`)**: ghi thật `ACC-PAY-2026-00114` 10.000đ + verify độc lập + replay; phát hiện & fix BUG THẬT crash-recovery ghi phiếu thứ hai. ✅ **Review sau Stage B (`result26.txt`) — 5 lỗi thật đã sửa + falsify**: lỗi post-write bị đánh FAILED (đẩy sang command_id mới = ghi phiếu 2) · `amount_vnd: 0`/NaN bị thăng cấp thành thu TOÀN BỘ nợ · chọn đại mode ⇒ sai tài khoản · `<= 0` để lọt NaN · docs/bảng skill. Node 86 → **91/91** · Python 58/58 · Flutter 25/25 · analyze 0. ✅ **Vá lỗ hổng khoá idempotency khi KHÔI PHỤC HISTORY + 2 chaos test (`result27.txt`)**: `toJson/fromJson` nay ghim `command_id` ⇒ khoá sống theo card qua cả app restart (trước đó restore = UUID mới = ghi phiếu thứ hai); chaos test “**ERPNext ghi xong rồi mất response**” → retry reconcile về đúng document đó (đếm ledger thật = 1) + test “ERPNext chết lúc đối soát → 503, không ghi”. Node **93/93** · Python 58/58 · Flutter **27/27** · analyze 0. ✅ **`faq.md` + 2 bug thật đã vá (`result28.txt`)**: tên khách trùng từ-chỉ-số từng làm sai số tiền (`bác Hai 500 ngàn` → 2.500.000đ; `chị Bảy 300 ngàn` → 7.300.000đ) · danh xưng "chị" từng khớp sai khách (site có khách tên `Chị Tư — thầu nhỏ`) — cả hai đã fix + test + falsify. ⚠️ **Phát hiện khoảng trống lớn**: `buildPaymentProposal()` chỉ được test gọi ⇒ **không câu hỏi nào sinh đề xuất thu tiền** ⇒ nút [Xác nhận] không bao giờ hiện trong luồng chat thật (chờ user quyết: nối ngay hay gộp Phase 9). Node 97/97 · Python 60/60 · Flutter 27/27. ✅ **Skeleton Phase 9** (plan-only, `.plan/phases/phase-09-…md`) — đã grep xác nhận proposal chưa có `created_at`/snapshot và store chưa có TTL; expiry/stale/khoá `(customer, invoice)`/“không xoá document” là việc mới. ⏳ Chờ user: duyệt commit · quyết SUBMIT phiếu (nháp nên công nợ chưa đổi) · dọn 2 phiếu nháp demo |
+| 8 | Background jobs + push notification + TTS readback | Có | Phase 7 + Phase 9 |
+| 9 | Proposal state machine (expiry, re-validation, saga/compensation) | Có (đổi hành vi) | **PHẦN AN TOÀN XONG kỹ thuật (`result29.txt`), CHỜ DUYỆT COMMIT**: ① TTL 10 phút (`proposal-freshness.mjs` `assertFresh`) → 409 `PROPOSAL_EXPIRED` trước `store.begin()` ② re-validate `detectDrift()` so snapshot với dữ liệu sống → 409 `PROPOSAL_STALE` + problems, KHÔNG ghi ③ intentKey `(kind\|customer\|amount\|invoice)` chặn ý định trùng đang PENDING ④ `created_at` ghim vào proposal + Dart (sống qua khôi phục history) ⑤ 409 intent-in-flight trả `clash_command_id` (client resume đúng lệnh đang khoá — review result29 §10-F2; **route /execute/cancel chưa có, chờ quyết khi duyệt commit**). ⚠️ Docs đã đính chính: intentKey = `(customer|invoice)`, KHÔNG gồm số tiền (§10-F1) · Test: Node 112/112 · Python 60/60 · Flutter 28/28. **Còn thiếu (nâng cao)**: saga/undo-compensation; Flutter hiển thị lý do `PROPOSAL_STALE` chi tiết trên card; route cancel |
 | 10 | Multi-user, RBAC, on-behalf-of ERPNext credential | Có | **Trigger #1 tách khỏi dsh** |
 | 11 | Mở rộng write skills (sales order, inventory, purchase) | Có | Phase 10 |
 | 12 | Multi-tenant readiness | Có | Chỉ nếu có ý định SaaS |

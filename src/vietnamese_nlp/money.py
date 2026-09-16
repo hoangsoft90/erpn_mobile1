@@ -359,6 +359,12 @@ def find_amounts(text: str) -> tuple[MoneyMatch, ...]:
         total = Decimal(0)
         section = Decimal(0)
         current: Decimal | None = None
+        #: True while `current` was built from DIGIT tokens only. The
+        #: space-separated-thousands rule ("1 500 000") is only meaningful for
+        #: digits: a word numeral is a NAME as often as it is a number
+        #: ("bác Hai 500 ngàn" — real money bug 2026-09-16: "Hai"=2 merged with
+        #: "500" into 2.500.000đ). Word-derived values are therefore excluded.
+        current_from_digits = False
         last_scale: Decimal | None = None
         seen_big = False
         has_number = False
@@ -403,11 +409,14 @@ def find_amounts(text: str) -> tuple[MoneyMatch, ...]:
                         break
                 if current is None:
                     current = t.value
+                    current_from_digits = t.text.isdigit()
                 elif (
-                    current == current.to_integral_value()
+                    current_from_digits
+                    and current == current.to_integral_value()
                     and re.fullmatch(r"\d{3}", t.text)
                 ):
-                    # "1 500 000" — space separated thousands, guarded to 3-digit groups
+                    # "1 500 000" — space separated thousands, guarded to 3-digit
+                    # groups AND to digit-origin values (see current_from_digits)
                     current = current * 1000 + t.value
                 else:
                     ambiguous_tail = nxt is None or nxt.kind == "other"
@@ -459,6 +468,7 @@ def find_amounts(text: str) -> tuple[MoneyMatch, ...]:
                             break
                     v = Decimal(ONES[w])
                     current = v if current is None else current + v
+                    current_from_digits = False
                     if v:
                         has_nonzero = True
                     has_number = True
@@ -489,6 +499,7 @@ def find_amounts(text: str) -> tuple[MoneyMatch, ...]:
                 elif w in HALF_WORDS:
                     half = HALF_WORDS[w]
                     current = half if current is None else current + half
+                    current_from_digits = False
                     has_nonzero = True
                     has_number = True
                 elif w in HALVES:

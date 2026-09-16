@@ -36,5 +36,17 @@
 - [x] 5.6 **E2E thật XANH (result17 §K/L, 2026-09-15 14:40)**: 1 session trả đúng **457.875đ** từ ERPNext thật, khớp ground truth độc lập; fix 2 root cause chặn nó — cooldown không được disable đường duy nhất (router 13/13) + **gateway mang `thought_signature` của Gemini 3.x** (`ThoughtSignatureCache`, router 19/19); harness durable `mcp-erpnext/dsh-e2e.patch.yml` + `scripts/llm-router.e2e.json`.
 - [x] 5.7 Commit `be57052` (đã duyệt + push) — thought_signature + harness + docs (result17).
 - [x] 5.8 Commit `8d9f04c` + `a379a71` (đã duyệt + push) — mock E2E config + đếm lại số quota (result18/19) + upstream `mac-custom` (LLM tự host trên Mac, không quota) làm chain dev hàng ngày (result20).
-- [ ] 5.9 **Fix credit-note (result21) chưa commit — chờ user duyệt (vùng tiền)**: `outstanding_amount > 0` → `!== 0` (customer.mjs + sales.mjs) + mock credit note SINV-0004 + nhãn "chứng từ chưa thanh toán"; verify thật 457.875đ/1 và 171.800đ/4 (trước fix 269.000đ/3).
+- [x] 5.9 **Fix credit-note — ĐÃ COMMIT `6054458` (đã duyệt + push, result21)**: `outstanding_amount > 0` → `!== 0` (customer.mjs + sales.mjs) + mock credit note SINV-0004 + nhãn "chứng từ chưa thanh toán"; verify thật 457.875đ/1 và 171.800đ/4 (trước fix 269.000đ/3).
 - [x] 5.10 Review vòng 2 đợt fix (result21 §6): 3 lỗi thật — batch runner bị `node --test` chạy như unit test (guard `NODE_TEST_CONTEXT`), `http-ask.test.mjs` treo suite do leak `ASK_*` + setup ngoài try (strip `ASK_*` + try/finally), kỳ vọng eval cũ `"(N hóa đơn"` thành fail giả sau khi đổi nhãn (chấm theo số tiền/số lượng).
+
+## 6. Ngoài scope change này (Phase 6–9 — tracked ở root docs + resultNN; entry point để phiên sau không phải dò lại)
+
+> Các phase sau MVP được quản lộ bằng `.plan/phases/` + root docs (checklist/next/working +
+> result*.txt). Mục này chỉ là pointer ngắn — KHÔNG nhân bản trạng thái chi tiết.
+
+- [x] 6.1 Phase 6 (entity resolution + Risk Level + ProposalCard) — ✅ commit `553d962`.
+- [x] 6.2 Phase 7 Stage A (idempotency + /execute mock + nút Flutter) — ✅ commit `8ebfc0e`.
+- [ ] 6.3 Phase 7 Stage B + review vùng tiền + chaos test (result25/26/27) — **chờ user duyệt commit (a)**.
+- [ ] 6.4 faq.md + 2 fix NLP/resolver (result28) — **chờ user duyệt commit (b)**.
+- [ ] 6.5 Phase 9 phần an toàn: TTL + re-validate + intent lock + `clash_command_id` (result29) — **chờ user duyệt commit (c)**; route `/execute/cancel` + nối `buildPaymentProposal()` vào router (dây [Xác nhận] thật) là việc tiếp theo — xem next.md.
+- [ ] 6.6 Còn treo chờ user: SUBMIT phiếu thu demo · dọn 2 PE demo · thought_signature live · audio 150 câu · APK thật.

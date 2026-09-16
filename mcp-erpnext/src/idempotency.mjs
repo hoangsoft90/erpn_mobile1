@@ -110,8 +110,12 @@ export class IdempotencyStore {
    *    to PENDING would erase the failure history (review 2026-09-16).
    *  - PENDING command with the same fingerprint → not replay, not error:
    *    it stays PENDING and the caller proceeds to reconcile before writing.
+   * Phase 9: `meta.intentKey` (customer|invoice) makes the gate refuse a
+   * SECOND command while an earlier one with the same target is still PENDING.
+   * Two command_ids for the same debt are legitimate intents at the proposal
+   * level, but executing both would allocate the same money twice.
    * @param {string} commandId
-   * @param {{action:string, fingerprint:string}} meta
+   * @param {{action:string, fingerprint:string, intentKey?:string|null}} meta
    */
   begin(commandId, meta) {
     if (!isValidCommandId(commandId)) throw new Error("IDEMPOTENCY_INVALID_COMMAND_ID: command_id must be a UUID");
@@ -131,14 +135,44 @@ export class IdempotencyStore {
         "IDEMPOTENCY_FINGERPRINT_MISMATCH: this command_id is pending for DIFFERENT work — do not reuse it",
       );
     }
+    const intentKey = typeof meta?.intentKey === "string" && meta.intentKey ? meta.intentKey : null;
+    if (intentKey) {
+      const clash = Object.entries(db.commands).find(
+        ([id, rec]) => id !== key && rec.status === "PENDING" && rec.intent_key === intentKey,
+      );
+      if (clash) {
+        // Review 2026-09-16: the message alone is not actionable — the client
+        // needs to know WHICH command to resume (the app pins command_id on the
+        // card, so it CAN retry the blocking one). Structured field, additive.
+        throw Object.assign(
+          new Error(
+            `IDEMPOTENCY_INTENT_IN_FLIGHT: lệnh ${clash[0]} đang xử lý cùng ý định (${intentKey}) — đợi lệnh đó xong hoặc huỷ, KHÔNG ghi thêm`,
+          ),
+          { code: "IDEMPOTENCY_INTENT_IN_FLIGHT", clashCommandId: clash[0] },
+        );
+      }
+    }
+    // CRITICAL (real double-write, 2026-09-16): a resumed command must KEEP the
+    // facts the earlier attempt recorded — above all `reference_no`, which is
+    // what reconcile() searches ERPNext with. Overwriting the record wiped it,
+    // the /execute reconcile branch then had nothing to look up, and a SECOND
+    // Payment Entry was written for the same money. ERPNext does not enforce
+    // uniqueness on reference_no, so this store is the only protection: never
+    // drop fields it holds.
     db.commands[key] = {
+      ...existing,
       status: "PENDING",
       action: meta.action,
       fingerprint: meta.fingerprint,
+      intent_key: intentKey ?? existing?.intent_key ?? null,
       ts: existing?.ts ?? new Date().toISOString(),
     };
+    delete db.commands[key].error;
+    delete db.commands[key].failed_ts;
     this._persist();
-    return { replay: false };
+    // `resumed` tells the caller this id was ALREADY in flight, so the caller
+    // must reconcile against ERPNext before writing anything new.
+    return { replay: false, resumed: Boolean(existing) };
   }
 
   /**

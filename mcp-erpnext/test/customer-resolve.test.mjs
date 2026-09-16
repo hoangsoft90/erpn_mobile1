@@ -81,6 +81,45 @@ test("resolveCustomer returns null when nothing matches", async () => {
   assert.equal(ambiguous, false);
 });
 
+// A kinship title must never BE the match — real data has customers whose
+// stored name CONTAINS one ("Chị Tư — thầu nhỏ"), which made a question about
+// "chị Lan" answer with Chị Tư's account, unflagged (2026-09-16, faq.md).
+const TITLED_CUSTS = [
+  { name: "Chị Tư — thầu nhỏ", customer_name: "Chị Tư — thầu nhỏ" },
+  { name: "Nguyễn Thị Lan", customer_name: "Nguyễn Thị Lan" },
+  { name: "Trần Văn Hai", customer_name: "Trần Văn Hai" },
+];
+
+function skillsOver(rows) {
+  return { findCustomer: async () => ({ data: { count: rows.length, data: rows } }) };
+}
+
+test("a title hit must not outrank the real name fragment in the same question", async () => {
+  // "chị Lan" after cleaning is "payment cho chị Lan 500 ngàn": the stripper
+  // deliberately keeps a MID-utterance title, so "chị" reached the matcher and
+  // used to win because exactly one customer contains it.
+  const { customer } = await resolveCustomer(skillsOver(TITLED_CUSTS), "payment cho chị Lan 500 ngàn");
+  assert.equal(customer?.name, "Nguyễn Thị Lan", "the real name fragment wins over the title");
+});
+
+test("a bare title never resolves when it is the ONLY thing that would match", async () => {
+  // Sharp case: the title alone would give a "unique" hit on this list.
+  const only = [{ name: "Chị Tư — thầu nhỏ", customer_name: "Chị Tư — thầu nhỏ" }];
+  const { customer, ambiguous } = await resolveCustomer(skillsOver(only), "payment cho chị Lan 500 ngàn");
+  assert.equal(customer, null, "honest miss beats answering about the wrong customer");
+  assert.equal(ambiguous, false);
+});
+
+test("a name that merely CONTAINS a title is still reachable by its full name", async () => {
+  const { customer } = await resolveCustomer(skillsOver(TITLED_CUSTS), "Chị Tư — thầu nhỏ còn nợ bao nhiêu");
+  assert.equal(customer?.name, "Chị Tư — thầu nhỏ");
+});
+
+test("a real name in the same list still resolves exactly", async () => {
+  const { customer } = await resolveCustomer(skillsOver(TITLED_CUSTS), "Nguyễn Thị Lan còn nợ bao nhiêu");
+  assert.equal(customer?.name, "Nguyễn Thị Lan");
+});
+
 // ---------------------------------------------------------------- Phase 6
 // Exit-criteria battery: entity resolution ≥ 90% on a DUPLICATE/SIMILAR-name
 // set (spec: "tập test có tên trùng/gần giống"). Every case states the full

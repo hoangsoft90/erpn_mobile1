@@ -109,17 +109,26 @@ export function createMcpClient({
     },
 
     /**
-     * Phase 7 Stage A/B (mock): the ONE deliberate write call. The read-only
-     * guard above stays untouched — writes are NOT generally allowed; this
-     * method exists so the payment-write skill can reach the MOCK server's
-     * create_payment_entry through the SAME correlation/unwrap machinery.
+     * Phase 7: the ONE deliberate write call. The read-only guard above stays
+     * untouched — writes are NOT generally allowed; this method exists so the
+     * payment-write skill can reach `erpnext_doc_create` through the SAME
+     * correlation/unwrap machinery.
+     *
+     * Tool name verified in the pinned @casys/mcp-erpnext 3.0.4 source: the
+     * create tool is `erpnext_doc_create` ({doctype, data}); there is no
+     * `erpnext_create_payment_entry`. The SAME shape is what the mock server
+     * accepts, so tests exercise the real payload rather than a private one.
+     *
+     * Fail-closed on doctype: `erpnext_doc_create` can create ANY doctype, so
+     * anything other than a Payment Entry is refused here, in code.
      * Callers must hold a HIGH-risk confirmed proposal + idempotency gate
-     * (http-ask /execute enforces both). The REAL-server variant is Stage B
-     * and intentionally not wired.
+     * (http-ask /execute enforces both).
      */
     async callWriteTool(tool, args) {
-      if (tool !== "create_payment_entry") {
-        throw new Error(`WRITE_REFUSED: "${tool}" is not the Phase 7 write (create_payment_entry only)`);
+      if (tool !== "erpnext_doc_create" || args?.doctype !== "Payment Entry") {
+        throw new Error(
+          `WRITE_REFUSED: Phase 7 allows only erpnext_doc_create on doctype "Payment Entry" (got tool=${tool} doctype=${args?.doctype})`,
+        );
       }
       await this.initialize();
       const res = await request("tools/call", { name: tool, arguments: args });

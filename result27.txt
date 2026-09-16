@@ -1,0 +1,172 @@
+========================================================================
+RESULT 27 — RÀ SOÁT 3a (3 ĐIỂM NGHI VẤN) · VÁ LỖ HỔNG IDEMPOTENCY KHI
+    KHÔI PHỤC HISTORY · 2 CHAOS TEST CHO CRASH-RECOVERY · SKELETON PHASE 9
+Timestamp: 2026-09-16 04:26 UTC (sau result26)
+Env: container Google Cloud Shell · Node v24.20.0 · Python 3.12.3 · Flutter 3.47.2
+Repo erpn_mobile1, branch change/flutter-chat-mvp · HEAD = 05dda38 (chưa push gì mới)
+Tất cả dưới đây là OUTPUT LỆNH THẬT, dán nguyên văn.
+========================================================================
+
+== 0. ĐỌC LẠI NGUỒN SỰ THẬT (7 file user yêu cầu) ==
+working.md · result25/24/23.txt · next.md · checklist.md · AGENTS.md.
+Xác nhận mâu thuẫn duy nhất: brief ghi "Node 86/86" — đó là số SAU Stage B, TRƯỚC
+vòng review (result26 +5 test). Số hiện tại: Node **93/93** (xem §5).
+
+== 1. RÀ SOÁT 3a — 3 ĐIỂM NGHI VẤN (đọc code thật, không suy đoán) ==
+
+(1) readonly-guard vs callWriteTool — KHÔNG xung đột ✅
+  readonly-guard.mjs WRITE_VERBS = [create, update, set_value, insert, delete,
+    submit, cancel, amend, rename, assign, unassign, upload, method_call,
+    move_card, execute]
+  ⇒ `erpnext_doc_create` chứa "create" ⇒ bị chặn ở ĐƯỜNG ĐỌC (callTool).
+  ⇒ `erpnext_doc_submit` chứa "submit" ⇒ bị chặn ở đường đọc, VÀ callWriteTool
+    cũng từ chối (chỉ nhận đúng erpnext_doc_create + doctype Payment Entry)
+    ⇒ submit/delete/cancel hiện KHÔNG có đường nào chạm tới trong code. (đúng
+    "submit chưa nằm trong scope đã ship").
+
+(2) Idempotency store KHÔNG nằm /tmp ✅
+  idempotency.mjs:29  DEFAULT_DIR = process.env.ERPN_IDEM_DIR ?? join(path2RepoRoot(), "idempotency-store")
+  idempotency.mjs:36  path2RepoRoot() = join(dirname(fileURLToPath(import.meta.url)), "..")
+  $ grep -c "^ERPN_IDEM_DIR" .env   →  0     (không override ⇒ dùng default)
+  $ git check-ignore -v mcp-erpnext/idempotency-store/commands.json
+    .gitignore:62:idempotency-store/	mcp-erpnext/idempotency-store/commands.json
+  ⇒ path thật = mcp-erpnext/idempotency-store (trong repo, gitignored) — đúng
+    bài học result22 (/tmp là overlayfs ephemeral).
+
+(3) Flutter commandId qua rebuild card — REBUILD thì OK, KHÔI PHỤC HISTORY thì KHÔNG 🔴
+  Đọc code: chat_models.dart
+    · `String get commandId => _commandIds[this] ??= _newUuidV4();` (Expando theo
+      INSTANCE) ⇒ rebuild/recycle card giữ nguyên key ✅ (fix result24 còn nguyên)
+    · `ActionProposal.toJson()`  — KHÔNG có field command_id
+    · `ActionProposal.fromJson()` — TẠO instance MỚI ⇒ key MỚI
+    · `ChatTurn.fromJson()` gọi `ActionProposal.fromJson(...)` cho history
+    · `ChatHistoryService.load()` = `prefs.getString(...)` → `ChatTurn.fromJson`
+  ⇒ Kịch bản lỗ hổng: user hỏi → card có key A → app restart / history được nạp
+    lại → cùng card đó mang key B → bấm [Xác nhận] ⇒ gateway coi là INTENT MỚI
+    ⇒ GHI THÊM một Payment Entry nháp cho cùng khoản nợ. Cùng họ với bug result24
+    (per-press → per-instance), chỉ dài ngòi hơn: **per-instance không đủ khi
+    instance bị dựng lại từ JSON lưu trữ**.
+
+== 2. FIX (apps/mobile/lib/features/chat/data/chat_models.dart) ==
+  · + `final String? commandIdSeed;` (optional, không phá `@immutable`)
+  · `String get commandId => commandIdSeed ?? (_commandIds[this] ??= _newUuidV4());`
+  · `toJson()` + `'command_id': commandId`  ← GHIM khoá tại thời điểm lưu
+  · `fromJson()` + `commandIdSeed: json['command_id'] as String?`
+  ⇒ Khoá idempotency sống bằng VÒNG ĐỜI CARD (kể cả qua restart), không chỉ vòng
+    đời object trong RAM. Hàng đợi lịch sử cũ (lưu TRƯỚC fix) không có
+    command_id ⇒ nhận key mới — rủi ro tồn dư chỉ với dữ liệu lịch sử cũ, không
+    phải dữ liệu mới (ghi rõ để không phóng đại mức độ fix).
+
+== 3. TEST + FALSIFICATION (output thật) ==
+  2 test mới trong apps/mobile/test/proposal_card_test.dart:
+    · "a card restored from history keeps its ORIGINAL command_id (regression:
+       re-parsing history used to mint a new key ⇒ second write)"
+       - dựng proposal → lấy key → `jsonDecode(jsonEncode(toJson()))` → fromJson
+         (instance MỚI) → assert key bằng nhau → pump card từ instance đã khôi
+         phục → bấm [Xác nhận] → assert `sent['command_id'] == key gốc` + UI hiện
+         "chống trùng"
+    · "ChatTurn history round-trip preserves the proposal command_id"
+       - round-trip cả ChatTurn (đúng đường ChatHistoryService dùng)
+
+  $ flutter test  →  00:04 +27: All tests passed!        (25 → 27)
+  $ flutter analyze →  No issues found! (ran in 6.0s)
+
+  FALSIFICATION (gỡ fix: bỏ 'command_id' khỏi toJson + seed = null):
+    Expected: '763bb7f2-2c06-4f44-bdb2-6491aaa7551a'
+      Actual: '7d14d48a-3531-474e-8b00-62efded1b2a1'
+    Expected: '71c77c70-03d6-496a-b95b-105c3b43a34c'
+      Actual: '0566c1d5-077b-49fd-a4f0-6281877291d6'
+    00:01 +2 -2: Some tests failed.
+  ⇒ 2 UUID KHÁC NHAU = đúng lỗi cần bắt; khôi phục → pass (grep xác nhận fix còn).
+
+== 4. HAI CHAOS TEST MỚI CHO CRASH-RECOVERY (item 3b) ==
+  Fault hook mới trong mock-server.mjs (opt-in, không ảnh hưởng đường thường):
+    · MOCK_ERP_FAIL_AFTER_WRITE — mock GHI document + saveState() RỒI mới throw
+      = "ERPNext đã commit, response mất" (đúng ca nguy hiểm nhất)
+    · MOCK_ERP_FAIL_LIST        — erpnext_doc_list throw = ERPNext chết đúng lúc
+      cần đối soát
+
+  Test 1 — "ERPNext COMMITTED but the response was lost → the retry reconciles to
+  that same document (no second write)":
+    ① POST (có fault) → 503 + retry_same_command_id:true, và đếm LEDGER THẬT từ
+       file state của mock: 1 document ⇒ ERPNext thật sự đã ghi; store KHÔNG FAILED
+    ② restart server (xoá cache RAM) + bỏ fault → POST lại cùng command_id →
+       200 {replay:true, reconciled:true, duplicate_documents:0}; đếm ledger lại
+       **vẫn 1** (kiểm bằng dữ liệu ledger, không tin response).
+  Test 2 — "reconciliation itself fails (ERPNext unreachable) → 503, refuses to
+  guess, writes nothing":
+    record PENDING + có reference → MOCK_ERP_FAIL_LIST → POST → 503 (khớp /đối
+    soát/), ledger vẫn 1, store vẫn PENDING (còn cứu được sau).
+
+  $ node --test test/http-execute.test.mjs
+    ✔ /execute: happy path + duplicate command_id replays with ONE mock write
+    ✔ /execute: rejects bad command_id, wrong action, missing entity id
+    ✔ /execute: RESUMED command reconciles against ERPNext — NO second write
+    ✔ /execute: a transient write failure keeps the command PENDING (503, ...)
+    ✔ /execute chaos: ERPNext COMMITTED but the response was lost → ...
+    ✔ /execute chaos: reconciliation itself fails (ERPNext unreachable) → 503 ...
+    ✔ /execute: an invalid amount is refused at the boundary ...
+    ✔ /execute: FAILED command is terminal (409) even before any ERPNext call
+    ℹ tests 8 · pass 8 · fail 0
+
+  FALSIFICATION chaos test (2 vòng, khôi phục sau mỗi vòng):
+    A) gỡ phân loại afterWrite (luôn store.fail):
+         ✖ chaos lost-response  →  actual: 500,  expected: 503
+    B) gỡ `...existing` trong begin() (bug gốc đã ghi phiếu thứ hai hôm nay):
+         ✖ chaos lost-response  →  actual: 409,  expected: 200
+    (lưu ý: lần thử B đầu tiên KHÔNG chạm được code vì regex không khớp định dạng
+     nhiều dòng — đã kiểm bằng assert + đọc nguyên văn rồi làm lại mới có kết quả;
+     ghi lại để không nhận "falsification đạt" khi thực ra chưa gỡ gì)
+
+== 5. SUITE CUỐI (sau toàn bộ thay đổi phiên này) ==
+  Python  : Ran 58 tests in 0.477s — OK
+  Node    : ℹ tests 93 · pass 93 · fail 0        (86 → 91 sau result26 → 93)
+  Flutter : 00:04 +27: All tests passed!         (25 → 27)
+  analyze : No issues found! (ran in 5.9s)
+
+== 6. SKELETON PHASE 9 (item 3c — PLAN ONLY, KHÔNG code) ==
+  Cập nhật `.plan/phases/phase-09-proposal-state-machine.md` (bản gốc viết TRƯỚC
+  khi có code Phase 6/7 — nay ánh xạ vào code thật):
+  · §1 Hiện trạng ĐÃ CÓ (proposal v1 + risk fail-closed · card confirm · store
+    idempotency + reconcile · PE nháp) — nêu rõ submit CHƯA có.
+  · §2 Khoảng trống THẬT (kiểm bằng grep, không đoán): proposal KHÔNG có
+    `created_at`/snapshot; store KHÔNG có TTL ⇒ expiry/stale là việc mới; và
+    executor hiện **kẹp số tiền trong im lặng** ⇒ Phase 9 đổi thành "lệch ⇒ 409
+    PROPOSAL_STALE, bắt confirm lại" (thay đổi hành vi vùng tiền → phải có test).
+  · §3 State machine ánh xạ vào code + RANH GIỚI khái niệm: 3 trạng thái store
+    là tầng idempotency, KHÔNG phải toàn bộ vòng đời proposal (không nhồi thêm
+    state vào store idempotency).
+  · §4 Skeleton file/hàm đề xuất (proposal-lifecycle.mjs, thay đổi http-ask,
+    card Flutter) — chưa code.
+  · §5 Exit criteria 6 test (thêm 2 test bổ sung: "không xoá document" +
+    "expiry KHÔNG được phá crash-recovery" — chạy trên harness chaos result26).
+  · §6 Không thuộc scope (không write skill mới, không tự submit/cancel/delete).
+
+== 7. VIỆC CỦA USER ==
+  1. DUYỆT COMMIT (vùng tiền — AI không tự commit). Đề xuất tách 2 commit:
+     (a) `feat: phase 7 stage B — first real ERPNext write behind human confirm
+          (reconcile-by-reference, write gate, idempotency)`
+         gồm: payment-write.mjs · client.mjs · http-ask.mjs · idempotency.mjs ·
+               mock-server.mjs · readonly-guard.mjs · 3 test file · result25.txt
+     (b) `fix: one stable idempotency key per card — across retry, rebuild AND
+          history restore; chaos tests for lost-response/reconcile-down`
+         gồm: chat_models.dart · proposal_card.dart · proposal_card_test.dart ·
+               test/http-execute.test.mjs (2 chaos test) · result24/26/27.txt · docs
+     (cũng có thể gộp 1 commit nếu bạn muốn — nhưng (a) là vùng tiền ghi thật,
+      (b) là fix khoá idempotency: tách ra dễ truy vết hơn.)
+  2. Dọn 2 phiếu nháp demo (ACC-PAY-2026-00114/00115) — hướng dẫn result25 §B.8.
+  3. Quyết có SUBMIT phiếu không (nháp ⇒ công nợ chưa đổi).
+  4. Chưa push gì: 8ebfc0e · 05dda38 · toàn bộ đợt Stage B + fix.
+
+== 8. FILE THAY ĐỔI PHIÊN NÀY ==
+  apps/mobile/lib/features/chat/data/chat_models.dart   + seed/idempotency qua JSON
+  apps/mobile/test/proposal_card_test.dart              + 2 test (restore key)
+  mcp-erpnext/src/mock-server.mjs                       + 2 fault hook (chaos)
+  mcp-erpnext/test/http-execute.test.mjs                + 2 chaos test
+  .plan/phases/phase-09-proposal-state-machine.md        viết lại thành skeleton
+  result26.txt · result27.txt · checklist.md · working.md · next.md · handoff
+
+  Secret scan diff: CLEAN · .env và idempotency-store/ đều git-ignored (đã verify
+  bằng `git check-ignore -v`). Không in giá trị key nào ở bất kỳ đâu.
+  ⚠️ CHƯA có lệnh ghi/submit/cancel/delete nào mới trên ERPNext thật trong phiên này.
+========================================================================

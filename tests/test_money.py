@@ -180,6 +180,45 @@ class TestShapeGuards(unittest.TestCase):
         self.assertEqual(normalize("đơn này 5000").amount, 5000)
 
 
+class TestNamesThatLookLikeNumbers(unittest.TestCase):
+    """Customer names ARE numerals far more often than expected.
+
+    "Hai", "Ba", "Tư", "Bảy" are common Vietnamese names, and the kinship
+    stripper deliberately leaves them in place ("Bác Hai" -> "Hai"). A
+    **word** numeral must therefore never merge with a following digit group:
+    before the fix, ``"bác Hai 500 ngàn"`` produced **2.500.000đ** (2 read from
+    the name + 500 ngàn) — a 5x overcharge on the money path (found 2026-09-16
+    while writing faq.md).
+    """
+
+    CASES: list[tuple[str, int]] = [
+        ("ghi nợ cho bác Hai 500 ngàn", 500_000),
+        ("bác Hai 500 ngàn", 500_000),
+        ("cho bác Hai 300 ngàn", 300_000),
+        ("thu tiền bác Hai 2 triệu", 2_000_000),
+        ("chị Bảy 300 ngàn", 300_000),
+        ("anh Ba 200k", 200_000),
+        ("bác Hai mua 1 500 000", 1_500_000),
+        # a plain name is unaffected — the guard is about numeral NAMES
+        ("ghi nợ cho Lan 500 ngàn", 500_000),
+    ]
+
+    def test_name_does_not_inflate_the_amount(self) -> None:
+        for text, expected in self.CASES:
+            with self.subTest(text=text):
+                self.assertEqual(normalize(text).amount, expected)
+
+    def test_digit_groups_still_merge(self) -> None:
+        # The guard must not break the legit space-separated-thousands shape.
+        for text, expected in (
+            ("1 500 000", 1_500_000),
+            ("anh Nam trả 1 500 000đ", 1_500_000),
+            ("12 000 000", 12_000_000),
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(normalize(text).amount, expected)
+
+
 class TestGluedCurrencySuffix(unittest.TestCase):
     """Currency suffix written WITHOUT a space ("2000đ", "5000vnd").
 

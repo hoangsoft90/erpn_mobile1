@@ -45,6 +45,12 @@ export function buildProposal({ action, risk, entity, params = {}, summary = "",
   const proposal = {
     schema: "erpn.proposal/v1",
     action,
+    // Phase 9: age gate. A proposal that cannot prove when it was built (or is
+    // older than PROPOSAL_TTL_MS) is refused by /execute — see
+    // proposal-freshness.mjs. Additive field: clients that ignore it still work
+    // (they just cannot execute), and it survives the client round-trip so a
+    // restored card carries the ORIGINAL build time.
+    created_at: new Date().toISOString(),
     risk: level,
     risk_display: { icon: display.icon, label: display.label },
     need_confirm: display.needConfirm,

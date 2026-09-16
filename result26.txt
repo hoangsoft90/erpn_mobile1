@@ -1,0 +1,161 @@
+========================================================================
+RESULT 26 — REVIEW CODE SAU PHASE 7 STAGE B (vùng TIỀN)
+   5 LỖI THẬT TÌM THẤY TRONG CHÍNH CODE VỪA VIẾT · ĐÃ SỬA · ĐÃ FALSIFY
+   CHỜ DUYỆT COMMIT (vùng tiền — AI không tự ký duyệt, không tự commit)
+Timestamp: 2026-09-16 (sau result25) · Node v24.20.0 · Python 3.12.3 · Flutter 3.47.2
+Repo erpn_mobile1, branch change/flutter-chat-mvp
+Nguyên tắc: mỗi finding phải chỉ ra CƠ CHẾ cụ thể + test bắt được nó; không
+phỏng đoán, không "đọc lại code thấy có vẻ ổn".
+========================================================================
+
+== 0. PHẠM VI REVIEW ==
+Các file thuộc đợt Stage B chưa commit:
+  mcp-erpnext/src/skills/payment-write.mjs      (toàn bộ đường tiền: amount,
+                                                invoice, accounts, mode, write,
+                                                verify, reconcile)
+  mcp-erpnext/src/http-ask.mjs                  (/execute: gate, resumed,
+                                                phân loại lỗi)
+  mcp-erpnext/src/idempotency.mjs               (store 3 trạng thái, persist)
+  mcp-erpnext/src/client.mjs                    (callWriteTool gate)
+  mcp-erpnext/src/mock-server.mjs               (mock trung thực + fault hook)
+  mcp-erpnext/src/readonly-guard.mjs            (whitelist đọc)
+  + 4 file test liên quan
+Cách review: đọc NGUYÊN VĂN từng hàm trên disk (không tin trí nhớ), rồi với mỗi
+kết luận "chỗ này an toàn" phải chỉ ra được dòng code chứng minh.
+
+== 1. 🔴 (1) LỖI SAU KHI GHI BỊ ĐÁNH FAILED ⇒ ĐẨY NGƯỜI DÙNG SANG COMMAND_ID MỚI ==
+Cơ chế: `/execute` bắt mọi exception của `executePaymentProposal()` rồi
+`store.fail(command_id, …)` ⇒ 500. Nhưng lỗi có thể xảy ra SAU khi
+`store.setReference(commandId, commandId)` (đã đăng ký reference) — tức là
+ERPNext CÓ THỂ đã ghi document và chỉ mất response. Hệ quả kép:
+  · `begin()` TỪ CHỐI command FAILED ⇒ lần retry cùng id bị 409 terminal ⇒
+    KHÔNG BAO GIỜ đi vào nhánh reconcile ⇒ không cách nào phát hiện document
+    đã tồn tại;
+  · người dùng bị đẩy sang "tạo command_id mới" (đúng thứ Flutter từng làm,
+    đã sửa ở result24) ⇒ GHI PHIẾU THỨ HAI.
+Fix (phân loại theo reference, fail-closed):
+  const afterWrite =
+    err?.code === "PAYMENT_WRITE_UNVERIFIED" || Boolean(store.status(command_id)?.reference_no);
+  if (afterWrite) → 503 { ok:false, retry_same_command_id:true, error:"… gửi lại
+    ĐÚNG command_id này để hệ thống đối soát với ERPNext (KHÔNG tạo command_id mới)" }
+    và KHÔNG gọi store.fail ⇒ record giữ PENDING (lần sau reconcile được).
+  ngược lại (lỗi TRƯỚC setReference: chưa thể ghi gì) → FAILED + 500 như cũ.
+Bất biến được dùng để phân loại: reference_no CHỈ được set ngay trước lệnh write,
+nên "có reference" ⟺ "đã có thể đã ghi".
+Test hồi quy: "/execute: a transient write failure keeps the command PENDING
+  (503, retry the SAME id) and never burns it as FAILED" — dùng fault injection
+  mới trong mock: MOCK_ERP_FAIL_WRITE=1 ⇒ erpnext_doc_create ném lỗi.
+
+== 2. 🔴 (2) `amount_vnd: 0` / NaN BỊ THĂNG CẤP THÀNH "THU TOÀN BỘ NỢ" ==
+Cơ chế: executor tính
+    const paid = Math.min(Math.round(Number(proposal.params?.amount_vnd) || liveOutstanding), liveOutstanding);
+`Number(x) || liveOutstanding`: 0, NaN, "" đều là falsy ⇒ rơi về liveOutstanding
+⇒ một proposal gửi amount 0 được THĂNG CẤP thành thu HẾT NỢ. Trớ trêu: chính
+`buildPaymentProposal()` ĐÃ từ chối `amount <= 0` (PAYMENT_AMOUNT_INVALID) ⇒
+**cùng một field được validate ở đường build nhưng KHÔNG ở đường execute**, mà
+`/execute` nhận proposal TỪ CLIENT (không bắt buộc do builder sinh ra).
+Fix 2 tầng (defense in depth):
+  · Boundary `/execute` (trước store.begin, KHÔNG chiếm command_id):
+      const amountVnd = Number(proposal.params?.amount_vnd);
+      if (!Number.isFinite(amountVnd) || amountVnd <= 0) → 400
+        { error: "params.amount_vnd phải là số VND > 0" }
+  · Executor (trước setReference ⇒ chưa đăng ký, chưa ghi):
+      throw { code:"PAYMENT_AMOUNT_INVALID" } khi không phải số hữu hạn > 0.
+Test hồi quy:
+  "/execute: an invalid amount is refused at the boundary and does NOT burn the
+   command_id"  → amount 0 · -1 · "abc" · null đều 400; store.status(cid) === null;
+   sau đó gửi lại ĐÚNG id với amount hợp lệ ⇒ 200, paid_vnd = 2.500.000
+   (không phải toàn bộ nợ).
+  "Stage B: an invalid amount is refused and NEVER promoted to the full debt"
+   → 0 · -5 · null · "không rõ" đều throw PAYMENT_AMOUNT_INVALID; 0 write;
+   reference_no không được đăng ký.
+
+== 3. 🟡 (3) `?? modes[0]?.name` CHỌN ĐẠI PHƯƠNG THỨC THANH TOÁN ==
+Cơ chế: `resolvePaymentAccounts()` chọn mode theo thứ tự exact → "cash"-named →
+type Cash → **`modes[0]?.name`** → nhãn gốc. Nhánh thứ 4 chọn một mode BẤT KỲ
+đang bật: site chỉ có "Chuyển khoản"/"Bank Draft" thì ý định "thu tiền mặt" được
+ghi vào TÀI KHOẢN NGÂN HÀNG — sai sổ, im lặng (chỉ báo `mode_substituted_from`
+sau khi đã ghi).
+Fix: bỏ hẳn fallback `modes[0]`; không khớp ⇒ throw PAYMENT_MODE_UNRESOLVED
+  (thông báo nêu danh sách mode đang có), và rethrow qua catch của hàm.
+Test hồi quy: "Stage B: a site with no matching cash mode is REFUSED, never
+  silently posted to another account" (fake mode list chỉ có 2 mode type Bank).
+  Trước fix: rơi xuống erpnext_account_list và ghi tiếp ⇒ test FAIL.
+
+== 4. 🟡 (4) `Number(x) <= 0` ĐỂ LỌT NaN (payload `paid_amount: null`) ==
+Cơ chế: kiểm tra khoản phải thu là `Number(target.outstanding_amount) <= 0`,
+nhưng `NaN <= 0` là false ⇒ dòng outstanding "rác" (vd "abc") lọt qua, tiếp đó
+`Math.round(NaN)` = NaN ⇒ JSON.stringify(NaN) = null ⇒ payload paid_amount null.
+Fix: `Number.isFinite(rawOutstanding) && rawOutstanding > 0` (giữ nguyên
+  `rawOutstanding <= 0` ⇒ bắt cả trường hợp bình thường).
+Test hồi quy: "Stage B: a non-numeric outstanding amount is refused (NaN must not
+  reach the payload)" → "abc" ⇒ PAYMENT_INVOICE_NOT_RECEIVABLE;
+  "" ⇒ PAYMENT_INVOICE_ALREADY_SETTLED (bị lọc từ trước, cũng 0 write).
+
+== 5. 🟡 (5) DOCS/COMMENT SAI + 1 HÀNG BẢNG SKILL VỠ BẢNG ==
+  · http-ask: comment cũ nói "the REAL-server variant is Stage B and
+    intentionally not wired" — nay đã wire; sửa lại cho khớp sự thật.
+  · buildPaymentEntryData(): `source_exchange_rate/target_exchange_rate = 1` là
+    giả định ĐƠN TIỀN TỆ — thêm comment nêu rõ (site nhiều tiền tệ phải đọc tỉ
+    giá thật, KHÔNG tái dùng nguyên trạng).
+  · `.agents/skills/erpn-verify-first/SKILL.md`: hàng về awk chứa pipe CHƯA
+    escape ⇒ vỡ bảng markdown của chính skill (đúng nghịch lý của hàng đó).
+    Đã escape; verify bằng script strip-escape-trước-khi-đếm:
+      table rows: 69 · rows with != 4 structural pipes: none
+    (bài học result26 §7: đừng đếm pipe thô — phải vô hiệu hoá `\|` trước).
+
+== 6. FALSIFICATION — MỖI FIX PHẢI CHỨNG MINH TEST BẮT ĐƯỢC LỖI THẬT ==
+Gỡ fix rồi chạy lại test mới (2 vòng thật, khôi phục ngay sau mỗi vòng):
+
+Vòng 1 — gỡ 3 fix (amount boundary + afterWrite + amount promotion):
+  ✖ /execute: a transient write failure keeps the command PENDING (503, retry the
+    SAME id) and never burns it as FAILED
+      expected: 503,        ← khi fix bị gỡ trả 500
+  ✖ /execute: an invalid amount is refused at the boundary and does NOT burn the
+    command_id
+      expected: 400,        ← khi fix bị gỡ request đi tiếp vào write
+  ✔ "Stage B: an invalid amount…" — CHƯA fail ⇒ FALSIFICATION CHƯA TRỌN VẸN
+    (tôi chỉ gỡ dòng `paid`, khối validate vẫn còn). Đã làm lại vòng 1b:
+Vòng 1b — gỡ LUÔN khối validate trong executor:
+  ✖ Stage B: an invalid amount is refused and NEVER promoted to the full debt
+    AssertionError [ERR_ASSERTION]: amount_vnd=0 must be refused
+  ⇒ đủ bằng chứng: test thật sự bắt được lỗi, không phải test rỗng.
+
+Vòng 2 — gỡ 2 fix mới nhất (mode fallback + NaN):
+  ✖ Stage B: a site with no matching cash mode is REFUSED, never silently posted
+    to another account  → Error: unexpected call erpnext_account_list
+  ✖ Stage B: a non-numeric outstanding amount is refused (NaN must not reach the
+    payload)  → AssertionError: outstanding_amount="abc" must not reach the payload
+Khôi phục: grep xác nhận 4 guard còn đúng 1 lần mỗi cái
+  (Number.isFinite(requested) · Number.isFinite(amountVnd) · const afterWrite = ·
+   const paid = Math.min(Math.round(requested), liveOutstanding);)
+
+== 7. SUITE CUỐI (sau khi khôi phục code) ==
+  Node    : ℹ tests 91 · pass 91 · fail 0        (86 → 91: +5 test hồi quy)
+  Python  : Ran 58 tests in 0.453s — OK
+  Flutter : 00:04 +25: All tests passed!
+  analyze : No issues found! (ran in 5.9s)
+
+== 8. GHI VÀO SKILL BÀI HỌC LỖI (.agents/skills/erpn-verify-first) ==
+Thêm 1 hàng (chưa có, đã grep kiểm trùng):
+  Triệu chứng: gửi `amount_vnd: 0`/NaN/"" vào /execute → ghi phiếu thu TOÀN BỘ nợ.
+  Cơ chế: toán tử `||` biến giá trị SAI thành giá trị LỚN HƠN; cùng một field
+    được validate ở đường build nhưng không ở đường execute; họ hàng: `<= 0` để
+    lọt NaN, `?? modes[0]` chọn đại ⇒ tiền vào sai tài khoản.
+  Cách làm đúng: mọi field tiền phải validate GIỐNG NHAU ở MỌI đường đọc (grep
+    tên field để tìm hết đường); fallback trong đường tiền phải chứng minh an
+    toàn hoặc FAIL CLOSED; test dữ liệu xấu (0/âm/NaN/rỗng) ở CẢ tầng boundary
+    LẪN tầng executor.
+
+== 9. VIỆC CỦA NGƯỜI (KHÔNG tự làm) ==
+  1. Duyệt commit đợt này (vùng tiền): 6 file src + 4 file test + result25/26 +
+     docs. Gồm cả fix `command_id` ổn định (result24) và fix double-write
+     (result25 §B.8) — tất cả đang ở local, CHƯA push.
+  2. Dọn 2 phiếu nháp demo trên ERPNext (ACC-PAY-2026-00114/00115) — hướng dẫn
+     result25 §B.8.
+  3. Có SUBMIT phiếu không (submit mới làm giảm công nợ) — quyết định của bạn.
+  4. Nếu muốn chạy lại kiểm chứng trên ERPNext THẬT với code sau review: cần
+     chọn 1 khách demo còn nợ và 1 command_id mới (không tự chạy).
+
+Không có secret/key nào bị in ra ở bất kỳ đâu (chỉ tên biến môi trường).
+========================================================================
