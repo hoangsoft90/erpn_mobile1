@@ -8,8 +8,9 @@
 > **Ba hiểu nhầm nghiêm trọng nhất, nếu bạn chỉ đọc 3 dòng này:**
 > 1. **Bấm [Xác nhận] xong công nợ KHÔNG giảm** — phiếu thu được tạo ở dạng **NHÁP**,
 >    chưa submit. Không phải app ghi sai.
-> 2. **Trong luồng chat HIỆN CHƯA có gì sinh ra nút [Xác nhận]** — máy móc ghi tiền đã
->    có và đã chạy thật, nhưng dây nối "câu tiếng Việt → đề xuất thu tiền HIGH" còn thiếu.
+> 2. **Nút [Xác nhận thu tiền] chỉ hiện khi bạn ra LỆNH ghi** — nói "thu tiền cho
+>    <tên khách> <số tiền>" thì app tạo đề xuất thu tiền (🔴 Cần xác nhận); câu hỏi
+>    đọc ("còn nợ bao nhiêu") thì không bao giờ có nút này.
 > 3. **Tên khách trùng với từ chỉ số** ("bác **Hai**", "chị **Bảy**") từng làm số tiền
 >    sai gấp nhiều lần — đã vá 2026-09-16, nhưng đây là loại lỗi phải luôn cảnh giác.
 
@@ -120,31 +121,35 @@ hàng trong chứng từ hay hợp đồng.
 
 ### 3.1 "Thu tiền cho chị Lan 500 ngàn" — app có ghi phiếu thu không?
 
-**KHÔNG.** Chạy thật, app trả lời:
+**Không ghi ngay.** Câu này là LỆNH ghi — app tạo **đề xuất** thu tiền (thẻ 🔴 HIGH
+kèm nút [Xác nhận thu tiền]) và DỪNG LẠI ĐÓ. Chưa bấm nút = chưa ghi gì cả; bấm nút
+rồi app mới gọi `/execute` tạo phiếu thu (NHÁP) trên ERPNext.
 
-> `Chị Tư — thầu nhỏ chưa có phiếu thu nào trong hệ thống. Ghi nhận phiếu thu mới là Phase 7 — Phase 2 chỉ đọc.`
+⚠️ Trước 2026-09-16, câu này từng rơi vào nhóm ĐỌC và trả lời "chưa có phiếu thu nào
+... Phase 2 chỉ đọc" — chữ cũ đã được thay bằng đường lệnh ghi thật (xem §3.2).
 
-Đây là **câu trả lời ĐỌC** (xem lịch sử phiếu thu). Câu có chữ "thu tiền" **không** tạo ra
-phiếu thu nào.
+> Câu hỏi ĐỌC về lịch sử có thể bắt đầu bằng động từ synonym — "**thanh toán gần nhất
+> của chị Lan là bao nhiêu**" là câu HỎI (xem lịch sử phiếu thu), KHÔNG phải lệnh ghi;
+> app phân biệt qua từ nghi vấn (bao nhiêu/gần nhất/mới nhất...). Câu lệnh ghi thật
+> luôn có khách + số tiền ở sau động từ.
 
 ### 3.2 Vậy nút [Xác nhận thu tiền] xuất hiện khi nào?
 
-Chỉ khi đề xuất có `action = create_payment_entry`. **Hiện chưa có đường nào trong luồng
-chat sinh ra đề xuất đó** (đã kiểm bằng grep):
+**Chỉ khi bạn ra lệnh thu tiền**, ví dụ: *"thu tiền cho chị Lan 500 ngàn"* — câu lệnh
+đi qua router (nhóm `payment_write`) và sinh đề xuất `action = create_payment_entry`,
+risk **🔴 HIGH**. Câu hỏi ĐỌC ("còn nợ bao nhiêu", "đã trả bao nhiêu", "tồn kho mấy")
+thì **không bao giờ** có nút này — đề xuất của chúng là mức 🟢 chỉ đọc.
 
-- `buildPaymentProposal()` (hàm tạo đề xuất thu tiền) **chỉ được gọi từ test**;
-- tool duy nhất mà trợ lý dùng (`copilot_ask`) chỉ trả về đề xuất **ĐỌC**;
-- router chỉ có 4 nhóm **đọc**: khách/công nợ · bán hàng · phiếu thu · tồn kho.
-
-⇒ **Trong dùng thật, bạn SẼ KHÔNG thấy nút này** (trừ khi gọi `/execute` bằng tay).
-Máy móc ghi tiền *đã có và đã chạy thật* trên ERPNext (2 phiếu nháp demo là bằng chứng),
-nhưng **còn thiếu dây nối** "câu nói tiếng Việt → đề xuất thu tiền HIGH".
-Đây là việc cần quyết định (nối ngay, hay gộp vào Phase 9) — **chưa làm**.
+Đề xuất thu tiền được tạo bằng `buildPaymentProposal()` và **dừng lại ở dạng thẻ xác
+nhận**: bạn bấm [Xác nhận thu tiền] thì app mới gọi `/execute` ghi phiếu thu (NHÁP)
+trên ERPNext. Chưa bấm = chưa ghi gì cả.
 
 ### 3.3 Câu trả lời ghi "Phase 7 — Phase 2 chỉ đọc" là chữ đã CŨ
 
-Phase 7 (ghi phiếu thu) **đã code xong** phần máy móc. Chữ trong câu trả lời là tàn dư của
-Phase 2. Đọc đúng nghĩa: **đường hỏi–đáp hiện chỉ đọc**, không phải "app không có khả năng ghi".
+Chữ này **đã được xoá** khỏi câu trả lời (2026-09-16). Giờ khi bạn xem lịch sử phiếu
+thu, câu trả lời gợi ý đúng cách ghi: *"Để ghi phiếu thu mới, hãy nói 'thu tiền cho
+<tên khách> <số tiền>'"* — và làm theo đúng câu đó thì app sẽ tạo đề xuất thu tiền
+thật (xem §3.2).
 
 ### 3.4 "Ghi nợ" hiểu theo app KHÁC hiểu theo kế toán
 
@@ -334,6 +339,15 @@ python3 -m nlp_service.server            # terminal 1
 cd mcp-erpnext && node src/http-ask.mjs --port 8788   # terminal 2
 curl -X POST http://127.0.0.1:8788/ask -H 'Content-Type: application/json' \
      -d '{"text":"chị Lan còn nợ bao nhiêu"}'
+
+# 4. Thử đề xuất GHI (item 2): đề xuất HIGH trả về, CHƯA ghi gì cho tới khi
+#    bấm [Xác nhận] (gọi /execute) — thử bằng câu:
+curl -X POST http://127.0.0.1:8788/ask -H 'Content-Type: application/json' \
+     -d '{"text":"thu tiền cho chị Lan 500 ngàn"}' | python3 -m json.tool | grep -A4 '"proposal"'
+
+# 5. Route /execute/cancel: chỉ huỷ lệnh PENDING khi ERPNext xác nhận 0 chứng từ
+curl -X POST http://127.0.0.1:8788/execute/cancel -H 'Content-Type: application/json' \
+     -d '{"command_id":"<uuid-của-lệnh-đang-pending>"}'
 ```
 
 ---
@@ -342,8 +356,9 @@ curl -X POST http://127.0.0.1:8788/ask -H 'Content-Type: application/json' \
 
 | Việc | Vì sao quan trọng |
 |---|---|
-| Nối "câu tiếng Việt → đề xuất thu tiền HIGH" | không có nó thì nút [Xác nhận] vô dụng trong dùng thật (§3.2) |
-| Sửa câu trả lời còn ghi "Phase 2 chỉ đọc" | chữ cũ gây hiểu sai về khả năng của app (§3.3) |
+| ~~Nối "câu tiếng Việt → đề xuất thu tiền HIGH"~~ | ✅ ĐÃ XONG 2026-09-16 (item 2 + review vòng 2 F1: câu hỏi lịch sử "thanh toán gần nhất..." đã được phân biệt khỏi lệnh ghi bằng deny-list từ nghi vấn): "thu tiền cho <khách> <số tiền>" → đề xuất HIGH + nút [Xác nhận] thật (§3.2) |
+| ~~Sửa câu trả lời còn ghi "Phase 2 chỉ đọc"~~ | ✅ ĐÃ XOÁ 2026-09-16 (item 2, §3.3) |
 | Quyết định **submit** phiếu thu | không submit thì công nợ không bao giờ giảm (§5.1) |
 | "bạc" = mệnh giá nào · có nhận "m" = triệu không | hai cách nói phổ biến hiện **không** ra số (§1.2) |
 | Cờ "khoảng/hơn" cho số tiền | hiện "hơn 10 triệu" bị hiểu là **đúng** 10 triệu (§1.2) |
+| Route `/execute/cancel` đã có (huỷ lệnh PENDING khi ERPNext xác nhận chưa ghi) | giải quyết "đề xuất treo" — giờ có đường thoát, không còn phải chờ vô hạn |

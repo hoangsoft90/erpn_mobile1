@@ -221,6 +221,27 @@ export class IdempotencyStore {
     rec.reference_no = String(referenceNo).slice(0, 140);
     this._persist();
   }
+
+  /**
+   * Phase 9 — mark a PENDING command CANCELLED, releasing its intent lock.
+   * The HTTP layer only calls this AFTER ERPNext reconciles to ZERO documents
+   * with this reference_no (a write that DID land must never be cancelled —
+   * it must be completed/reconciled instead). COMPLETED/FAILED are refused
+   * here too: cancelling a completed write would hide money that exists.
+   * @param {string} commandId
+   */
+  cancel(commandId) {
+    const db = this._load();
+    const key = commandId.toLowerCase();
+    const rec = db.commands[key];
+    if (!rec) throw new Error("IDEMPOTENCY_NO_PENDING: cancel() without begin()");
+    if (rec.status !== "PENDING") {
+      throw new Error(`IDEMPOTENCY_CANCEL_REFUSED: cannot cancel a ${rec.status} command`);
+    }
+    rec.status = "CANCELLED";
+    rec.cancelled_ts = new Date().toISOString();
+    this._persist();
+  }
 }
 
 /**

@@ -11,10 +11,173 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { fingerprintProposal } from "../src/idempotency.mjs";
+
+// ------------------------------------------------------------------ cancel --
+// Phase 9 (user decision 2026-09-16): /execute/cancel releases a zombie
+// PENDING intent — but ONLY after ERPNext proves zero documents exist.
+
+test("/execute/cancel: PENDING + reconcile finds 0 docs → CANCELLED, intent lock released", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "idem-cancel-"));
+  let server = null;
+  try {
+    const { createAskServer } = await import("../src/http-ask.mjs");
+    const { IdempotencyStore } = await import("../src/idempotency.mjs");
+    const store = new IdempotencyStore(dir);
+    server = createAskServer({ port: 0, host: "127.0.0.1", idemStore: store });
+    const port = await new Promise((res, rej) => {
+      server.once("error", rej);
+      server.listen(0, "127.0.0.1", () => res(server.address().port));
+    });
+    // A zombie PENDING command (crash before/during write, nothing landed).
+    const cid = randomUUID();
+    store.begin(cid, { action: "create_payment_entry", fingerprint: "fp-cancel-ok" });
+    store.setReference(cid, cid);
+
+    const r = await fetch(`http://127.0.0.1:${port}/execute/cancel`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ command_id: cid }),
+    });
+    const body = await r.json();
+    assert.equal(r.status, 200, JSON.stringify(body));
+    assert.equal(body.cancelled, true);
+    assert.equal(store.status(cid).status, "CANCELLED");
+  } finally {
+    server?.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("/execute/cancel: ERPNext HAS the document → refuse (409) + surface the doc; retry /execute still completes it", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "idem-cancel-"));
+  let server = null;
+  process.env.MOCK_ERP_STATE = join(dir, "mock-erp.json");
+  try {
+    const { createAskServer } = await import("../src/http-ask.mjs");
+    const { IdempotencyStore } = await import("../src/idempotency.mjs");
+    const store = new IdempotencyStore(dir);
+    server = createAskServer({ port: 0, host: "127.0.0.1", idemStore: store });
+    const port = await new Promise((res, rej) => {
+      server.once("error", rej);
+      server.listen(0, "127.0.0.1", () => res(server.address().port));
+    });
+    // Crash AFTER the write: ERPNext really has the document. The fingerprint
+    // must MATCH the PROPOSAL the retry will carry (begin() compares them).
+    const cid = randomUUID();
+    store.begin(cid, { action: "create_payment_entry", fingerprint: fingerprintProposal(PROPOSAL) });
+    store.setReference(cid, cid);
+    writeFileSync(
+      process.env.MOCK_ERP_STATE,
+      JSON.stringify({ payments: [{ name: "PE-CANCEL-TEST", reference_no: cid, paid_amount: 500000, docstatus: 0 }] }),
+      "utf8",
+    );
+
+    const r = await fetch(`http://127.0.0.1:${port}/execute/cancel`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ command_id: cid }),
+    });
+    const body = await r.json();
+    assert.equal(r.status, 409, JSON.stringify(body));
+    assert.equal(body.erpnext_doc, "PE-CANCEL-TEST");
+    assert.match(body.error, /KHÔNG huỷ/);
+    assert.equal(store.status(cid).status, "PENDING", "cancel must not change a landed write");
+
+    // The correct path instead: retry /execute → reconcile completes it.
+    const retry = await fetch(`http://127.0.0.1:${port}/execute`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ command_id: cid, proposal: PROPOSAL }),
+    });
+    const rbody = await retry.json();
+    assert.equal(retry.status, 200, JSON.stringify(rbody));
+    assert.equal(rbody.replay, true);
+    assert.equal(rbody.reconciled, true);
+  } finally {
+    delete process.env.MOCK_ERP_STATE;
+    server?.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("/execute/cancel: COMPLETED / FAILED / unknown ids are refused; reconcile-down is 503", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "idem-cancel-"));
+  let server = null;
+  process.env.MOCK_ERP_STATE = join(dir, "mock-erp.json");
+  try {
+    const { createAskServer } = await import("../src/http-ask.mjs");
+    const { IdempotencyStore } = await import("../src/idempotency.mjs");
+    const store = new IdempotencyStore(dir);
+    server = createAskServer({ port: 0, host: "127.0.0.1", idemStore: store });
+    const port = await new Promise((res, rej) => {
+      server.once("error", rej);
+      server.listen(0, "127.0.0.1", () => res(server.address().port));
+    });
+    const post = (cid) =>
+      fetch(`http://127.0.0.1:${port}/execute/cancel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ command_id: cid }),
+      }).then(async (r) => ({ status: r.status, body: await r.json() }));
+
+    // unknown id
+    const missing = await post(randomUUID());
+    assert.equal(missing.status, 404);
+
+    // COMPLETED: cancelling must never hide a landed write
+    const done = randomUUID();
+    store.begin(done, { action: "create_payment_entry", fingerprint: "fp-done" });
+    store.complete(done, { erpnext_doc: "PE-DONE" });
+    const doneRes = await post(done);
+    assert.equal(doneRes.status, 409, JSON.stringify(doneRes.body));
+    assert.match(doneRes.body.error, /COMPLETED/);
+
+    // FAILED is terminal already — cancel is pointless, refuse with guidance
+    const failed = randomUUID();
+    store.begin(failed, { action: "create_payment_entry", fingerprint: "fp-failed" });
+    store.fail(failed, "bad params");
+    const failedRes = await post(failed);
+    assert.equal(failedRes.status, 409);
+    assert.match(failedRes.body.error, /FAILED/);
+
+    // PENDING without reference: cannot reconcile ⇒ refuse
+    const noRef = randomUUID();
+    store.begin(noRef, { action: "create_payment_entry", fingerprint: "fp-noref" });
+    const noRefRes = await post(noRef);
+    assert.equal(noRefRes.status, 409, JSON.stringify(noRefRes.body));
+    assert.match(noRefRes.body.error, /reference_no/);
+
+    // PENDING with reference but ERPNext down: 503, never a blind cancel
+    const down = randomUUID();
+    store.begin(down, { action: "create_payment_entry", fingerprint: "fp-down" });
+    store.setReference(down, down);
+    process.env.MOCK_ERP_FAIL_LIST = "1";
+    const downRes = await post(down);
+    assert.equal(downRes.status, 503, JSON.stringify(downRes.body));
+    assert.equal(store.status(down).status, "PENDING", "still recoverable after a 503");
+    delete process.env.MOCK_ERP_FAIL_LIST; // the following cancels need ERPNext healthy
+
+    // idempotent second cancel (ERPNext healthy again — FAIL_LIST cleared)
+    const c1 = randomUUID();
+    store.begin(c1, { action: "create_payment_entry", fingerprint: "fp-c1" });
+    store.setReference(c1, c1);
+    const ok1 = await post(c1);
+    assert.equal(ok1.status, 200, JSON.stringify(ok1.body));
+    const ok2 = await post(c1);
+    assert.equal(ok2.status, 200, JSON.stringify(ok2.body));
+    assert.equal(ok2.body.replay, true);
+  } finally {
+    delete process.env.MOCK_ERP_FAIL_LIST;
+    delete process.env.MOCK_ERP_STATE;
+    server?.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 // Hermetic: same shell-leak protection as http-ask.test.mjs.
 for (const k of Object.keys(process.env)) {

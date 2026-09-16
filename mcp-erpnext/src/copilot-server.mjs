@@ -20,6 +20,7 @@
 
 import { createMcpClient, MOCK_SERVER } from "./client.mjs";
 import { routeIntent } from "./router.mjs";
+import { buildPaymentProposal } from "./skills/payment-write.mjs";
 import { realServerScript } from "./index.mjs";
 import { buildProposal, readProposal } from "./action-proposal.mjs";
 
@@ -309,6 +310,61 @@ export async function answerQuestion(rawText) {
       ? " (⚠️ tên khách trùng nhiều kết quả — đã lấy kết quả đầu tiên, entity resolution mở rộng là Phase 6.5)"
       : "";
 
+    // Phase 7b (user decision 2026-09-16): the ONLY write-producing intent.
+    // "thu tiền cho <khách> <số tiền>" → a HIGH proposal that STOPS at the
+    // card; nothing is written until POST /execute (human confirm). The write
+    // itself re-reads live ERPNext data and re-validates (Phase 9).
+    if (route.group === "payment_write") {
+      const { customer, ambiguous, candidates } = await resolveCustomer(skills, nlp.text);
+      if (!customer) {
+        return {
+          question: rawText,
+          normalized: nlp,
+          routed: { group: route.group, matched: route.matched },
+          answer: null,
+          reason: ambiguous
+            ? `tên khách trong "${rawText}" khớp nhiều kết quả (${(candidates ?? []).slice(0, 5).join(", ")}) — cần nói rõ tên đầy đủ trước khi ghi phiếu thu`
+            : `không tìm thấy khách hàng trong "${rawText}" — không ghi phiếu thu`,
+          proposal: null,
+          ambiguous,
+          candidates: candidates ?? [],
+        };
+      }
+      try {
+        const built = await buildPaymentProposal(
+          skills,
+          { customer, ambiguous, candidates },
+          { amount_vnd: nlp.amount ?? undefined },
+        );
+        const amt = built.proposal.params.amount_vnd;
+        const answer = `Đề xuất thu ${formatVnd(amt)}đ từ ${customer.customer_name} cho chứng từ ${built.invoice} — kiểm tra và bấm [Xác nhận] để ghi phiếu thu (đề xuất chỉ TẠO PHIẾU NHÁP, chưa submit).${ambNote}`;
+        return {
+          question: rawText,
+          normalized: nlp,
+          routed: { group: route.group, matched: route.matched },
+          customer: { id: customer.name, name: customer.customer_name },
+          invoice: built.invoice,
+          outstanding_vnd: built.outstanding_vnd,
+          warnings: built.warnings,
+          answer,
+          proposal: built.proposal,
+        };
+      } catch (err) {
+        // Builder refusals are ANSWERS, not crashes: the user must know why no
+        // card appeared (no open document / ambiguous name / nothing to collect).
+        return {
+          question: rawText,
+          normalized: nlp,
+          routed: { group: route.group, matched: route.matched },
+          customer: customer ? { id: customer.name, name: customer.customer_name } : null,
+          answer: null,
+          reason: `không tạo được đề xuất thu tiền: ${err?.message ?? err}`,
+          error_code: err?.code ?? null,
+          proposal: null,
+        };
+      }
+    }
+
     if (route.group === "payment") {
       const pays = await skills.listPaymentEntries(customer.name, knownIds);
       const rows = (pays.data?.data ?? []).map((p) => ({
@@ -319,8 +375,8 @@ export async function answerQuestion(rawText) {
       const total = rows.reduce((s, r) => s + r.amount_vnd, 0);
       const answer =
         rows.length > 0
-          ? `${customer.customer_name} đã có ${rows.length} phiếu thu, tổng ${formatVnd(total)}đ (mới nhất: ${rows[0].id} ngày ${rows[0].date}). Ghi nhận phiếu thu mới là Phase 7 — Phase 2 chỉ đọc.${ambNote}`
-          : `${customer.customer_name} chưa có phiếu thu nào trong hệ thống. Ghi nhận phiếu thu mới là Phase 7 — Phase 2 chỉ đọc.${ambNote}`;
+          ? `${customer.customer_name} đã có ${rows.length} phiếu thu, tổng ${formatVnd(total)}đ (mới nhất: ${rows[0].id} ngày ${rows[0].date}).${ambNote}`
+          : `${customer.customer_name} chưa có phiếu thu nào trong hệ thống. Để ghi phiếu thu mới, hãy nói "thu tiền cho <tên khách> <số tiền>".${ambNote}`;
       // Phase 6: the read itself is READ-level; the FUTURE write this question
       // points at (create_payment_entry) is HIGH — surfaced in the proposal so
       // the UI can show what a confirmation would guard from Phase 7 on.

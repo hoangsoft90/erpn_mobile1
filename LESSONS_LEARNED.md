@@ -18,15 +18,30 @@
 
 2. **Falsification hụt — tưởng đã chứng minh mà chưa** — gỡ fix nhưng khối validate
    khác vẫn còn (result26), regex sed không khớp code nhiều dòng nên không có gì bị
-   sửa (result27), ghi "không cần falsify" rồi phải rút lại (result29 §10).
+   sửa (result27), ghi "không cần falsify" rồi phải rút lại (result29 §10), grep marker
+   TAP `not ok` trong khi Node 24 in spec reporter `✖` ⇒ 2 lần "falsify đạt" thực ra
+   chưa nhìn đúng output (result31 §11).
    Luật: mỗi vòng falsify phải chứng minh FILE ĐỔI THẬT (grep trước–sau) + test FAIL
-   đúng assertion, rồi mới khôi phục.
+   đúng assertion, rồi mới khôi phục; marker pass/fail của tool phải lấy từ output
+   THẬT của chính nó trong môi trường hiện tại.
 
 3. **Fallback âm thầm biến giá trị sai thành giá trị nguy hiểm hơn** — `Number(x) ||
    live` biến 0/NaN thành thu toàn bộ nợ (result26), `?? modes[0]` chọn đại phương
    thức ⇒ sai tài khoản (result26), `Math.min` clamp im lặng (Phase 7, nay là 409
-   PROPOSAL_STALE). Luật: trong đường tiền, fallback phải fail-closed hoặc được chứng
-   minh an toàn; cùng 1 field phải validate GIỐNG NHAU ở mọi đường đọc.
+   PROPOSAL_STALE), anchor bắt đầu câu vẫn nuốt câu hỏi ĐỌC lịch sử bắt đầu bằng
+   động từ synonym — "thanh toán gần nhất..." normalize thành "payment gần nhất..."
+   (result31 §11-F1, fix bằng deny-list từ nghi vấn). Luật: trong đường tiền, fallback
+   phải fail-closed hoặc được chứng minh an toàn; cùng 1 field phải validate GIỐNG NHAU
+   ở mọi đường đọc; route có hướng phân biệt (lệnh ghi vs câu hỏi đọc) phải có
+   deny-list tường minh, không chỉ anchor một chiều.
+
+4. **Async handler để store-mutation throw ngoài catch ⇒ crash cả process** —
+   `store.cancel()` throw `IDEMPOTENCY_CANCEL_REFUSED` khi race với `/execute` đồng
+   thời; không có global unhandledRejection handler (fail-fast cố ý) ⇒ Node ≥15 exit 1
+   (result31 §11-F2). Suite unit KHÔNG bắt được vì child-process cách ly che crash.
+   Luật: mọi store-mutation đặt trạng thái terminal trong async HTTP handler phải nằm
+   trong try/catch → map lỗi thành 409; suite pass ≠ không crash — kiểm exit code
+   process thật khi nghi race.
 
 4. **State sống qua vòng đời sai** — `command_id` đổi khi rebuild card (result24),
    đổi khi khôi phục history vì `toJson` không ghim (result27), zombie PENDING khoá

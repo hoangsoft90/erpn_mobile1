@@ -21,6 +21,37 @@ test("routes payment intent", () => {
   assert.equal(routeIntent("phiếu thu cho anh Nam")?.group, "payment");
 });
 
+test("Phase 7b: a collect-money COMMAND at sentence start routes to payment_write", () => {
+  // The Phase 1 synonym mapper rewrites the verb "thu tiền/trả tiền/thanh
+  // toán" to canonical "payment" — a write COMMAND begins its sentence with
+  // it. Anchor is the sentence START: substring matching would swallow
+  // reading questions like "chưa thanh toán" (→ "...chưa payment").
+  assert.equal(routeIntent("payment cho chị Lan 500 ngàn")?.group, "payment_write");
+  assert.equal(routeIntent("payment chị Lan 500 ngàn")?.group, "payment_write");
+  assert.equal(routeIntent("payment Lan")?.group, "payment_write"); // no amount → full-debt proposal, still a visible HIGH card
+});
+
+test("Phase 7b anchor: reading questions containing 'payment' mid-sentence do NOT route to payment_write", () => {
+  // Regression for the route swap found while wiring (copilot.test.mjs
+  // credit-note E2E started hitting the write group).
+  assert.equal(routeIntent("Trần Văn Hai còn bao nhiêu hóa đơn chưa payment")?.group, "sales");
+  assert.equal(routeIntent("Trần Văn Hai đã payment bao nhiêu")?.group, "payment");
+});
+
+test("Phase 7b anchor round 2: READ-history questions that START with 'payment' do NOT route to payment_write", () => {
+  // Review finding 2026-09-16: "thanh toán gần nhất của chị Lan..." (a READ
+  // history question) normalizes to a sentence STARTING with "payment" — the
+  // sentence-start anchor alone swallowed it into the WRITE group. Question
+  // words deny-list the write route; these must reach the READ groups.
+  assert.equal(routeIntent("payment gần nhất của chị Lan là bao nhiêu")?.group, "payment");
+  assert.equal(routeIntent("payment mới nhất của anh Nam")?.group, "payment");
+  assert.equal(routeIntent("payment gần nhất cho chị Lan")?.group, "payment");
+  // ...while the collect-money commands still route to the write group.
+  assert.equal(routeIntent("payment cho chị Lan 500 ngàn")?.group, "payment_write");
+  assert.equal(routeIntent("payment chị Lan 500 ngàn")?.group, "payment_write");
+  assert.equal(routeIntent("payment cho Lan")?.group, "payment_write");
+});
+
 test("routes customer/receivable intent", () => {
   assert.equal(routeIntent("công nợ của anh Nam là bao nhiêu")?.group, "customer");
   assert.equal(routeIntent("khách hàng còn nợ mấy")?.group, "customer");

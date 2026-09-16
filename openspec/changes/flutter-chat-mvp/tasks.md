@@ -46,7 +46,7 @@
 
 - [x] 6.1 Phase 6 (entity resolution + Risk Level + ProposalCard) — ✅ commit `553d962`.
 - [x] 6.2 Phase 7 Stage A (idempotency + /execute mock + nút Flutter) — ✅ commit `8ebfc0e`.
-- [ ] 6.3 Phase 7 Stage B + review vùng tiền + chaos test (result25/26/27) — **chờ user duyệt commit (a)**.
-- [ ] 6.4 faq.md + 2 fix NLP/resolver (result28) — **chờ user duyệt commit (b)**.
-- [ ] 6.5 Phase 9 phần an toàn: TTL + re-validate + intent lock + `clash_command_id` (result29) — **chờ user duyệt commit (c)**; route `/execute/cancel` + nối `buildPaymentProposal()` vào router (dây [Xác nhận] thật) là việc tiếp theo — xem next.md.
-- [ ] 6.6 Còn treo chờ user: SUBMIT phiếu thu demo · dọn 2 PE demo · thought_signature live · audio 150 câu · APK thật.
+- [x] 6.3 Phase 7 Stage B + review vùng tiền + chaos test (result25/26/27) — ✅ **commit `eea0411` (đã duyệt + push 2026-09-16)**.
+- [x] 6.4 faq.md + 2 fix NLP/resolver (result28) — ✅ cùng commit `eea0411`.
+- [x] 6.5 Phase 9 phần an toàn: TTL + re-validate + intent lock + `clash_command_id` (result29) — ✅ cùng commit `eea0411`; **result31 đã nối thêm**: route `/execute/cancel` (chỉ huỷ PENDING sau reconcile=0) + nối `buildPaymentProposal()` vào router (nhóm `payment_write`, anchor `startsWith` + `notIf` — nút [Xác nhận] thật qua E2E + widget test JSON verbatim); review vòng 2 (result31 §11): F1 anchor nuốt câu đọc lịch sử (fix deny-list + test round 2) · F2 `store.cancel()` ngoài try/catch → crash process risk (đã bọc) · F3 reason dùng `rawText`. Suite: Node 119/119 · Python 60/60 · Flutter 29/29 · analyze 0 — **9 file + result31 addendum CHỜ DUYỆT COMMIT tiếp theo**.
+- [x] 6.6 Còn treo chờ user: SUBMIT phiếu thu demo (2 PE demo đã xoá 2026-09-16 qua `erpnext_doc_delete`, verify hóa đơn gốc không đổi) · thought_signature live · audio 150 câu · APK thật.

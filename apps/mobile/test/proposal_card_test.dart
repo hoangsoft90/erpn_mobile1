@@ -93,6 +93,40 @@ Widget _hostWithMock(ActionProposal proposal, Handler handler) =>
     );
 
 void main() {
+  testWidgets(
+      'Phase 7b: the REAL /ask write-proposal JSON renders the [Xác nhận thu tiền] button',
+      (tester) async {
+    // Verbatim shape of the proposal the E2E pipeline returns for
+    // "thu tiền cho chị Lan 500 ngàn" (copilot.test.mjs Phase 7b E2E, mock
+    // ERPNext) — parsed exactly like AskResult.fromJson parses it.
+    final serverJson = <String, dynamic>{
+      'schema': 'erpn.proposal/v1',
+      'action': 'create_payment_entry',
+      'created_at': '2026-09-16T07:40:00.000Z',
+      'risk': 'HIGH',
+      'risk_display': {'icon': '🔴', 'label': 'Cần xác nhận'},
+      'need_confirm': true,
+      'need_double_confirm': false,
+      'executable': false,
+      'entity': {'kind': 'customer', 'id': 'CUST-00001', 'name': 'Nguyễn Thị Lan'},
+      'params': {
+        'amount_vnd': 500000,
+        'invoice': 'SINV-0001',
+        'outstanding_vnd': 2500000,
+        'mode': 'Tiền mặt',
+      },
+      'summary': 'Thu 500.000đ từ Nguyễn Thị Lan cho chứng từ SINV-0001',
+    };
+    final proposal = ActionProposal.fromJson(serverJson);
+    await tester.pumpWidget(_host(proposal));
+    // THE assertion the whole Phase 7b wire exists for: the confirm button is
+    // really there for a real server payload (before this, no chat answer
+    // could ever produce it — result28 §3).
+    expect(find.textContaining('Xác nhận thu tiền'), findsOneWidget);
+    expect(find.textContaining('🔴 Cần xác nhận'), findsOneWidget);
+    expect(find.textContaining('SINV-0001'), findsOneWidget);
+  });
+
   testWidgets('READ proposal renders badge, summary, entity id — no confirm note',
       (tester) async {
     await tester.pumpWidget(_host(_proposal('READ')));

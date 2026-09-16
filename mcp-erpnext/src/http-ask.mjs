@@ -169,6 +169,109 @@ export function createAskServer({ port = 8788, host = "127.0.0.1", policy = null
       sendJson(res, 200, { ok: true, service: "copilot-ask", port });
       return;
     }
+    if (req.method === "POST" && path === "/execute/cancel") {
+      // Phase 9 (user decision 2026-09-16, resolves result29 §10-F2): a PENDING
+      // command whose (customer, invoice) intent is locked can now be CANCELLED
+      // — but only after ERPNext itself proves the write never landed.
+      // reconcile finds 0 documents with this reference_no ⇒ nothing was
+      // written ⇒ the record is terminal-safe to mark CANCELLED, releasing the
+      // intent lock. If reconcile finds a document (or errors), we NEVER cancel:
+      // the money may exist — the human resolves that on ERPNext.
+      let body;
+      try {
+        const raw = await readBody(req);
+        body = raw ? JSON.parse(raw) : {};
+      } catch (err) {
+        sendJson(res, 400, { ok: false, error: `invalid request body: ${err.message}` });
+        return;
+      }
+      const { command_id } = body ?? {};
+      if (!isValidCommandId(command_id)) {
+        sendJson(res, 400, { ok: false, error: "command_id must be a client-generated UUID" });
+        return;
+      }
+      const rec = store.status(command_id);
+      if (!rec) {
+        sendJson(res, 404, { ok: false, error: `không có lệnh nào với command_id này` });
+        return;
+      }
+      if (rec.status === "COMPLETED") {
+        sendJson(res, 409, {
+          ok: false,
+          error: "lệnh đã COMPLETED — tiền đã ghi; không thể huỷ bằng API này (kiểm tra ERPNext nếu cần hoàn tác)",
+          result: rec.result ?? null,
+        });
+        return;
+      }
+      if (rec.status === "CANCELLED") {
+        sendJson(res, 200, { ok: true, cancelled: true, replay: true });
+        return;
+      }
+      if (rec.status === "FAILED") {
+        sendJson(res, 409, { ok: false, error: "lệnh đã FAILED (terminal) — không cần huỷ; hãy tạo command_id mới cho ý định đã sửa" });
+        return;
+      }
+      // PENDING: the ONLY safe cancel is after ERPNext proves 0 documents.
+      if (!rec.reference_no) {
+        sendJson(res, 409, {
+          ok: false,
+          error: "lệnh PENDING nhưng chưa có reference_no — không thể đối soát, KHÔNG huỷ từ xa; cần người kiểm tra ERPNext",
+          command_id,
+        });
+        return;
+      }
+      let mcpC;
+      try {
+        mcpC = createMcpClient({ serverScript: pickServerScript() });
+        await mcpC.initialize();
+        const rec2 = await reconcilePaymentEntry(mcpC, rec.reference_no);
+        if (rec2.found) {
+          // The write DID land. Cancel is refused; surface the document so the
+          // caller can complete the command instead (retry /execute replays it).
+          sendJson(res, 409, {
+            ok: false,
+            error: `ERPNext CÓ chứng từ ${rec2.doc?.name ?? "?"} mang reference_no này — KHÔNG huỷ; gửi lại /execute với cùng command_id để hoàn tất lệnh`,
+            erpnext_doc: rec2.doc?.name ?? null,
+            duplicate_documents: rec2.duplicates ? rec2.count : 0,
+            command_id,
+          });
+          return;
+        }
+      } catch (err) {
+        // Reconcile itself failed (ERPNext down): refuse rather than guess.
+        sendJson(res, 503, {
+          ok: false,
+          error: `không đối soát được với ERPNext — KHÔNG huỷ để tránh trạng thái sai: ${err?.message ?? err}`,
+          command_id,
+        });
+        return;
+      } finally {
+        if (mcpC) await mcpC.close().catch(() => {});
+      }
+      // Review 2026-09-16: a concurrent /execute (same command_id, e.g. a
+      // double-tap on the card) can COMPLETE the command between the status
+      // read above and this call — store.cancel() then refuses. Left uncaught
+      // it would escape the async handler as an unhandled rejection and CRASH
+      // the whole process (Node ≥15 default). Map it to a 409 instead.
+      try {
+        store.cancel(command_id);
+      } catch (err) {
+        sendJson(res, 409, {
+          ok: false,
+          error: `không thể huỷ: ${err?.message ?? err}`,
+          command_id,
+          status: store.status(command_id)?.status ?? null,
+        });
+        return;
+      }
+      sendJson(res, 200, {
+        ok: true,
+        cancelled: true,
+        command_id,
+        note: "lệnh đã huỷ sau khi ERPNext xác nhận chưa ghi chứng từ nào — có thể tạo ý định mới",
+      });
+      return;
+    }
     if (req.method === "POST" && path === "/execute") {
       // Phase 7 confirm-execute endpoint. Runs against the REAL ERPNext server
       // when ERPNEXT_* is configured (verified end-to-end 2026-09-16), the mock

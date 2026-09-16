@@ -15,6 +15,7 @@ import * as customer from "./skills/customer.mjs";
 import * as sales from "./skills/sales.mjs";
 import * as payment from "./skills/payment.mjs";
 import * as inventory from "./skills/inventory.mjs";
+import * as paymentWrite from "./skills/payment-write.mjs";
 
 /**
  * Routes need an mcp client + a knownIds set at CALL time, not at import time
@@ -27,6 +28,28 @@ import * as inventory from "./skills/inventory.mjs";
 
 /** @type {Array<{group: string, keywords: string[]}>} */
 const ROUTES = [
+  // WRITE FIRST (Phase 7b, user decision 2026-09-16): the Phase 1 synonym
+  // mapper rewrites the VERB "thu tiền/trả tiền/thanh toán" to canonical
+  // "payment". But "payment" ALSO appears inside READING questions
+  // ("chưa thanh toán" → "chưa payment", "đã thanh toán" → "đã payment"), so
+  // a substring keyword cannot separate them. A collect-money COMMAND begins
+  // its sentence with the verb — the write route is therefore anchored to the
+  // SENTENCE START (checked in routeIntent, not a substring keyword).
+  // Review round 2 (2026-09-16): sentence-start alone is STILL not enough —
+  // "thanh toán gần nhất của chị Lan là bao nhiêu" (READ history) also
+  // normalizes to a sentence starting with "payment". Question/history words
+  // deny-list the write route; such questions fall through to the READ
+  // payment group (substring "payment"). Fail-safe both ways: a misrouted
+  // write only ever shows a HIGH card, a misrouted read only shows history.
+  // An amount is NOT required for routing: without one the writer builds a
+  // full-debt proposal, which is still a visible HIGH card the user must
+  // confirm — never an implicit write.
+  {
+    group: "payment_write",
+    keywords: ["payment"],
+    startsWith: true,
+    notIf: /bao nhiêu|bao nhieu|mấy|may |gần nhất|gan nhat|mới nhất|moi nhat|\?/,
+  },
   // SPECIFIC groups FIRST — the customer group is intentionally broad
   // ("khách"/"nợ"/"còn lại" appear in most questions), so a broad-first order
   // swallows invoice/stock/payment questions that merely mention a customer
@@ -68,6 +91,15 @@ const ROUTES = [
 
 /** @type {Record<string, (mcp: object, knownIds: Set<string>) => object>} */
 const SKILL_FACTORIES = {
+  // Phase 7b: the ONLY write path. findCustomer is the same ID-from-tool-result
+  // resolver the read groups use — a write never resolves a customer by guess.
+  // buildPaymentProposal expects a skills bag with listUnpaidInvoices (same
+  // customer-ID-guarded read the sales group uses) + the builder itself.
+  payment_write: (mcp, knownIds) => ({
+    findCustomer: (n) => customer.findCustomer(mcp, n, knownIds),
+    listUnpaidInvoices: (id) => sales.listUnpaidInvoices(mcp, id, knownIds),
+    buildPaymentProposal: (resolved, opts) => paymentWrite.buildPaymentProposal({ listUnpaidInvoices: (cid) => sales.listUnpaidInvoices(mcp, cid, knownIds) }, resolved, opts),
+  }),
   customer: (mcp, knownIds) => ({
     findCustomer: (n) => customer.findCustomer(mcp, n, knownIds),
     getCustomer: (id) => customer.getCustomer(mcp, id, knownIds),
@@ -98,9 +130,20 @@ const SKILL_FACTORIES = {
 export function routeIntent(text) {
   // "khách hàng" is THE Vietnamese word for customer — the inventory keyword
   // "hàng" must never eat it (router.test regression, result9).
-  const t = ` ${String(text).toLowerCase().replaceAll("khách hàng", "khách")} `;
+  const raw = String(text).toLowerCase().replaceAll("khách hàng", "khách");
+  const t = ` ${raw} `;
   for (const route of ROUTES) {
-    const hit = route.keywords.find((kw) => t.includes(kw.toLowerCase()));
+    // startsWith routes (the Phase 7b write) anchor to the SENTENCE START —
+    // substring matching would also swallow reading questions that merely
+    // CONTAIN the word ("...chưa payment"). Both checks use the same
+    // normalized text, so the anchor survives the khach-hang rewrite.
+    const hit = route.startsWith
+      ? route.keywords.find(
+          (kw) =>
+            raw.startsWith(kw.toLowerCase()) &&
+            !(route.notIf && route.notIf.test(raw)),
+        )
+      : route.keywords.find((kw) => t.includes(kw.toLowerCase()));
     if (hit) {
       return { group: route.group, factory: SKILL_FACTORIES[route.group], matched: hit.trim() };
     }

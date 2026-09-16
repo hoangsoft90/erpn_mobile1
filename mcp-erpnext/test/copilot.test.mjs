@@ -247,6 +247,40 @@ test("copilot E2E: receivable answer carries a READ-level erpn.proposal/v1", asy
   }
 });
 
+test("copilot E2E Phase 7b: a collect-money command returns a HIGH write proposal (the confirm button's wire)", async () => {
+  // THE missing wire (result28 §3), now closed: "thu tiền cho <khách> <số tiền>"
+  // must produce action=create_payment_entry / risk=HIGH through the REAL
+  // pipeline (NLP service + router + copilot + mock ERPNext) — not by calling
+  // buildPaymentProposal directly like the old tests did.
+  const nlp = await startNlpService();
+  const copilot = startCopilot(nlp.port);
+  try {
+    await copilot.request("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } });
+    const out = await copilot.call("thu tiền cho chị Lan 500 ngàn");
+    assert.equal(out.routed?.group, "payment_write", JSON.stringify(out).slice(0, 400));
+    const p = out.proposal;
+    assert.ok(p, "a write proposal must be present");
+    assert.equal(p.action, "create_payment_entry");
+    assert.equal(p.risk, "HIGH");
+    assert.equal(p.need_confirm, true);
+    // isExecutable(HIGH) is false BY DESIGN: execution goes through the human
+    // confirm flow (POST /execute), never implicit. The card must NOT claim
+    // executability — the /execute gate re-checks the action anyway.
+    assert.equal(p.executable, false);
+    assert.equal(p.entity.name, "Nguyễn Thị Lan");
+    assert.equal(p.params.amount_vnd, 500_000); // from the NLP amount, not the full debt
+    assert.ok(Number.isFinite(p.params.outstanding_vnd), "drift snapshot must be present");
+    assert.equal(p.params.invoice, "SINV-0001"); // oldest open invoice of the mock
+    assert.ok(typeof p.created_at === "string", "Phase 9 age gate needs created_at");
+    // Nothing was written: a proposal is an INTENT — the mock ledger is untouched
+    // (no /execute call happened in this test).
+    assert.ok(out.answer.includes("Xác nhận"), out.answer);
+  } finally {
+    await copilot.close();
+    nlp.child.kill();
+  }
+});
+
 test("copilot E2E: no-route and not-found answers carry proposal: null (honest absence)", async () => {
   const nlp = await startNlpService();
   const copilot = startCopilot(nlp.port);
