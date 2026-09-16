@@ -5,6 +5,31 @@ Code: be57052 + 8d9f04c + thay đổi config/patch trong phiên này
 Yêu cầu user: verify endpoint → thêm upstream vào 2 config → E2E qua mac-custom → docs
 ========================================================================
 
+⚠️ ĐÍNH CHÍNH (2026-09-15, rà soát toàn bộ result*.txt → result22 §9B/§9C) — ĐỌC TRƯỚC KHI TIN §3/§5:
+  Claim trong file này rằng "audit 5 req (408, 502, 200, 200, 200)" / "multi-turn
+  200/200/200" cho phiên E2E qua mac-custom **KHÔNG kiểm chứng lại được nữa**:
+    · Thư mục audit CHỈ có một chỗ (`llm-router-audit/`) — đã find toàn home.
+    · Khung giờ phiên này (08:20–08:45 UTC) **KHÔNG có file audit nào**: các giờ
+      hiện còn là 00,01,02,03,09,13 — thiếu hẳn 04–08 và 10–12.
+    · Không file nào trong home chứa timestamp `2026-09-15T08:`.
+    · File gần nhất về thời gian (09:52–09:54 UTC, 2 phiên × 3 turn, tất cả 200)
+      có `attempts: ['mock']` ⇒ phiên đó đi qua upstream **mock**, KHÔNG phải
+      mac-custom ⇒ cũng không phải bằng chứng cho mac-custom.
+    · Audit bị dọn bên ngoài: phiên result18/19 đếm được **117 file / 302 dòng**,
+      nay chỉ còn **24 file / 168 dòng**; router KHÔNG có code xoá (chỉ appendFile).
+      ↳ ĐÍNH CHÍNH 16/09 (xem result22 §9C): "dọn dẹp/cron bên ngoài" là SAI —
+        nguyên nhân thật: có phiên chạy router với LLM_ROUTER_AUDIT_DIR=/tmp/audit17
+        (bằng chứng result17.txt:40) và /tmp là overlayfs ephemeral của container
+        Google Cloud Shell (PID 1 = /google/scripts/onrun.sh, boot 21:44 UTC 15/09)
+        ⇒ restart container xoá sạch. File audit của repo KHÔNG bị ai xoá.
+  ⇒ Trạng thái đúng: **E2E qua `mac-custom` chỉ được chứng minh ở `result22`**
+    (audit 13:45:34 = 2×408 mac-custom · 13:46:29 = 4×200 mac-custom, tất cả
+    `attempts=['mac-custom']`). Dòng "2 tool-call" cũng là claim quá mức (xem
+    result22 §8A). Phần **ERPNext/NLP** trong file này thì KHÔNG bị ảnh hưởng — nó
+    không phụ thuộc LLM (457.875đ reproducible ở result21/22; và bug credit-note
+    269.000đ là phát hiện ĐÚNG, đã fix ở 6054458).
+  Giữ nguyên phần bên dưới làm bản ghi lịch sử, nhưng đừng trích lại số audit ở đây.
+
 == 1. VERIFY ENDPOINT (lệnh user đưa, key thật từ .env — không in giá trị)
   MAC_LLM_API_KEY trong .env     : CÓ (độ dài 3 — xem ghi chú ⚠️ dưới)
 
@@ -103,7 +128,9 @@ Yêu cầu user: verify endpoint → thêm upstream vào 2 config → E2E qua ma
     ⇒ nhất quán với root cause trên.
 
 == 5. TRẠNG THÁI VERIFY TƯƠNG THÍCH
-  - ✅ Chuỗi E2E thật qua mac-custom: XANH, 2 tool-call, multi-turn 200/200/200.
+  - ⚠️ Chuỗi E2E thật qua mac-custom: XANH, 2 tool-call, multi-turn 200/200/200.
+    → ĐÍNH CHÍNH: số audit của dòng này KHÔNG còn kiểm chứng được (xem note đầu file).
+      Bằng chứng mac-custom hợp lệ duy nhất là result22 (4×200, attempts=['mac-custom']).
   - ✅ Route theo model hoạt động: dsh xin oc/big-pickle → mac-custom (không đụng Gemini).
   - ✅ thought_signature: KHÔNG liên quan mac-custom (upstream không bật); lần verify
     riêng với gemini vẫn giữ nguyên kế hoạch (E2E_LLM_MODEL=real-gemini sau reset).

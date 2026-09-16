@@ -57,3 +57,6 @@ venv/
 
 # LLM Router runtime audit (Phase 5, result14) — runtime artifacts, not source
 llm-router-audit/
+
+# Phase 7 idempotency store (command_id ledger) — runtime state, not source
+idempotency-store/

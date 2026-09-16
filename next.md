@@ -82,7 +82,8 @@ Python `src/vietnamese_nlp/`, stdlib thuần, chạy TRƯỚC LLM — cố đị
   (setup trong phiên result9 từ `.env` GH_REPO_URL/GH_TOKEN); commits `33f9dc0` → `0ac8e61`
   → `590b1b2` → `119edd4`; `.env` git-ignored, secret scan trước mỗi commit
   (result9 đã redact key lộ khỏi file evidence trước khi commit)
-- 2 project skills (`.agents/skills/`, local-only): `erpnext-mcp-connect` + `erpn-verify-first`
+- 2 project skills (`.agents/skills/`, local-only — user chốt 2026-09-16: KHÔNG vào repo):
+  `erpnext-mcp-connect` + `erpn-verify-first`
   + `erpn-dsh-setup` (result15 — cài/chạy dsh + cơ chế cordis patch, thay công thức result6)
 - Tài liệu phiên mới: `.project/` (kiến thức tĩnh) + memory files; `.project/openspec.md`
   là pointer — **1 nguồn sự thật duy nhất**: checklist.md (trạng thái) + next.md (roadmap)
@@ -97,8 +98,9 @@ Python `src/vietnamese_nlp/`, stdlib thuần, chạy TRƯỚC LLM — cố đị
 1. ~~GH Actions run #2~~ ✅ **XONG — run #2 + #3 đều SUCCESS** (`result10.txt`, `result11.txt`):
    run #3 (`c3d74c3`) build APK với dart-define `COPILOT_BASE_URL`/auth từ repo
    Variables/Secret. **Còn lại là việc user:** ① dán 3 giá trị GitHub Settings (token
-   chỉ-đọc) ② chọn đường endpoint — port 8788 bị firewall hosting chặn từ internet
-   (Tailscale khuyến nghị / mở port / ngrok) ③ cài APK thiết bị thật
+   chỉ-đọc) ② cài APK thiết bị thật — endpoint lâu dài user chốt 2026-09-16 HOÃN
+   (Cloud Shell = dev, Mac/ngrok/tunnel = demo tạm; VPS thật SAU khi app xong),
+   dùng nguyên trạng tunnel khi dev ③ cài APK thiết bị thật
 2. **Mandatory Sign-off Phase 5** — ✅ ĐÃ KÝ 2026-09-15 (bảng 4/4 điền theo quyết định:
    KHÔNG scrub, KHÔNG 2-tier; free tier chấp nhận — `SIGNOFF-phase5-pii.md`). LLM Router
    bản đơn giản đã code (`scripts/llm-router.mjs` + config JSON + audit JSONL, 7/7 test,
@@ -119,9 +121,9 @@ Python `src/vietnamese_nlp/`, stdlib thuần, chạy TRƯỚC LLM — cố đị
 | Phase | Nội dung | Write? | Điều kiện tiên quyết |
 |---|---|---|---|
 | 4 | Voice input/STT (hybrid): 🎤 → STT → user xem lại/sửa text → Gửi | Không | ⚠️ **Chặn bởi audio thật 3 miền** (100–200 câu, chờ người thật thu) |
-| 5 | AI Gateway core: auth, LLM Router, audit (scrub ĐÃ BỎ theo sign-off 2026-09-15) | **ĐANG LÀM** — upstream hàng ngày = **mac-custom** (LLM tự host trên Mac qua `llm9000.loca.lt`, KHÔNG quota — result20); gemini-openai giữ lại CHỈ để verify tương thích provider thật (thought_signature, `E2E_LLM_MODEL=real-gemini`); zen billing-blocked để sau. E2E thật qua mac-custom **XANH 2 tool-call** (result20 §3); bug credit-note **đã fix + verify thật 457.875đ/171.800đ** (result21, chờ duyệt commit) | Còn lại: verify thought_signature live khi thuận tiện (chờ bật `lt`) |
+| 5 | AI Gateway core: auth, LLM Router, audit (scrub ĐÃ BỎ theo sign-off 2026-09-15) | **ĐANG LÀM** — upstream hàng ngày = **mac-custom** (LLM tự host trên Mac qua `llm9000.loca.lt`, KHÔNG quota — result20); gemini-openai giữ lại CHỈ để verify tương thích provider thật (thought_signature, `E2E_LLM_MODEL=real-gemini`); zen billing-blocked để sau. E2E mac-custom có bằng chứng hợp lệ = **result22** (4×200, `attempts=['mac-custom']`; claim audit của result20 đã bị đính chính — xem result22 §9B); bug credit-note **đã fix + commit `6054458` + verify thật 457.875đ/171.800đ** (result21); E2E đầy đủ qua `mac-custom` **đã XANH** (result22) | Còn lại: verify thought_signature live khi thuận tiện (chờ quota reset) |
 | 6 | Entity resolution + Action Proposal card (xác nhận tiếng Việt + Risk Level) | Không | Exit criteria Phase 5 |
-| 7 | **`create_payment_entry` + idempotency** | **Có** | ⚠️ **Go/No-Go gate: Phase 1–6 exit criteria ĐỦ** — write đầu tiên chạm tiền |
+| 7 | **`create_payment_entry` + idempotency** | **Có** | **Giai đoạn A XONG (result23, commit này)**: proposal HIGH dừng ở xác nhận + idempotency store + `/execute` MOCK + nút Flutter. ⚠️ **Giai đoạn B (ghi ERPNext thật) CHƯA chạy** — chờ user quyết thời điểm/cách thức; trước khi replay thật phải implement tra `reference_no` |
 | 8 | Background jobs + push notification + TTS readback | Có | Phase 7 |
 | 9 | Proposal state machine (expiry, re-validation, saga/compensation) | Có | Undo ≠ delete document |
 | 10 | Multi-user, RBAC, on-behalf-of ERPNext credential | Có | **Trigger #1 tách khỏi dsh** |
@@ -138,15 +140,23 @@ Python `src/vietnamese_nlp/`, stdlib thuần, chạy TRƯỚC LLM — cố đị
 - **Thu audio thật 3 miền** — mở khóa Phase 4
 - **Cài APK + test tại điểm bán** — cần người thật
 - **LLM upstream thật** — 2 quyết định user (result15): Zen nạp payment method hay bỏ upstream;
-- **Fix bug credit-note — ĐÃ ÁP DỤNG (result21), chờ duyệt commit**: `outstanding_amount > 0` →
+- **Fix bug credit-note — ĐÃ ÁP DỤNG + COMMIT `6054458` (result21)**: `outstanding_amount > 0` →
   `!== 0` trong `mcp-erpnext/src/skills/customer.mjs` (helper dùng chung cho cả `getCustomerBalance`
   và sales) + `sales.mjs`; mock thêm credit note SINV-0004 để có test hồi quy; nhãn "hóa đơn chưa trả"
   → "**chứng từ** chưa thanh toán" + nhánh "hiện dư X" khi outstanding âm. Verify THẬT bằng probe
   gọi thẳng `answerQuestion` với ERPNext thật (không LLM): **457.875đ/1 ✓** và **171.800đ/4 ✓**
-- **Bật lại `lt` trên máy Mac** — tunnel `llm9000.loca.lt` (upstream `mac-custom`) đang TẮT
-  (3× HTTP 503 "Tunnel Unavailable", result21 §5) ⇒ E2E đầy đủ dsh → router → mac-custom chưa chạy lại được;
+- **Giữ `lt` sống trên máy Mac khi cần E2E** — tunnel `llm9000.loca.lt` chỉ hoạt động khi `lt`
+  đang chạy; E2E đầy đủ qua mac-custom **đã XANH** (4/4 request 200 · `messages` 2→5→7→9 ⇒ có turn replay — result22 §4),
+  nhưng phải bật lại `lt` mỗi lần chạy và dựng lại dsh nếu `/tmp` đã bị dọn;
   Gemini giữ free tier (không nâng paid). Mock giữ làm contract test; dsh trỏ router qua cordis patch
   (skill `erpn-dsh-setup`)
+
+### Việc còn lại của Phase 5 (gateway)
+
+- **Verify `thought_signature` LIVE** — chạy theo `docs/phase5-thought-signature-runbook.md`
+  (1 session duy nhất sau mốc reset 07:00 UTC; không probe trước). Đã thất bại 4 lần liên
+  tiếp vì quota, không phải logic; bằng chứng hiện có là hermetic (router 19/19).
+  ⚠️ `GEMINI_API_KEY` dùng chung ⇒ "ngay sau reset" không đảm bảo có quota.
 
 ### Nợ kỹ thuật Phase 1 (khi có dữ liệu quyết định)
 

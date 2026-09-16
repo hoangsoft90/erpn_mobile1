@@ -108,6 +108,29 @@ export function createMcpClient({
       return markUntrusted(`erpnext:${tool}`, payload);
     },
 
+    /**
+     * Phase 7 Stage A/B (mock): the ONE deliberate write call. The read-only
+     * guard above stays untouched — writes are NOT generally allowed; this
+     * method exists so the payment-write skill can reach the MOCK server's
+     * create_payment_entry through the SAME correlation/unwrap machinery.
+     * Callers must hold a HIGH-risk confirmed proposal + idempotency gate
+     * (http-ask /execute enforces both). The REAL-server variant is Stage B
+     * and intentionally not wired.
+     */
+    async callWriteTool(tool, args) {
+      if (tool !== "create_payment_entry") {
+        throw new Error(`WRITE_REFUSED: "${tool}" is not the Phase 7 write (create_payment_entry only)`);
+      }
+      await this.initialize();
+      const res = await request("tools/call", { name: tool, arguments: args });
+      if (res.isError) {
+        const text = res.content?.find((c) => c.type === "text")?.text ?? "tool error";
+        throw new Error(`TOOL_ERROR: ${text}`);
+      }
+      const payload = res.structuredContent ?? parseFirstText(res.content);
+      return markUntrusted(`erpnext:${tool}`, payload);
+    },
+
     /** Graceful shutdown: closes stdin, waits for the server to exit. */
     async close() {
       child.stdin.end();

@@ -30,7 +30,10 @@
 
 import http from "node:http";
 import { timingSafeEqual, createHash } from "node:crypto";
-import { answerQuestion } from "./copilot-server.mjs";
+import { answerQuestion, pickServerScript } from "./copilot-server.mjs";
+import { IdempotencyStore, fingerprintProposal, isValidCommandId, EXECUTABLE_ACTIONS } from "./idempotency.mjs";
+import { executePaymentProposal } from "./skills/payment-write.mjs";
+import { createMcpClient } from "./client.mjs";
 
 const MAX_BODY = 1_000_000; // one utterance is ~200 chars; 1MB is generous
 
@@ -138,8 +141,9 @@ function readBody(req) {
   });
 }
 
-export function createAskServer({ port = 8788, host = "127.0.0.1", policy = null } = {}) {
+export function createAskServer({ port = 8788, host = "127.0.0.1", policy = null, idemStore = null } = {}) {
   const bindPolicy = policy ?? resolveBindPolicy({ host });
+  const store = idemStore ?? new IdempotencyStore();
   const server = http.createServer(async (req, res) => {
     // Non-loopback: every route (including /health) requires basic auth.
     if (!bindPolicy.loopback && !basicAuthOk(req, bindPolicy)) {
@@ -162,6 +166,78 @@ export function createAskServer({ port = 8788, host = "127.0.0.1", policy = null
     const path = (req.url ?? "/").split("?")[0];
     if (req.method === "GET" && path === "/health") {
       sendJson(res, 200, { ok: true, service: "copilot-ask", port });
+      return;
+    }
+    if (req.method === "POST" && path === "/execute") {
+      // Phase 7 Stage A: the confirm-execute endpoint. MOCK ONLY today — the
+      // mock MCP client accepts create_payment_entry; the REAL server run is
+      // Stage B and user-gated. Same auth/bind policy as /ask.
+      let body;
+      try {
+        const raw = await readBody(req);
+        body = raw ? JSON.parse(raw) : {};
+      } catch (err) {
+        sendJson(res, 400, { ok: false, error: `invalid request body: ${err.message}` });
+        return;
+      }
+      const { command_id, proposal } = body ?? {};
+      if (!isValidCommandId(command_id)) {
+        sendJson(res, 400, { ok: false, error: "command_id must be a client-generated UUID" });
+        return;
+      }
+      if (!proposal || typeof proposal !== "object" || proposal.action !== "create_payment_entry") {
+        sendJson(res, 400, { ok: false, error: "only create_payment_entry proposals are executable in Phase 7" });
+        return;
+      }
+      if (!EXECUTABLE_ACTIONS.includes(proposal.action)) {
+        sendJson(res, 403, { ok: false, error: "action not executable" });
+        return;
+      }
+      if (!proposal.entity?.id) {
+        sendJson(res, 400, { ok: false, error: "proposal entity has no resolved ERPNext id — resolve the customer first" });
+        return;
+      }
+      const fp = fingerprintProposal(proposal);
+      let gate;
+      try {
+        gate = store.begin(command_id, { action: proposal.action, fingerprint: fp });
+      } catch (err) {
+        sendJson(res, 409, { ok: false, error: err.message });
+        return;
+      }
+      if (gate.replay) {
+        // once-only guarantee: the FIRST execution's result is returned again
+        sendJson(res, 200, { ok: true, replay: true, result: gate.result });
+        return;
+      }
+      // PENDING (fresh or crash-recovered): reconcile before any new write.
+      const existing = store.status(command_id);
+      if (existing?.status === "PENDING" && existing.reference_no) {
+        // A previous attempt may have died mid-write. ERPNext lookup by
+        // reference_no decides: found ⇒ completed (no second write).
+        // Stage A note: the mock client doesn't expose a lookup tool yet —
+        // the Flutter/mock flow treats PENDING+reference as "verify first".
+        // Stage B (real ERPNext) MUST implement the reference lookup here.
+        sendJson(res, 409, {
+          ok: false,
+          error: "command PENDING with server reference — reconcile required before retry",
+          command_id,
+          reference_no: existing.reference_no,
+        });
+        return;
+      }
+      let mcp;
+      try {
+        mcp = createMcpClient({ serverScript: pickServerScript() });
+        await mcp.initialize();
+        const result = await executePaymentProposal(mcp, proposal, command_id, store);
+        sendJson(res, 200, { ok: true, replay: false, result });
+      } catch (err) {
+        store.fail(command_id, err?.message ?? String(err));
+        sendJson(res, 500, { ok: false, error: `execute failed: ${err?.message ?? err}` });
+      } finally {
+        if (mcp) await mcp.close().catch(() => {});
+      }
       return;
     }
     if (req.method === "POST" && path === "/ask") {

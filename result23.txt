@@ -1,0 +1,183 @@
+========================================================================
+RESULT 23 — PHASE 7 GIAI ĐOẠN A: FIRST WRITE (payment) + IDEMPOTENCY
+            mock-only · KHÔNG ghi ERPNext thật (Giai đoạn B chờ user)
+Timestamp: 2026-09-16 03:41 UTC
+Env: container Google Cloud Shell (ephemeral — result22 §9C) · Node v24.20.0 ·
+     Python 3.12.3 · Flutter 3.47.2 stable / Dart 3.13.2
+Repo erpn_mobile1, branch change/flutter-chat-mvp · commit gốc trước đó: 553d962
+      (Phase 6 — đã push)
+========================================================================
+
+== 1. PHẠM VI GIAI ĐOẠN A (theo đúng 4 mục user giao) ==
+
+1. skill `record_customer_payment` — resolve customer (dùng lại Phase 6) → tìm
+   invoice chưa trả → `buildProposal()` risk HIGH → DỪNG ở proposal, KHÔNG có
+   lệnh ghi ERPNext nào trong nhánh này (có test khẳng định điều đó, xem §2.3).
+2. Idempotency `command_id` (UUID do client sinh) — store 3 trạng thái
+   PENDING / COMPLETED / FAILED, atomic tmp+fsync+rename, mặc định
+   `mcp-erpnext/idempotency-store/` (trong repo, gitignored — KHÔNG dùng /tmp,
+   theo đúng bài học result22 §9C).
+3. Mock `create_payment_entry` trong mock-server + `callWriteTool()` tường minh
+   ở client (read-only guard của Phase 2 vẫn chặn mọi tool khác — không nới
+   guard, chỉ mở một lối đặt tên rõ ràng cho đúng 1 write được phép).
+4. Flutter: nút [Xác nhận thu tiền] CHỈ khi proposal `confirmable`
+   (action=create_payment_entry + risk=HIGH + có entity id) → POST /execute
+   (mock) với `command_id` sinh phía client.
+
+GIỚI HẠN CỐ Ý: `/execute` hiện chạy trên MOCK server. Chưa có lệnh nào chạm
+ERPNext thật trong phiên này. 429/không liên quan.
+
+== 2. TEST SUITE — OUTPUT NGUYÊN VĂN ==
+
+2.1. Python (Phase 1 NLP — không đổi trong phiên này, chạy lại xác nhận)
+
+  $ cd /home/kythuat_hoangweb/htdocs_apps/erpn_mobile1
+  $ PYTHONPATH=src python3 -m unittest discover -s tests
+  ----------------------------------------------------------------------
+  Ran 58 tests in 0.468s
+
+  OK
+
+2.2. Node — toàn bộ package mcp-erpnext (gồm cả test mới của Stage A)
+
+  $ cd mcp-erpnext && node --test
+  ℹ tests 77
+  ℹ suites 0
+  ℹ pass 77
+  ℹ fail 0
+  ℹ cancelled 0
+  ℹ skipped 0
+  ℹ duration_ms 9775.718682
+
+  (Trước Stage A: 63 test. +14 test mới từ payment-write.test.mjs +
+   http-execute.test.mjs.)
+
+2.3. Chi tiết 14 test Stage A (đúng 4 nhóm idempotency user yêu cầu)
+
+  $ node --test --test-reporter=spec test/payment-write.test.mjs test/http-execute.test.mjs
+  ✔ /execute: happy path + duplicate command_id replays with ONE mock write (200.910868ms)
+  ✔ /execute: rejects bad command_id, wrong action, missing entity id (39.196735ms)
+  ✔ /execute: FAILED command is terminal (409) even before any ERPNext call (85.214383ms)
+  ✔ riskFor maps create_payment_entry to HIGH (schema complete before write) (2.913966ms)
+  ✔ Stage A: proposal is built and STOPS — no ERPNext write call exists in this path (25.627374ms)
+  ✔ Stage A: over-suggested amount is clamped to the invoice outstanding, with warning (0.669772ms)
+  ✔ Stage A: negative invoice cannot be collected through this write (1.141036ms)
+  ✔ Stage A: ambiguous or missing customer refuses with a specific message (0.544647ms)
+  ✔ Stage B mock: duplicate command_id produces exactly ONE Payment Entry (15.49914ms)
+  ✔ Stage B mock: reference_no = command_id is written server-side (7.756457ms)
+  ✔ Stage B mock: crash before complete() → PENDING → reconcile by reference finds the doc (10.043261ms)
+  ✔ Stage B mock: failed command refuses retry with the SAME command_id (new intent = new id) (5.050748ms)
+  ✔ Stage B: begin() with same id but DIFFERENT fingerprint throws (no cross-intent reuse) (3.487774ms)
+  ✔ command_id must be a UUID; store persists across instances (5.923721ms)
+  ℹ tests 14
+  ℹ pass 14
+  ℹ fail 0
+
+  Map đúng 4 mục test user yêu cầu (§Giai đoạn A #4):
+   · "trùng command_id → chỉ 1 lần ghi"  → test #1 (HTTP) + test #9 (store-level:
+     duplicate command_id produces exactly ONE Payment Entry)
+   · "mất mạng giữa confirm → không lửng lơ" → test #11 (crash before complete()
+     → PENDING → reconcile by reference tìm được doc) + test #3 (FAILED terminal)
+   · "fingerprint mismatch" → test #13 (cùng id, khác fingerprint → throw, không
+     tái dùng id cho intent khác)
+   · "FAILED terminal" → test #12 (retry cùng command_id bị từ chối — intent mới
+     phải có id mới)
+
+2.4. Flutter
+
+  $ cd apps/mobile && flutter test
+  00:04 +22: .../test/chat_controller_test.dart: history restored from prefs and clear works
+  00:04 +23: All tests passed!
+
+  $ flutter analyze
+  No issues found! (ran in 6.2s)
+
+  (23 test: 19 cũ + 4 test cho nút xác nhận/replay, sau khi sửa lỗi helper §4.)
+
+== 3. THIẾT KẾ AN TOÀN ĐÃ CÀI (tóm tắt — code là nguồn sự thật) ==
+
+· 3 trạng thái, không lửng lơ:
+    PENDING   → đã nhận lệnh, chưa xác nhận ghi xong.
+    COMPLETED → đã có tên chứng từ ERPNext; replay trả CHÍNH kết quả cũ.
+    FAILED    → terminal; retry cùng id bị TỪ CHỐI (intent mới ⇒ id mới).
+· Reconcile: PENDING + có reference_no → `/execute` trả 409
+  "reconcile required before retry" kèm `reference_no` — KHÔNG tự ghi lại.
+  (Giai đoạn B phải implement bước tra `reference_no` trên ERPNext thật
+   trước khi replay — đã ghi rõ trong code tại đúng chỗ đó.)
+· Fingerprint: cùng command_id mà fingerprint proposal khác → throw
+  (chặn tái dùng id cho ý định khác).
+· Số tiền: thu vượt quá dư nợ hoá đơn → **clamp** về đúng dư nợ + warning;
+  hoá đơn âm (credit note) không thể thu qua đường này.
+· Chọn hoá đơn: chỉ nhận hoá đơn CHƯA trả; khách mơ hồ/không thấy → từ chối
+  kèm thông báo cụ thể (không đoán — kế thừa Phase 6).
+· Guard Phase 2 KHÔNG bị nới: `assertReadOnly` vẫn chặn mọi tool; write đi qua
+  `callWriteTool()` tường minh và chỉ 1 action nằm trong EXECUTABLE_ACTIONS.
+
+== 4. LỖI TỰ PHÁT HIỆN TRONG PHIÊN + CÁCH SỬA (không giấu) ==
+
+4.1. 3 test Flutter mới FAIL — KHÔNG phải lỗi production gate
+  Triệu chứng: `Expected: true / Actual: false` + `Found 0 widgets "Xác nhận thu tiền"`.
+  Gốc: helper dùng chung `_proposal()` trong file test default
+  `action: 'read_balance'`, trong khi getter `confirmable` đòi
+  `action == 'create_payment_entry'` ⇒ test tự dựng proposal KHÔNG đủ điều kiện
+  confirm rồi kỳ vọng có nút. Gate production ĐÚNG.
+  Bản năng nguy hiểm đã bị chặn: "nới getter cho khớp test" = tự làm yếu safety
+  gate vùng tiền.
+  Sửa: helper thêm param `action` (default an toàn) + 3 test confirm-flow truyền
+  `action: 'create_payment_entry'` tường minh; đồng thời LÀM MẠNH test
+  `confirmable` (khẳng định cả 2 chiều: HIGH+create = true, HIGH+read_balance = false).
+  Bằng chứng: 23/23 Flutter pass (§2.4) + 0 issue analyze.
+
+4.2. Skill bài học đã cập nhật (2 hàng mới trong erpn-verify-first)
+  · Hàng 141: test fail ⇒ đọc helper test TRƯỚC khi nghi code production;
+    không bao giờ nới gate cho khớp test.
+  · Hàng 142: probe số học (awk đếm cột) báo sai vì engine parse riêng không
+    hiểu markdown escape — in NGUYÊN VĂN dòng trước khi tin con số.
+
+== 5. GIAI ĐOẠN B — CHƯA CHẠY, ĐÚNG LỆNH ==
+
+Không có lệnh nào ghi ERPNext thật trong phiên này. Kế hoạch đã chuẩn bị (chờ
+user quyết thời điểm + cách thức):
+  · 1 Payment Entry thật, khách demo có sẵn, số tiền nhỏ (vd 10.000đ)
+  · command_id riêng, đối chiếu `reference_no` == command_id trên ERPNext sau ghi
+  · ghi hủy thử nghiệm bằng credit note đối trống
+  · BẮT BUỘC trước khi replay: implement bước tra reference_no (hiện mock chưa có)
+
+== 6. FILE THAY ĐỔI (commit này) ==
+
+Mới:
+  mcp-erpnext/src/idempotency.mjs           store 3 trạng thái + reconcile gate
+  mcp-erpnext/src/skills/payment-write.mjs   buildPaymentProposal (Stage A) +
+                                             executePaymentProposal (Stage B, mock)
+  mcp-erpnext/test/payment-write.test.mjs    11 test (proposal + store)
+  mcp-erpnext/test/http-execute.test.mjs     3 test E2E /execute qua HTTP
+  result23.txt                               (file này)
+Sửa:
+  mcp-erpnext/src/http-ask.mjs               route POST /execute (validate →
+                                             assertProposalAllowed → store gate)
+  mcp-erpnext/src/client.mjs                 callWriteTool() tường minh cho write
+  mcp-erpnext/src/mock-server.mjs            mock create_payment_entry
+  apps/mobile/.../chat_models.dart           ActionProposal.confirmable + json
+  apps/mobile/.../proposal_card.dart         nút [Xác nhận thu tiền] + gọi /execute
+  apps/mobile/test/proposal_card_test.dart   +4 test (nút, 1 POST/lần bấm, replay)
+  .gitignore                                 idempotency-store/
+  checklist.md / working.md / next.md        đồng bộ trạng thái
+Docs đợt trước còn treo (gộp vào commit này — user đã cho phép "có thể gộp"):
+  result22.txt · docs/phase5-thought-signature-runbook.md · result20.txt (đính
+  chính) · features.md · handoff_20260915-1330.md
+
+KHÔNG stage: .env (git-ignore) · .gemini/ · .opencode/ · initp (không phải của
+agent — để nguyên untracked).
+
+== 7. VIỆC CÒN LẠI / RỦI RO ==
+
+· Giai đoạn B: implement reference_no lookup thật trước khi bất kỳ replay nào
+  chạm ERPNext thật (hiện là 409 có chủ đích — an toàn hơn đoán).
+· Command_id hiện sinh MỚI mỗi lần bấm trong Flutter. Nếu user bấm lại sau khi
+  gặp lỗi mạng, đó là intent mới ⇒ server KHÔNG replay mà ghi lần hai. Đây là
+  điểm cần user quyết định ở Giai đoạn B: hoặc giữ command_id ổn định theo
+  proposal (retry = cùng intent), hoặc chấp nhận "bấm lại = intent mới" và dựa
+  vào fingerprint để cảnh báo. CHƯA sửa — chờ quyết định vì đây là ngữ nghĩa
+  tiền, không phải lỗi kỹ thuật rõ ràng.
+· thought_signature Gemini thật: vẫn chưa verify live (quota) — xem result22 §9.
+========================================================================

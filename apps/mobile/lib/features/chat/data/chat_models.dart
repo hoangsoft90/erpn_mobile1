@@ -252,4 +252,10 @@ class ActionProposal {
         },
         if (summary != null) 'summary': summary,
       };
+
+  /// The confirm button shows ONLY for HIGH-risk payment proposals — the one
+  /// write Phase 7 allows. READ cards never get it; CRITICAL arrives in a
+  /// later phase and would demand double-confirm UI anyway.
+  bool get confirmable =>
+      action == 'create_payment_entry' && risk == 'HIGH' && entityId != null;
 }

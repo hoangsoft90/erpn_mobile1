@@ -68,6 +68,25 @@ const ITEMS = [
 
 /** Handlers mirror the real 3.0.4 handlers' return shapes. */
 const TOOLS = {
+  /**
+   * Phase 7 Stage A: the ONE write the mock exposes. The real @casys 3.0.4
+   * server's create-payment tool has a DIFFERENT contract (its own params/
+   * account resolution) — Stage B (real ERPNext) will map to it explicitly
+   * and is user-gated; this handler only mimics the ledger semantics we need
+   * for idempotency tests: unique name + reference_no dedupe.
+   */
+  create_payment_entry: (args) => {
+    const reference = String(args?.reference_no ?? "");
+    if (!reference) throw new Error("reference_no is required (idempotency key)");
+    const dup = PAYMENTS.find((p) => p.reference_no === reference);
+    if (dup) return { name: dup.name }; // server-side dedupe — same doc back
+    if (!args?.customer || !DB[args.customer]) throw new Error(`Customer ${args?.customer} not found`);
+    const paid = Number(args?.paid_amount);
+    if (!Number.isFinite(paid) || paid <= 0) throw new Error("paid_amount must be positive");
+    const doc = { name: `PE-M${String(PAYMENTS.length + 1).padStart(3, "0")}`, party: args.customer, posting_date: new Date().toISOString().slice(0, 10), paid_amount: paid, received_amount: paid, docstatus: 0, reference_no: reference, mode_of_payment: args?.mode_of_payment ?? "Tiền mặt" };
+    PAYMENTS.push(doc);
+    return { name: doc.name };
+  },
   erpnext_customer_list: (args) => {
     const docs = Object.values(DB).filter((c) => !args?.customer_group || c.customer_group === args.customer_group);
     return { doctype: "Customer", count: docs.length, data: docs };
@@ -92,6 +111,11 @@ const TOOLS = {
   erpnext_payment_entry_list: (args) => {
     const rows = PAYMENTS.filter((p) => !args?.party || p.party === args.party);
     return { doctype: "Payment Entry", count: rows.length, data: rows };
+  },
+  /** PENDING-reconcile lookup: by reference_no (Phase 7 crash recovery). */
+  erpnext_payment_entry_get_by_reference: (args) => {
+    const row = PAYMENTS.find((p) => p.reference_no === String(args?.reference_no ?? ""));
+    return { doctype: "Payment Entry", count: row ? 1 : 0, data: row ? [row] : [] };
   },
   erpnext_item_list: () => {
     // No server-side name filtering (the real 3.0.4 tool has no txt param either):

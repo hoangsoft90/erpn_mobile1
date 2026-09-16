@@ -1,7 +1,12 @@
+import 'dart:convert';
+import 'dart:math';
+
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../app/theme/app_theme.dart';
 import '../../data/chat_models.dart';
+import '../../../../app/providers.dart';
 
 /// Phase 6 — Action Proposal summary card (display-only).
 ///
@@ -9,10 +14,66 @@ import '../../data/chat_models.dart';
 /// action summary, and the resolved entity. NO confirm button exists here on
 /// purpose — Phase 6 stops at display; the confirm-execute flow arrives with
 /// Phase 7 (first write). Colors come from the theme, never hardcoded hex.
-class ProposalCard extends StatelessWidget {
+class ProposalCard extends ConsumerStatefulWidget {
   const ProposalCard({super.key, required this.proposal});
 
   final ActionProposal proposal;
+
+  @override
+  ConsumerState<ProposalCard> createState() => _ProposalCardState();
+}
+
+class _ProposalCardState extends ConsumerState<ProposalCard> {
+  bool _confirming = false;
+  String? _result;
+  String? _error;
+
+  /// Short alias so build() and helpers read like the old StatelessWidget.
+  ActionProposal get proposal => widget.proposal;
+
+  Future<void> _confirm() async {
+    final proposal = widget.proposal;
+    if (_confirming || !proposal.confirmable) return;
+    setState(() {
+      _confirming = true;
+      _result = null;
+      _error = null;
+    });
+    try {
+      final dio = ref.read(dioProvider);
+      final commandId = _generateCommandId();
+      final res = await dio.post<Map<String, dynamic>>(
+        '/execute',
+        data: jsonEncode({'command_id': commandId, 'proposal': proposal.toJson()}),
+      );
+      final body = res.data ?? const {};
+      if (body['ok'] == true) {
+        final result = body['result'] as Map<String, dynamic>? ?? const {};
+        setState(() {
+          _result = body['replay'] == true
+              ? 'Đã ghi nhận trước đó (chống trùng): ${result['erpnext_doc'] ?? '?'}'
+              : 'Đã ghi phiếu thu: ${result['erpnext_doc'] ?? '?'} — ${result['paid_vnd'] ?? '?'}đ';
+        });
+      } else {
+        setState(() => _error = '${body['error'] ?? 'xác nhận thất bại'}');
+      }
+    } catch (e) {
+      setState(() => _error = 'Không gửi được lệnh xác nhận: $e');
+    } finally {
+      if (mounted) setState(() => _confirming = false);
+    }
+  }
+
+  /// UUID v4 (random) — the spec's client-generated idempotency key.
+  /// Pure Dart (Random.secure), no extra dependency.
+  String _generateCommandId() {
+    final rng = Random.secure();
+    final b = List<int>.generate(16, (_) => rng.nextInt(256));
+    b[6] = (b[6] & 0x0f) | 0x40; // version 4
+    b[8] = (b[8] & 0x3f) | 0x80; // variant 10
+    final h = b.map((x) => x.toRadixString(16).padLeft(2, '0')).join();
+    return '${h.substring(0, 8)}-${h.substring(8, 12)}-${h.substring(12, 16)}-${h.substring(16, 20)}-${h.substring(20)}';
+  }
 
   Color _riskColor(ColorScheme scheme) {
     switch (proposal.risk) {
@@ -113,8 +174,36 @@ class ProposalCard extends StatelessWidget {
               ),
             ),
           ],
-          // Phase 6 status note — honest about what the card cannot do yet.
-          if (proposal.needConfirm) ...[
+          // Phase 7: the confirm button — ONLY for the one HIGH write.
+          // command_id is generated per press; the SERVER dedupes replays.
+          if (proposal.confirmable) ...[
+            const SizedBox(height: AppSpacing.sm),
+            if (_result != null)
+              Text(
+                '✅ $_result',
+                style: TextStyle(color: scheme.primary, fontWeight: FontWeight.w600),
+              )
+            else ...[
+              FilledButton.icon(
+                onPressed: _confirming ? null : _confirm,
+                icon: _confirming
+                    ? const SizedBox(
+                        width: 14,
+                        height: 14,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.check, size: 16),
+                label: Text(_confirming ? 'Đang ghi...' : 'Xác nhận thu tiền'),
+              ),
+            ],
+            if (_error != null) ...[
+              const SizedBox(height: AppSpacing.xs),
+              Text(
+                '⚠ $_error',
+                style: TextStyle(color: scheme.error, fontSize: 12),
+              ),
+            ],
+          ] else if (proposal.needConfirm) ...[
             const SizedBox(height: AppSpacing.xs),
             Text(
               proposal.needDoubleConfirm
