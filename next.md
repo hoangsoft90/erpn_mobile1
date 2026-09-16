@@ -95,7 +95,7 @@ Python `src/vietnamese_nlp/`, stdlib thuần, chạy TRƯỚC LLM — cố đị
 
 ### ĐÃ DUYỆT — XONG trong phiên result31 (2026-09-16) · review vòng 2 kèm 2 fix — ✅ COMMIT `bda54cf` ĐÃ PUSH
 
-0. ⏳ **Review vòng 2 (result31 §11) — đã vá, chờ duyệt cùng đợt**: **F1** anchor `startsWith` vẫn nuốt câu ĐỌC lịch sử (`'thanh toán gần nhất của chị Lan...'` → `'payment gần nhất...'` → routed payment_write SAI — probe `answerQuestion()` thật) ⇒ fix `notIf` deny-list (bao nhiêu/mấy/gần nhất/mới nhất/?) → câu hỏi rơi về nhóm payment ĐỌC; +1 test round 2, falsify đạt (gỡ gate → FAIL đúng assertion). **F2** `store.cancel()` ngoài try/catch — race với `/execute` đồng thời ⇒ throw uncaught ⇒ **Node ≥15 crash cả process** (bằng chứng cơ chế: async handler throw → exit 1; suite không bắt được vì child-process cách ly) ⇒ bọc try/catch → 409. **F3** reason dùng `rawText`. Suite sau review: **Node 119/119 · Python 60/60 · Flutter 29/29 · analyze 0**.
+0. ✅ **Review vòng 2 (result31 §11) — ĐÃ COMMIT `bda54cf`**: **F1** anchor `startsWith` vẫn nuốt câu ĐỌC lịch sử (`'thanh toán gần nhất của chị Lan...'` → `'payment gần nhất...'` → routed payment_write SAI — probe `answerQuestion()` thật) ⇒ fix `notIf` deny-list (bao nhiêu/mấy/gần nhất/mới nhất/?) → câu hỏi rơi về nhóm payment ĐỌC; +1 test round 2, falsify đạt (gỡ gate → FAIL đúng assertion). **F2** `store.cancel()` ngoài try/catch — race với `/execute` đồng thời ⇒ throw uncaught ⇒ **Node ≥15 crash cả process** (bằng chứng cơ chế: async handler throw → exit 1; suite không bắt được vì child-process cách ly) ⇒ bọc try/catch → 409. **F3** reason dùng `rawText`. Suite sau review: **Node 119/119 · Python 60/60 · Flutter 29/29 · analyze 0**.
 
 1. ✅ **Gộp 1 commit `eea0411`** (thay cho tách 3 — user quyết) + push: 37 files, +3794/−124 (Stage B + fix money/identity + Phase 9 safety + docs result24-30).
 2. ✅ **Nối `buildPaymentProposal()` vào `routeIntent()`**: nhóm `payment_write` ĐẦU ROUTES, anchor `startsWith` đầu câu (synonym mapper biến "thu tiền" → "payment" đầu câu; nếu so substring sẽ nuốt câu đọc chứa "đã/chưa thanh toán") → "thu tiền cho chị Lan 500 ngàn" qua pipeline thật = proposal `create_payment_entry`/HIGH, amount từ NLP, invoice nợ cũ nhất; thiếu tiền ⇒ đề xuất THU HẾT nợ (vẫn HIGH, không ghi ngầm). Sửa chữ cũ "Phase 2 chỉ đọc" (grep 0 hit). E2E + widget test với JSON server trả về verbatim — nút [Xác nhận] hiện thật trên Flutter. Falsify: gỡ anchor → 15/16 FAIL; phá confirmable → widget FAIL; khôi phục xanh.
@@ -106,13 +106,13 @@ Python `src/vietnamese_nlp/`, stdlib thuần, chạy TRƯỚC LLM — cố đị
 
 ### Bước kỹ thuật tiếp theo (KHÔNG Phase 4/8/11)
 
-- **MVP kỹ thuật Phase 7 + Phase 9 an toàn: ĐÃ XONG** (bda54cf + đợt UI STALE/F4 chờ duyệt).
+- **MVP kỹ thuật Phase 7 + Phase 9 an toàn: ĐÃ XONG + ĐÃ COMMIT** (bda54cf + 31d485c).
   Mọi nhánh của luồng "hỏi nợ → thu tiền → xác nhận → ghi nháp → banner từ chối nếu lệch/hết hạn"
   đều có code + test; không còn khoảng trống kỹ thuật nào trong scope hiện tại.
-- **⏳ Đợt UI STALE + F4 (result32+33) — CHỜ DUYỆT COMMIT** (12 file: 4 Dart + 4 docs +
-  result32/33 + 2 handoff; secret scan CLEAN; Flutter 34/34). Message đề xuất:
-  `feat: phase 9 UI — stale/expired banner via real HTTP 409 (dio); params round-trip so
-  confirm works from the app`.
+- **✅ Đợt UI STALE + F4 (result32–34) ĐÃ COMMIT `31d485c` + PUSH** (user duyệt
+  2026-09-16): 15 files +1006/−22 — 4 Dart + 4 docs + result32/33/34 + 3 handoff +
+  runbook demo. Suite sau commit: **Python 60/60 · Node 119/119 · Flutter 34/34 ·
+  analyze 0**.
 - **KHÔNG mở Phase 4 (STT — chặn audio) / 8 (jobs/TTS) / 11 (write skills mới)**.
 - Việc tiếp theo: người thật (APK thiết bị thật · SUBMIT phiếu thu · thu audio 150 câu ·
   dán GitHub Settings · rotate key) — hoặc **saga code khi user duyệt §7** (phase-09,

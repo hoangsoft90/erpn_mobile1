@@ -1,0 +1,66 @@
+========================================================================
+RESULT 35 — COMMIT `31d485c` + PUSH (USER DUYỆT) + DOCS SYNC + FULL TEST
+Timestamp: 2026-09-16 (giờ shell)
+Chỉ đạo user: commit đợt UI STALE + F4 với message bắt buộc, dọn docs,
+xác nhận kỹ thuật, KHÔNG mở phase mới, kết thúc = result35 + handoff ngắn.
+KHÔNG: saga/REVERSAL · submit/delete PE thật · Phase 4/8/11 · VPS design.
+========================================================================
+
+== 1. COMMIT + PUSH ==
+Secret scan trước stage (diff + result32/33/34 + 3 handoff + runbook):
+  grep -ciE "ERPNEXT_API_KEY=|ERPNEXT_API_SECRET=|ghp_…|Bearer …" → 0 (CLEAN)
+Stage: 15 file — 4 Dart (chat_controller/chat_models/proposal_card/
+proposal_card_test) + 4 docs root + docs/demo-payment-draft.md +
+result32/33/34.txt + handoff_20260916-1105/-result33/-result34.md.
+Check không stage cấm: grep -cE "^\.env$|idempotency-store|^\.plan/|
+^\.gemini/|^\.opencode/|^initp$" trên staged list → 0 (CLEAN).
+  git commit -m "feat: phase 9 UI — stale/expired banner via real HTTP 409
+  (dio); params round-trip so confirm works from the app" + body (banner
+  409 qua dio, params round-trip F4, test wire, falsify)
+  → [change/flutter-chat-mvp 31d485c] 15 files changed, 1006 insertions(+),
+    22 deletions(-)
+  git push origin change/flutter-chat-mvp
+  → bda54cf..31d485c  change/flutter-chat-mvp -> change/flutter-chat-mvp
+
+== 2. DOCS SYNC SAU COMMIT ==
+- checklist.md: mục duyệt → [x] với hash `31d485c` (15 files +1006/−22).
+- next.md: đợt result32–34 → ✅ ĐÃ COMMIT `31d485c`; review vòng 2 result31
+  → ✅ đã commit bda54cf (marker ⏳ cũ lệch thực tế); MVP Phase 7+9 = ĐÃ XONG
+  + ĐÃ COMMIT (bda54cf + 31d485c).
+- features.md: Phase 9 UI STALE → ✅ ĐÃ COMMIT `31d485c` (kèm F4).
+- working.md: nhật ký result35.
+- Marker "CHỜ DUYỆT / chờ duyệt" đợt này: grep 4 docs → chỉ còn hit là dòng
+  mô tả chính việc xóa marker (working.md) — sạch.
+
+== 3. FULL TEST SAU COMMIT (lệnh + output thật) ==
+  PYTHON   PYTHONPATH=src python3 -m unittest discover -s tests (repo root)
+           → Ran 60 tests — OK
+  NODE     node --test (mcp-erpnext) → ℹ tests 119 · pass 119 · fail 0
+  FLUTTER  flutter test → 00:04 +34: All tests passed!
+           flutter analyze → No issues found!
+
+== 4. RÀ DEMO DOC KHỚP CODE (grep đối chiếu, không đổi server) ==
+  - TTL 10 phút      → proposal-freshness.mjs:19 `DEFAULT_TTL_MS = 10*60*1000` ✓
+  - STALE + problems → http-ask.mjs:442/450 `PROPOSAL_STALE` + problems[]   ✓
+  - cancel route     → http-ask.mjs:172 `POST /execute/cancel`              ✓
+  - replay cùng cid  → idempotency.mjs:8/16 COMPLETED → replay             ✓
+  - command_id shape → http-ask.mjs:189 isValidCommandId (UUID_RE,
+    idempotency.mjs:30) — runbook dùng `uuidgen` nhưng host KHÔNG có uuidgen
+    (bash: command not found) ⇒ đã sửa doc sang
+    `node -p 'require("node:crypto").randomUUID()'` + verify shape khớp
+    UUID_RE (sample: a4fc0d8a-…-1dc7975a1b98 → true) + chạy shell thật
+    CID=efb5880c-… (không lỗi cú pháp). Doc lệch → sửa DOC, không đổi server.
+
+== 5. KHÔNG LÀM (đúng cấm) ==
+0 lệnh ghi ERPNext thật · không saga/REVERSAL · không Phase 4/8/11 ·
+không rotate key · không đụng GitHub Settings · không đề xuất phase mới.
+
+== 6. VIỆC CHỈ USER LÀM ĐƯỢC (từ đây) ==
+- DUYỆT saga plan §7 (phase-09) → mới code REVERSING/REVERSED được.
+- SUBMIT phiếu thu (quyết riêng).
+- Dán 3 giá trị GitHub Settings (COPILOT_BASE_URL/COPILOT_AUTH_USER/
+  COPILOT_AUTH_PASSWORD) → CI build APK.
+- Test APK thiết bị thật · thu audio 150 câu (docs/audio-collection-script.md).
+- Rotate key ERPNext · review .project/ai-rules.md.
+Suite cuối: Python 60/60 · Node 119/119 · Flutter 34/34 · analyze 0.
+DỪNG PHIÊN — không đề xuất phase mới.

@@ -49,7 +49,7 @@ curl -s -X POST http://127.0.0.1:8788/ask \
 ## 4. Xác nhận ghi phiếu NHÁP (lấy từ 3b)
 
 ```bash
-CID=$(uuidgen)   # command_id mới MỖI proposal mới; giữ nguyên khi retry
+CID=$(node -p 'require("node:crypto").randomUUID()')   # command_id mới MỖI proposal mới; giữ nguyên khi retry (uuidgen không có sẵn trên host — dùng node)
 curl -s -X POST http://127.0.0.1:8788/execute \
   -H "Content-Type: application/json" \
   -d "{\"command_id\":\"$CID\",\"proposal\":<dán nguyên proposal từ 3b>}"
