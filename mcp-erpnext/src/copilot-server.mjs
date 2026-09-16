@@ -315,7 +315,11 @@ export async function answerQuestion(rawText) {
     // card; nothing is written until POST /execute (human confirm). The write
     // itself re-reads live ERPNext data and re-validates (Phase 9).
     if (route.group === "payment_write") {
-      const { customer, ambiguous, candidates } = await resolveCustomer(skills, nlp.text);
+      // result37 review: the OUTER guard already resolved this customer from
+      // the same text — re-calling resolveCustomer() here duplicated the full
+      // catalog round-trip per question and risked the two blocks diverging.
+      // Reuse `customer`/`ambiguous`/`candidates` from the guard above; the
+      // ambiguity note still travels in the answer (ambNote below).
       if (!customer) {
         return {
           question: rawText,
