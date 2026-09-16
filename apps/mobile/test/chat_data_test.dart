@@ -190,4 +190,56 @@ void main() {
       );
     });
   });
+
+  group('result40 — corrupt-payload tolerance (fail-safe, never wipe history)', () {
+    test(
+        'a NON-list rejection_problems parses as empty and the rest of the history survives',
+        () {
+      // Was: `json['rejection_problems'] as List<dynamic>?` ⇒ TypeError for a
+      // String ⇒ ChatHistoryService.load() catches and returns [] ⇒ ONE bad
+      // field silently wiped the whole chat history. The parse must be
+      // tolerant and keep every good turn.
+      final stored = jsonEncode([
+        {
+          'question': 'chị Lan còn nợ bao nhiêu',
+          'answer': 'Còn 2.500.000đ',
+          'ok': true,
+          'ts': DateTime.now().toIso8601String(),
+          'proposal': {
+            'schema': 'erpn.proposal/v1',
+            'action': 'create_payment_entry',
+            'risk': 'HIGH',
+            'need_confirm': true,
+            'entity': {'kind': 'customer', 'id': 'CUST-00001', 'name': 'Lan'},
+            'params': {'amount_vnd': 500000, 'invoice': 'SINV-1', 'outstanding_vnd': 500000},
+            'created_at': '2026-09-16T04:00:00.000Z',
+            // corrupt/hostile: a String where the server sends a list
+            'rejection_code': 'PROPOSAL_STALE',
+            'rejection_problems': 'nợ đã đổi từ 2500000 sang 2000000',
+          },
+        },
+        {
+          'question': 'hỏi sau đó',
+          'answer': 'ok',
+          'ok': true,
+          'ts': DateTime.now().toIso8601String(),
+        },
+      ]);
+
+      // Mirrors ChatHistoryService.load() exactly (whereType + map).
+      final list = jsonDecode(stored) as List<dynamic>;
+      final turns = list
+          .whereType<Map<String, dynamic>>()
+          .map(ChatTurn.fromJson)
+          .toList();
+
+      expect(turns.length, 2,
+          reason: 'a malformed field must not drop good turns');
+      final p = turns.first.proposal!;
+      expect(p.rejectionCode, 'PROPOSAL_STALE',
+          reason: 'the refusal reason is still shown (fail-closed banner)');
+      expect(p.rejectionProblems, isEmpty,
+          reason: 'unparseable problems[] degrades to empty, never throws');
+    });
+  });
 }

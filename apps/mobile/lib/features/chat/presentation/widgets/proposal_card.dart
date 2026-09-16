@@ -24,7 +24,29 @@ class ProposalCard extends ConsumerStatefulWidget {
   ConsumerState<ProposalCard> createState() => _ProposalCardState();
 }
 
-class _ProposalCardState extends ConsumerState<ProposalCard> {
+class _ProposalCardState extends ConsumerState<ProposalCard>
+    with AutomaticKeepAliveClientMixin {
+  /// F2 (result41, user decision 2026-09-16 — option b): `ListView.builder`
+  /// DISPOSES off-screen items, so scrolling a confirmed card away and back
+  /// used to rebuild it clean: the "Đã ghi phiếu thu …" line vanished and the
+  /// [Xác nhận] button came BACK on a card that had already been written
+  /// (probe P2 measured success=1/button=0 → success=0/button=1; the money was
+  /// still safe because the retry reuses the same command_id and the server
+  /// replays).
+  ///
+  /// Kept alive only while this card actually OWNS local state: an in-flight
+  /// confirm, a write result, an error, or a locally stamped refusal. Untouched
+  /// cards still scroll away normally, so long histories do not pin every card
+  /// in memory. (A rejection is ALSO persisted at model level — see
+  /// attachRejection — so that one survives a full restart; a write result does
+  /// not, by design of option (b): no schema change.)
+  @override
+  bool get wantKeepAlive =>
+      _confirming ||
+      _result != null ||
+      _error != null ||
+      _rejectionCode != null;
+
   bool _confirming = false;
   String? _result;
   String? _error;
@@ -69,6 +91,13 @@ class _ProposalCardState extends ConsumerState<ProposalCard> {
         '/execute',
         data: jsonEncode({'command_id': commandId, 'proposal': proposal.toJson()}),
       );
+      // The card can be unmounted while /execute is in flight (user navigates
+      // away or clears history) — after the await the State may be defunct and
+      // setState would throw "setState() called after dispose()" (review
+      // result40, proven by probe P1/P1b). Every post-await branch is guarded;
+      // the write itself already happened server-side and is idempotent, so
+      // skipping the UI update loses nothing.
+      if (!mounted) return;
       final body = res.data ?? const {};
       if (body['ok'] == true) {
         final result = body['result'] as Map<String, dynamic>? ?? const {};
@@ -81,6 +110,7 @@ class _ProposalCardState extends ConsumerState<ProposalCard> {
         _handleRefusal(body);
       }
     } on DioException catch (err) {
+      if (!mounted) return;
       // Server 4xx/5xx THROW in dio by default (validateStatus accepts only
       // 2xx) — a 409 PROPOSAL_STALE/EXPIRED lands HERE, not in res.data.
       // Without this branch the Phase 9 banner could never appear in a real
@@ -96,6 +126,12 @@ class _ProposalCardState extends ConsumerState<ProposalCard> {
             () => _error = 'Không gửi được lệnh xác nhận: ${err.message ?? err}');
       }
     } catch (e) {
+      // NOTE: this catch also sees exceptions from OUR OWN code inside the try
+      // (e.g. a parse error in _handleRefusal) — hence the mounted guard below
+      // and the tolerant parsing inside _handleRefusal. Without both, the first
+      // error was swallowed and re-thrown here as a bogus "network" message
+      // (review result40).
+      if (!mounted) return;
       setState(() => _error = 'Không gửi được lệnh xác nhận: $e');
     } finally {
       if (mounted) setState(() => _confirming = false);
@@ -106,10 +142,19 @@ class _ProposalCardState extends ConsumerState<ProposalCard> {
   /// reason (code + problems[]). Stamp it locally (immediate banner) AND
   /// attach it via the controller (persisted across restarts).
   void _handleRefusal(Map<String, dynamic> body) {
+    // Unmounted ⇒ nothing to render and ref.read would throw on a disposed
+    // scope (review result40, probe P1).
+    if (!mounted) return;
     final code = body['code'] as String?;
-    final problems = (body['problems'] as List<dynamic>? ?? const [])
-        .map((p) => p.toString())
-        .toList(growable: false);
+    // Tolerant parse (review result40, probe P4): a NON-list `problems` used to
+    // throw a TypeError out of the DioException handler, which meant the banner
+    // never rendered AND the confirm button stayed on a refused card —
+    // fail-OPEN exactly where fail-closed matters. Any refusal must render.
+    final problems = body['problems'] is List
+        ? (body['problems'] as List)
+            .map((p) => p.toString())
+            .toList(growable: false)
+        : <String>[];
     if (code == 'PROPOSAL_STALE' || code == 'PROPOSAL_EXPIRED') {
       setState(() {
         _rejectionCode = code;
@@ -117,6 +162,8 @@ class _ProposalCardState extends ConsumerState<ProposalCard> {
       });
       // Best-effort persistence — the standalone-card case (not backed by a
       // controller turn) simply no-ops inside attachRejection.
+      // `code` is provably non-null here (compared to two non-null literals
+      // above) — Dart does not promote through `==`, hence the `!`.
       ref
           .read(chatControllerProvider.notifier)
           .attachRejection(proposal, code: code!, problems: problems);
@@ -155,6 +202,9 @@ class _ProposalCardState extends ConsumerState<ProposalCard> {
 
   @override
   Widget build(BuildContext context) {
+    // Required by AutomaticKeepAliveClientMixin: performs the keep-alive
+    // bookkeeping (register/release) based on wantKeepAlive above.
+    super.build(context);
     final scheme = Theme.of(context).colorScheme;
     final riskColor = _riskColor(scheme);
     final onRiskColor = _onRiskColor(scheme);
@@ -275,7 +325,9 @@ class _ProposalCardState extends ConsumerState<ProposalCard> {
             ),
           ] else if (proposal.confirmable) ...[
             // Phase 7: the confirm button — ONLY for the one HIGH write.
-            // command_id is generated per press; the SERVER dedupes replays.
+            // command_id is stable for this CARD (created on first use, pinned
+            // in toJson — see ActionProposal.commandId), so a retry after an
+            // error replays instead of writing a second payment.
             const SizedBox(height: AppSpacing.sm),
             if (_result != null)
               Text(

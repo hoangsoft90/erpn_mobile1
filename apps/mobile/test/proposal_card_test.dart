@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -101,6 +102,36 @@ Widget _hostWithMock(ActionProposal proposal, Handler handler) =>
       ],
       child: MaterialApp(
         home: Scaffold(body: ProposalCard(proposal: proposal)),
+      ),
+    );
+
+/// Same host, but the card sits at the TOP of a long ListView — the setup the
+/// real chat screen has, and the one that exposes F2: `ListView.builder`
+/// DISPOSES off-screen children, so a card scrolled away and back used to be
+/// rebuilt from scratch (result40 probe P2: success=1/button=0 →
+/// success=0/button=1). Fillers are tall so a single drag moves the card out
+/// of the viewport and back.
+Widget _hostInListView(ActionProposal proposal, Handler handler) =>
+    ProviderScope(
+      overrides: [
+        dioProvider.overrideWith((ref) {
+          final dio = Dio(BaseOptions(baseUrl: 'http://mock'));
+          dio.httpClientAdapter = _MockAdapter(handler);
+          return dio;
+        }),
+      ],
+      child: MaterialApp(
+        home: Scaffold(
+          body: ListView.builder(
+            itemCount: 60,
+            itemBuilder: (context, index) => index == 0
+                ? ProposalCard(proposal: proposal)
+                : SizedBox(
+                    height: 120,
+                    child: Text('filler $index'),
+                  ),
+          ),
+        ),
       ),
     );
 
@@ -501,5 +532,130 @@ void main() {
     expect(find.byType(FilledButton), findsNothing);
     await tester.pumpWidget(_host(_proposal('CRITICAL', doubleConfirm: true)));
     expect(find.byType(FilledButton), findsNothing);
+  });
+
+  // ---------------------------------------------------------------------
+  // result40 review — crash/fail-open guards on the confirm+refusal path.
+  // Proven red before the fix with a throwaway probe (P1/P1b/P4), then kept
+  // here as regression tests.
+  // ---------------------------------------------------------------------
+
+  testWidgets(
+      'result40 F1: unmount while /execute is in flight — success path must '
+      'not setState after dispose', (tester) async {
+    final gate = Completer<ResponseBody>();
+    await tester.pumpWidget(
+        _hostWithMock(_proposal('HIGH', action: 'create_payment_entry'),
+            (options) => gate.future));
+
+    await tester.tap(find.byType(FilledButton));
+    await tester.pump(); // request started, still in flight
+
+    // The user navigates away / clears history mid-write: the card (and its
+    // ProviderScope) is disposed while the Future is pending.
+    await tester.pumpWidget(
+        const MaterialApp(home: Scaffold(body: SizedBox())));
+    expect(find.byType(ProposalCard), findsNothing);
+
+    gate.complete(_json({
+      'ok': true,
+      'replay': false,
+      'result': {'erpnext_doc': 'PE-M001', 'paid_vnd': 500000},
+    }));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    // An unguarded setState() (or ref.read on a disposed scope) fails the test
+    // with "setState() called after dispose()".
+    expect(tester.takeException(), isNull,
+        reason: 'post-await UI updates must be guarded by mounted');
+  });
+
+  testWidgets(
+      'result40 F1: unmount while /execute is in flight — 409 refusal path '
+      'must not setState after dispose either', (tester) async {
+    final gate = Completer<ResponseBody>();
+    await tester.pumpWidget(
+        _hostWithMock(_proposal('HIGH', action: 'create_payment_entry'),
+            (options) => gate.future));
+
+    await tester.tap(find.byType(FilledButton));
+    await tester.pump();
+    await tester.pumpWidget(
+        const MaterialApp(home: Scaffold(body: SizedBox())));
+
+    gate.complete(_json({
+      'ok': false,
+      'code': 'PROPOSAL_STALE',
+      'error': 'Dữ liệu đã thay đổi sau khi tạo đề xuất',
+      'problems': ['nợ đã đổi từ 2500000 sang 2000000'],
+    }, 409));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+
+    expect(tester.takeException(), isNull);
+  });
+
+  testWidgets(
+      'result40 F3: a refusal whose problems[] is NOT a list still renders the '
+      'banner and removes the confirm button (fail-CLOSED)', (tester) async {
+    // Before the fix the cast `as List<dynamic>?` threw a TypeError inside the
+    // DioException handler: the banner never rendered and the confirm button
+    // STAYED on a refused card — fail-open exactly where it must fail closed.
+    await tester.pumpWidget(
+        _hostWithMock(_proposal('HIGH', action: 'create_payment_entry'),
+            (options) async => _json({
+                  'ok': false,
+                  'code': 'PROPOSAL_STALE',
+                  'error': 'Dữ liệu đã thay đổi',
+                  'problems': 'nợ đã đổi từ 2500000 sang 2000000', // String
+                }, 409)));
+
+    await tester.tap(find.byType(FilledButton));
+    await tester.pumpAndSettle();
+
+    expect(tester.takeException(), isNull,
+        reason: 'a non-list problems field must not break the refusal path');
+    expect(find.textContaining('đã lệch so với dữ liệu thật'), findsOneWidget,
+        reason: 'any refusal must show the reason banner');
+    expect(find.text('Xác nhận thu tiền'), findsNothing,
+        reason: 'and must never leave the confirm affordance on a refused card');
+  });
+
+  testWidgets(
+      'result41 F2: a written card keeps its result through a ListView recycle '
+      '(option b — AutomaticKeepAliveClientMixin)', (tester) async {
+    var writes = 0;
+    // ONE proposal instance for the whole test — rebuilding the card with a
+    // fresh instance would reset the idempotency key and make this test lie
+    // (lesson from the result40 probe bug).
+    final proposal = _proposal('HIGH', action: 'create_payment_entry');
+    await tester.pumpWidget(_hostInListView(proposal, (options) async {
+      writes++;
+      return _json({
+        'ok': true,
+        'replay': false,
+        'result': {'erpnext_doc': 'PE-M001', 'paid_vnd': 2500000},
+      });
+    }));
+
+    await tester.tap(find.byType(FilledButton));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('Đã ghi phiếu thu: PE-M001'), findsOneWidget);
+    expect(find.byType(FilledButton), findsNothing);
+
+    // Scroll the card far out of the viewport, then back to the top.
+    await tester.drag(find.byType(ListView), const Offset(0, -5000));
+    await tester.pumpAndSettle();
+    await tester.drag(find.byType(ListView), const Offset(0, 6000));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Đã ghi phiếu thu: PE-M001'), findsOneWidget,
+        reason: 'the write result must survive the ListView recycle');
+    expect(find.byType(FilledButton), findsNothing,
+        reason: 'a card that already wrote must NOT offer confirm again '
+            'after being scrolled away and back');
+    expect(writes, 1,
+        reason: 'recycling must not fire a second /execute (no second write)');
   });
 }

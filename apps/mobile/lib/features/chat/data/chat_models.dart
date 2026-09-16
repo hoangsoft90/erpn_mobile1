@@ -240,10 +240,14 @@ class ActionProposal {
       // controller attaches these back onto the card so the user sees the
       // concrete reason, not a generic failure.
       rejectionCode: json['rejection_code'] as String?,
-      rejectionProblems:
-          (json['rejection_problems'] as List<dynamic>? ?? const [])
+      // Tolerant parse (review result40): a NON-list pushed a String through
+      // `as List<dynamic>?` ⇒ TypeError ⇒ ChatHistoryService.load() catches it
+      // and returns [] — one malformed turn silently wiped the WHOLE history.
+      rejectionProblems: json['rejection_problems'] is List
+          ? (json['rejection_problems'] as List)
               .map((p) => p.toString())
-              .toList(growable: false),
+              .toList(growable: false)
+          : const <String>[],
       // result33 review F4: the /execute money-shape gate reads
       // proposal.params.amount_vnd (http-ask.mjs) and 400s without it, and
       // detectDrift reads params.outstanding_vnd/invoice. The model used to
