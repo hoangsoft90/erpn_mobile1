@@ -68,6 +68,18 @@ ActionProposal _proposal(
     entityId: 'CUST-00001',
     entityName: 'Nguyễn Thị Lan',
     summary: 'Xem công nợ: Nguyễn Thị Lan',
+    // A server-built payment proposal ALWAYS carries params (copilot.test.mjs
+    // Phase 7b asserts amount_vnd/outstanding_vnd/invoice/mode) — the /execute
+    // money-shape gate refuses anything else, so tests of the confirm flow
+    // must mirror the real shape.
+    params: action == 'create_payment_entry'
+        ? const {
+            'amount_vnd': 500000,
+            'invoice': 'SINV-0001',
+            'outstanding_vnd': 2500000,
+            'mode': 'Tiền mặt',
+          }
+        : null,
   );
 }
 
@@ -196,6 +208,53 @@ void main() {
     final noEntity = ActionProposal.fromJson(
         _proposal('HIGH').toJson()..['entity']['id'] = null);
     expect(noEntity.confirmable, isFalse);
+  });
+
+  testWidgets(
+      'Phase 9 UI: a PROPOSAL_STALE 409 renders the reason banner with problems[] '
+      'and REMOVES the confirm button', (tester) async {
+    // A stale card must be re-asked on fresh numbers — never confirmed on old
+    // ones. The banner carries the server's concrete mismatches (problems[]).
+    final stale = ActionProposal.fromJson(
+      _proposal('HIGH', action: 'create_payment_entry').toJson()
+        ..['rejection_code'] = 'PROPOSAL_STALE'
+        ..['rejection_problems'] = [
+          'nợ đã đổi từ 2500000 sang 2000000',
+          'chứng từ không còn thuộc khách CUST-00001',
+        ],
+    );
+    expect(stale.isRejected, isTrue);
+    await tester.pumpWidget(_host(stale));
+    expect(find.textContaining('đã lệch so với dữ liệu thật'), findsOneWidget);
+    expect(find.textContaining('nợ đã đổi từ 2500000'), findsOneWidget);
+    expect(find.textContaining('chứng từ không còn thuộc khách'), findsOneWidget);
+    expect(find.text('Xác nhận thu tiền'), findsNothing,
+        reason: 'a refused card must not offer the confirm affordance');
+  });
+
+  testWidgets('Phase 9 UI: PROPOSAL_EXPIRED renders the expiry banner', (tester) async {
+    final expired = ActionProposal.fromJson(
+      _proposal('HIGH', action: 'create_payment_entry').toJson()
+        ..['rejection_code'] = 'PROPOSAL_EXPIRED',
+    );
+    await tester.pumpWidget(_host(expired));
+    expect(find.textContaining('đã hết hạn'), findsOneWidget);
+    expect(find.text('Xác nhận thu tiền'), findsNothing);
+  });
+
+  testWidgets(
+      'Phase 9 UI: rejection survives history restore (toJson → fromJson keeps code + problems)',
+      (tester) async {
+    final stale = ActionProposal.fromJson(
+      _proposal('HIGH', action: 'create_payment_entry').toJson()
+        ..['rejection_code'] = 'PROPOSAL_STALE'
+        ..['rejection_problems'] = ['nợ đã đổi từ 2500000 sang 2000000'],
+    );
+    final restored = ActionProposal.fromJson(stale.toJson());
+    expect(restored.rejectionCode, 'PROPOSAL_STALE');
+    expect(restored.rejectionProblems, ['nợ đã đổi từ 2500000 sang 2000000']);
+    expect(restored.commandId, stale.commandId,
+        reason: 'same card identity — the banner must survive restarts');
   });
 
   testWidgets('HIGH card shows confirm button; pressing it POSTs /execute once',
@@ -358,11 +417,8 @@ void main() {
     expect(restored.proposal, isNotNull,
         reason: 'the restored turn must still render its confirm card');
     expect(restored.proposal!.commandId, key);
-  });
-
-  testWidgets('server replay response shows the anti-duplicate message'
-      , (tester) async {
-    await tester.pumpWidget(
+  });  testWidgets('server replay response shows the anti-duplicate message'
+      , (tester) async {    await tester.pumpWidget(
         _hostWithMock(_proposal('HIGH', action: 'create_payment_entry'),
             (options) async {
       return _json({
@@ -374,6 +430,69 @@ void main() {
     await tester.tap(find.byType(FilledButton));
     await tester.pumpAndSettle();
     expect(find.textContaining('chống trùng'), findsOneWidget);
+  });
+
+  testWidgets(
+      'Phase 7b wire: pressing confirm sends params.amount_vnd the server '
+      'money-shape gate REQUIRES (result33 review F4)', (tester) async {
+    // http-ask.mjs:309 reads proposal.params.amount_vnd and 400s without it.
+    // The Dart model must carry the confirmed numbers BACK to the server —
+    // a model that drops params makes every real confirm press a 400 (unit
+    // tests never caught it because Node tests hand-build the JSON with
+    // params and Dart tests only asserted the response, not the sent body).
+    final bodies = <Map<String, dynamic>>[];
+    await tester.pumpWidget(
+        _hostWithMock(_proposal('HIGH', action: 'create_payment_entry'),
+            (options) async {
+      bodies
+          .add(jsonDecode(options.data as String) as Map<String, dynamic>);
+      return _json({
+        'ok': true,
+        'replay': false,
+        'result': {'erpnext_doc': 'PE-M001', 'paid_vnd': 500000},
+      });
+    }));
+    await tester.tap(find.byType(FilledButton));
+    await tester.pumpAndSettle();
+    final sent = bodies.single['proposal'] as Map<String, dynamic>;
+    expect(
+        (sent['params'] as Map<String, dynamic>?)?['amount_vnd'], 500000,
+        reason: 'the server money-shape gate 400s without params.amount_vnd — '
+            'the round-trip must keep the confirmed amount');
+    expect(
+        (sent['params'] as Map<String, dynamic>?)?['outstanding_vnd'],
+        2500000,
+        reason: 'the drift snapshot must survive too (detectDrift reads it)');
+  });
+
+  testWidgets(
+      'Phase 9 wire: /execute answering 409 PROPOSAL_STALE THROUGH dio (throws '
+      'by default) still attaches the reason banner — regression for the '
+      'result33 review finding', (tester) async {
+    // dio rejects non-2xx (validateStatus default) — so the 409 body arrives
+    // as err.response.data inside a DioException, NOT as res.data. This test
+    // drives the REAL wire path; the earlier banner tests fed rejections
+    // straight into the model and could not catch the missing branch.
+    await tester.pumpWidget(
+        _hostWithMock(_proposal('HIGH', action: 'create_payment_entry'),
+            (options) async {
+      return _json(
+        {
+          'ok': false,
+          'code': 'PROPOSAL_STALE',
+          'error': 'Dữ liệu đã thay đổi sau khi tạo đề xuất',
+          'problems': ['nợ đã đổi từ 2500000 sang 2000000'],
+        },
+        409,
+      );
+    }));
+    await tester.tap(find.byType(FilledButton));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('đã lệch so với dữ liệu thật'), findsOneWidget,
+        reason: 'the banner must render on the REAL 409 path too');
+    expect(find.textContaining('nợ đã đổi từ 2500000'), findsOneWidget);
+    expect(find.text('Xác nhận thu tiền'), findsNothing,
+        reason: 'fail-closed: no confirm affordance on a refused card');
   });
 
   testWidgets('READ and CRITICAL cards still have NO button (display-only)',

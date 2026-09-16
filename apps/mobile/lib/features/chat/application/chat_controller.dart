@@ -76,6 +76,56 @@ class ChatController extends _$ChatController {
     state = AsyncData(const ChatState());
   }
 
+  /// Phase 9 UI (result32): after /execute refuses a card with 409
+  /// PROPOSAL_STALE / PROPOSAL_EXPIRED, stamp the reason onto THAT card in the
+  /// turn list (and persist it) so the banner survives app restarts. The card
+  /// is matched by its stable commandId — the same identity the idempotency
+  /// gate uses server-side.
+  Future<void> attachRejection(
+    ActionProposal proposal, {
+    required String code,
+    required List<String> problems,
+  }) async {
+    final current = state.value;
+    if (current == null) return;
+    final targetId = proposal.commandId;
+    var changed = false;
+    final turns = current.turns.map((turn) {
+      final p = turn.proposal;
+      if (p == null || p.commandId != targetId || p.isRejected) return turn;
+      changed = true;
+      return ChatTurn(
+        question: turn.question,
+        answer: turn.answer,
+        ok: turn.ok,
+        ts: turn.ts,
+        routedGroup: turn.routedGroup,
+        proposal: ActionProposal(
+          schema: p.schema,
+          action: p.action,
+          risk: p.risk,
+          riskIcon: p.riskIcon,
+          riskLabel: p.riskLabel,
+          needConfirm: p.needConfirm,
+          needDoubleConfirm: p.needDoubleConfirm,
+          executable: p.executable,
+          entityKind: p.entityKind,
+          entityId: p.entityId,
+          entityName: p.entityName,
+          summary: p.summary,
+          commandIdSeed: p.commandIdSeed,
+          createdAt: p.createdAt,
+          rejectionCode: code,
+          rejectionProblems: problems,
+          params: p.params,
+        ),
+      );
+    }).toList();
+    if (!changed) return;
+    state = AsyncData(current.copyWith(turns: turns));
+    await ref.read(chatHistoryServiceProvider).save(turns);
+  }
+
   Future<void> _append(ChatTurn turn) async {
     final current = state.value ?? const ChatState();
     final turns = [...current.turns, turn];

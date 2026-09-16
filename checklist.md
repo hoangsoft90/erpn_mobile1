@@ -69,7 +69,7 @@ Trạng thái roadmap chi tiết nằm ở `next.md` — file này KHÔNG nhân 
 ## Chưa làm / đang làm (thứ tự)
 
 ### Đang làm
-- [ ] **CHỜ DUYỆT COMMIT đợt result31 (14 file — vùng tiền)**: router payment_write (+notIf deny-list) · /execute/cancel + bọc try/catch quanh store.cancel (F2) · copilot-server rawText (F3) · store.cancel() · faq.md · 3 test Node + 1 widget test · docs root · result31 §11 addendum. Message đề xuất ở result31 §7.
+- [x] **COMMIT đợt result31 — ✅ `bda54cf` (đã push 2026-09-16)**: 18 files +978/−66 (14 file code/docs + result31.txt + 2 handoff); secret scan CLEAN trên staged diff; `.env` + `idempotency-store` xác nhận git-ignored; không stage `.gemini//.opencode//initp` — router payment_write (+notIftIf deny-list) · /execute/cancel + bọc try/catch quanh store.cancel (F2) · copilot-server rawText (F3) · store.cancel() · faq.md · 3 test Node + 1 widget test · docs root · result31 §11 addendum. Message đề xuất ở result31 §7.
 - [x] **Code review sâu chuỗi client (result16, 2026-09-15): 7 lỗi thật đã sửa** — 3 crash router (upstream stream không error listener / client ngắt giữa request / models path — đều giết process), 2 stuck (http-ask không deadline → socket treo vô hạn; NLP fetch không AbortSignal), 2 logic Flutter (cold-start race ghi đè lịch sử; mounted guard sau await). **+3 regression test. Node 49/49 (9s) · router 8/8 · Flutter analyze 0 · Flutter 14/14.** 4 lỗi của chính agent trong đợt này (finding sai, Promise.race timer không clear, test thiếu override, str_replace miss) đã vào skill mục 6. Chờ duyệt commit
 - [x] **Phase 5 — LLM Router nối upstream thật** (result15, 2026-09-15): endpoint chính thức điền xong (zen `opencode.ai/zen/v1` · gemini `generativelanguage.googleapis.com/v1beta/openai`); **2 bug router tự bắt khi chạy thật** (https transport + field `store` Gemini từ chối → `stripFields`) + `LLM_ROUTER_DEBUG=1`; **Gemini verify generate thật 200** qua router · **Zen bị chặn billing** (CreditsError: No payment method — glm-5.3-flash là PAID, big-pickle chỉ chạy trong OpenCode client); cơ chế dsh thật = cordis patch row (settings.yaml result6 lỗi thời) → skill mới `erpn-dsh-setup`; **E2E dsh→router→Gemini flaky do free tier 20 req/phút** (1 session dsh tốn 2–3 calls: 429 quota + 503 high demand nguyên văn trong result15 §6)
 - [x] GH Actions run #2 ✅ **SUCCESS** (`result10.txt`): [run 34826575147](https://github.com/hoangsoft90/erpn_mobile1/actions/runs/34826575147) — build_runner/Analyze/Test/Build APK đều xanh; artifact `erpn-chat-debug-apk` (80MB zip) đã tải về VPS `/home/kythuat_hoangweb/erpn-apk/app-debug.apk`
@@ -152,7 +152,7 @@ Trạng thái roadmap chi tiết nằm ở `next.md` — file này KHÔNG nhân 
   - **Test**: Node **86/86** (thêm: payload PE thật · mode resolve · verify đọc-lại · reconcile phát hiện duplicate · crash-recovery qua HTTP · begin() giữ reference_no) · Python 58/58 · Flutter 25/25 · analyze 0
   - **Hệ quả nghiệp vụ đo được**: 2 phiếu đang là NHÁP ⇒ công nợ ACC-SINV-2026-00047 **không đổi** (457.875, Unpaid); muốn tiền được ghi nhận phải SUBMIT — chờ user quyết
   - **Việc của user**: dọn 2 phiếu nháp demo (ACC-PAY-2026-00114/00115) — hướng dẫn trong result25 §B.8, KHÔNG tự xóa
-  - 🔎 **VÒNG REVIEW SAU STAGE B (2026-09-16, `result26.txt`) — 5 lỗi thật tìm thấy trong chính code vừa viết, đã sửa + falsify, CHỜ DUYỆT COMMIT cùng đợt:**
+  - 🔎 **VÒNG REVIEW SAU STAGE B (2026-09-16, `result26.txt`) — 5 lỗi thật tìm thấy trong chính code vừa viết, đã sửa + falsify, ✅ ĐÃ COMMIT `bda54cf`:**
     - 🔴 **(1) Lỗi post-write bị đánh FAILED** ⇒ `begin()` từ chối FAILED ⇒ KHÔNG reconcile được, và đẩy user sang **command_id mới** = đúng công thức ghi phiếu thứ hai. **Fix**: phân loại theo `reference_no` — lỗi SAU khi đã đăng ký reference ⇒ `503 {retry_same_command_id:true}`, record giữ PENDING (lần sau reconcile); lỗi TRƯỚC reference (chưa thể ghi gì) ⇒ FAILED như cũ. Test fault-injection `MOCK_ERP_FAIL_WRITE`.
     - 🔴 **(2) `amount_vnd: 0`/NaN bị thăng cấp thành THU TOÀN BỘ NỢ**: `Math.round(Number(x) || liveOutstanding)` coi 0/NaN/"" là “thu hết”, trong khi builder ĐÃ từ chối `amount <= 0` ⇒ validate có ở đường build, THIẾU ở đường execute. **Fix 2 tầng**: boundary `/execute` trả 400 (**không chiếm command_id**) + executor throw `PAYMENT_AMOUNT_INVALID` trước `setReference`.
     - 🟡 **(3) `?? modes[0]?.name` chọn ĐẠI phương thức** ⇒ “thu tiền mặt” có thể ghi vào tài khoản ngân hàng (sai sổ, im lặng). **Fix**: chỉ exact → cash-named → cash-typed; không khớp ⇒ `PAYMENT_MODE_UNRESOLVED` (fail-closed).
@@ -162,9 +162,8 @@ Trạng thái roadmap chi tiết nằm ở `next.md` — file này KHÔNG nhân 
 
 ### Các phase kế tiếp (chi tiết ở `next.md`)
 - Phase 4 (STT) — chặn bởi audio · Phase 5 (Gateway) — ĐÃ MỞ (sign-off 2026-09-15), router bản đơn giản đã code (result14) ·
-  Phase 6 (Entity resolution + Proposal card) · Phase 7 (**write đầu tiên** — Go/No-Go gate) ·
-  Phase 8–15 (jobs/TTS, proposal state machine, multi-user, write mở rộng, multi-tenant,
-  hardening, store, monetization-ads giữa 13 và 14)
+  Phase 6 ✅ · Phase 7 ✅ Stage A+B nháp (chờ user SUBMIT) · Phase 9 an toàn ✅ (saga chờ duyệt §7) ·
+  Phase 8–15 (jobs/TTS, multi-user, write mở rộng, multi-tenant, hardening, store, monetization-ads giữa 13 và 14)
 
 ### Nợ kỹ thuật Phase 1 (làm khi có dữ liệu quyết định)
 - [ ] `bạc` = mệnh giá nào? — chờ user (`ch-003`)
@@ -178,7 +177,8 @@ Trạng thái roadmap chi tiết nằm ở `next.md` — file này KHÔNG nhân 
 
 - [x] **Gộp hay tách 3 commit?** — User quyết 2026-09-16: **GỘP 1 commit `eea0411`** (đã push).
 - [ ] **SUBMIT phiếu thu demo** — user để sau, cần quyết riêng (2 phiếu nháp demo ĐÃ XOÁ 2026-09-16 qua `erpnext_doc_delete` — verify hóa đơn gốc không đổi; SUBMIT phiếu thu sau này là quyết định riêng khi có phiếu thật)
-- [ ] **Duyệt commit đợt result31** (14 file — xem "Đang làm" trên) + xác nhận hướng xử lý F1 (deny-list từ khóa câu hỏi) là chấp nhận được về nghiệp vụ
+- [ ] **Duyệt commit đợt result32+33 — UI STALE + F4 (12 file)**: 4 Dart (banner STALE/EXPIRED thay nút [Xác nhận] + fix wire 409 dio + **fix F4: model gửi lại `params` cho money-shape gate — mọi confirm từ app thật từng sẽ bị 400**) + 4 docs + result32/33.txt + 2 handoff. Message đề xuất (user soạn 2026-09-16): `feat: phase 9 UI — stale/expired banner via real HTTP 409 (dio); params round-trip so confirm works from the app`. Review result33: banner từng VÔ HÌNH trên đường thật (dio throw 409); F4 falsify `Expected: <500000> Actual: <null>`. Suite: **Flutter 34/34 · Node 119/119 · Python 60/60 · analyze 0**; secret scan CLEAN.
+- [ ] **Duyệt saga plan §7** (phase-09, PLAN ONLY — `REVERSAL-<command_id>`, CRITICAL double-confirm, 5 test mock): duyệt thì mới code REVERSING/REVERSED.
 - [ ] **Review `.project/ai-rules.md`** (MỚI 2026-09-14): file bạn nhắc tới KHÔNG tồn tại trước đó — agent đã tổng hợp từ AGENTS.md + operating_rules + thực tế result1→11. Duyệt hoặc sửa theo ý bạn; sau đó đây là nguồn quy tắc số 1 của `.project/`
 - [x] ~~**Upstream LLM (result15):** ① Zen ② Gemini~~ — **user đã trả lời 2026-09-15**: Zen để sau (giữ billing-blocked), Gemini giữ free tier. Lưu ý result17 đính chính: phần lớn "flaky" trước đây là **bug cooldown của router**, không phải free tier
 - [x] ~~**ERPNext thật đang 500**~~ — user đã khắc phục cùng ngày (14:35 verify: ping 200 + đọc được khách thật) → E2E thật đã chạy xanh (result17 §K)

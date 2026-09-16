@@ -184,6 +184,9 @@ class ActionProposal {
     this.summary,
     this.commandIdSeed,
     this.createdAt,
+    this.rejectionCode,
+    this.rejectionProblems = const <String>[],
+    this.params,
   });
 
   factory ActionProposal.fromJson(Map<String, dynamic> json) {
@@ -231,7 +234,25 @@ class ActionProposal {
       // Phase 9: the server's build time MUST survive the round-trip too —
       // /execute refuses a proposal without it (or older than the TTL), so
       // dropping it here would make every confirm fail.
-      createdAt: json['created_at'] as String?
+      createdAt: json['created_at'] as String?,
+      // Phase 9 UI (result32): the /execute 409 carries WHY the card was
+      // refused (PROPOSAL_STALE with problems[] / PROPOSAL_EXPIRED). The
+      // controller attaches these back onto the card so the user sees the
+      // concrete reason, not a generic failure.
+      rejectionCode: json['rejection_code'] as String?,
+      rejectionProblems:
+          (json['rejection_problems'] as List<dynamic>? ?? const [])
+              .map((p) => p.toString())
+              .toList(growable: false),
+      // result33 review F4: the /execute money-shape gate reads
+      // proposal.params.amount_vnd (http-ask.mjs) and 400s without it, and
+      // detectDrift reads params.outstanding_vnd/invoice. The model used to
+      // DROP params entirely — every real confirm press would have been a
+      // 400, invisible to tests that never inspected the sent body.
+      params: json['params'] is Map<String, dynamic>
+          ? Map<String, dynamic>.unmodifiable(
+              json['params'] as Map<String, dynamic>)
+          : null,
     );
   }
 
@@ -257,6 +278,25 @@ class ActionProposal {
   /// 10 minutes) or one missing this field entirely.
   final String? createdAt;
 
+  /// Phase 9 UI: the machine-readable reason /execute refused this card
+  /// (PROPOSAL_STALE / PROPOSAL_EXPIRED / ...). Null while the card is
+  /// untouched — set by the controller after a 409 from /execute.
+  final String? rejectionCode;
+
+  /// Human-readable mismatches for PROPOSAL_STALE (debt changed, invoice
+  /// moved...). Empty unless [rejectionCode] == PROPOSAL_STALE.
+  final List<String> rejectionProblems;
+
+  /// Operation parameters echoed back on /execute (result33 F4). The server's
+  /// money-shape gate reads `params.amount_vnd` and the drift check reads
+  /// `params.outstanding_vnd`/`params.invoice` from what the CLIENT sends, so
+  /// the confirmed numbers must survive the model round-trip. Unmodifiable:
+  /// a card's numbers are fixed at build time — re-asking builds a new
+  /// proposal, editing this one in place would defeat the drift check.
+  final Map<String, dynamic>? params;
+
+  bool get isRejected => rejectionCode != null;
+
   Map<String, dynamic> toJson() => {
         'schema': schema,
         'action': action,
@@ -274,6 +314,13 @@ class ActionProposal {
         if (createdAt != null) 'created_at': createdAt,
         // Persist the key so history restore cannot re-key the same card.
         'command_id': commandId,
+        // result33 F4: keep the confirmed numbers on the wire (money-shape
+        // gate + drift check read them server-side).
+        if (params != null) 'params': params,
+        // Phase 9 UI: the rejection survives history restore too — a stale
+        // card reopened after a restart must still show WHY it was refused.
+        if (rejectionCode != null) 'rejection_code': rejectionCode,
+        if (rejectionProblems.isNotEmpty) 'rejection_problems': rejectionProblems,
       };
 
   /// The confirm button shows ONLY for HIGH-risk payment proposals — the one

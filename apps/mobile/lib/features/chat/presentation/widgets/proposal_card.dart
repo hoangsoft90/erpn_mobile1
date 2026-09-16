@@ -1,9 +1,11 @@
 import 'dart:convert';
 
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../../app/theme/app_theme.dart';
+import '../../application/chat_controller.dart';
 import '../../data/chat_models.dart';
 import '../../../../app/providers.dart';
 
@@ -26,6 +28,25 @@ class _ProposalCardState extends ConsumerState<ProposalCard> {
   bool _confirming = false;
   String? _result;
   String? _error;
+  // Phase 9 (result33 review): local rejection — the card shows the banner
+  // IMMEDIATELY on a 409, even when this widget instance is not (yet) backed
+  // by the controller's turn list. attachRejection() additionally persists
+  // the reason so it survives restarts (the model-level path).
+  String? _rejectionCode;
+  List<String> _rejectionProblems = const [];
+
+  @override
+  void didUpdateWidget(covariant ProposalCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // The proposal instance was swapped (history restore / turn rebuild):
+    // drop the local stamp unless the new instance carries its own, so a
+    // stale stamp can never leak onto a different card.
+    if (!identical(widget.proposal, oldWidget.proposal) &&
+        !widget.proposal.isRejected) {
+      _rejectionCode = null;
+      _rejectionProblems = const [];
+    }
+  }
 
   /// Short alias so build() and helpers read like the old StatelessWidget.
   ActionProposal get proposal => widget.proposal;
@@ -57,13 +78,51 @@ class _ProposalCardState extends ConsumerState<ProposalCard> {
               : 'Đã ghi phiếu thu: ${result['erpnext_doc'] ?? '?'} — ${result['paid_vnd'] ?? '?'}đ';
         });
       } else {
-        setState(() => _error = '${body['error'] ?? 'xác nhận thất bại'}');
+        _handleRefusal(body);
+      }
+    } on DioException catch (err) {
+      // Server 4xx/5xx THROW in dio by default (validateStatus accepts only
+      // 2xx) — a 409 PROPOSAL_STALE/EXPIRED lands HERE, not in res.data.
+      // Without this branch the Phase 9 banner could never appear in a real
+      // run (found in the result33 review; widget tests previously only fed
+      // rejections straight into the model, never through the wire).
+      final body = err.response?.data;
+      if (body is Map<String, dynamic> && body.isNotEmpty) {
+        _handleRefusal(body);
+      } else {
+        // No response at all (connection drop / timeout) — keep the network
+        // message; retrying is safe (same command_id, server replays).
+        setState(
+            () => _error = 'Không gửi được lệnh xác nhận: ${err.message ?? err}');
       }
     } catch (e) {
       setState(() => _error = 'Không gửi được lệnh xác nhận: $e');
     } finally {
       if (mounted) setState(() => _confirming = false);
     }
+  }
+
+  /// Phase 9 UI (result32): a refusal from /execute carries the concrete
+  /// reason (code + problems[]). Stamp it locally (immediate banner) AND
+  /// attach it via the controller (persisted across restarts).
+  void _handleRefusal(Map<String, dynamic> body) {
+    final code = body['code'] as String?;
+    final problems = (body['problems'] as List<dynamic>? ?? const [])
+        .map((p) => p.toString())
+        .toList(growable: false);
+    if (code == 'PROPOSAL_STALE' || code == 'PROPOSAL_EXPIRED') {
+      setState(() {
+        _rejectionCode = code;
+        _rejectionProblems = problems;
+      });
+      // Best-effort persistence — the standalone-card case (not backed by a
+      // controller turn) simply no-ops inside attachRejection.
+      ref
+          .read(chatControllerProvider.notifier)
+          .attachRejection(proposal, code: code!, problems: problems);
+    }
+    setState(
+        () => _error = '${body['error'] ?? 'xác nhận thất bại'}');
   }
 
   Color _riskColor(ColorScheme scheme) {
@@ -165,9 +224,58 @@ class _ProposalCardState extends ConsumerState<ProposalCard> {
               ),
             ),
           ],
-          // Phase 7: the confirm button — ONLY for the one HIGH write.
-          // command_id is generated per press; the SERVER dedupes replays.
-          if (proposal.confirmable) ...[
+          // Phase 9 UI (result32/result33): a refused card shows WHY —
+          // banner with the machine code + the human-readable problems[]
+          // from the server. It replaces the confirm affordance: a stale
+          // card must be re-asked, never confirmed on old numbers
+          // (fail-closed, no silent clamp). Rejection comes from the model
+          // (persisted, survives restart) OR the local stamp (immediate,
+          // works even for a card not backed by the controller yet).
+          if (proposal.isRejected || _rejectionCode != null) ...[
+            const SizedBox(height: AppSpacing.xs),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(AppSpacing.xs),
+              decoration: BoxDecoration(
+                color: scheme.errorContainer,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    (proposal.rejectionCode ?? _rejectionCode) ==
+                            'PROPOSAL_EXPIRED'
+                        ? '⏰ Đề xuất đã hết hạn — hãy hỏi lại để tạo đề xuất mới trên số liệu hiện tại'
+                        : '🔄 Đề xuất đã lệch so với dữ liệu thật — KHÔNG ghi, hãy hỏi lại',
+                    style: TextStyle(
+                      color: scheme.onErrorContainer,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 12,
+                    ),
+                  ),
+                  if (proposal.rejectionProblems.isNotEmpty ||
+                      _rejectionProblems.isNotEmpty) ...[
+                    const SizedBox(height: 2),
+                    ...(proposal.rejectionProblems.isNotEmpty
+                            ? proposal.rejectionProblems
+                            : _rejectionProblems)
+                        .map(
+                          (p) => Text(
+                            '• $p',
+                            style: TextStyle(
+                              color: scheme.onErrorContainer,
+                              fontSize: 11,
+                            ),
+                          ),
+                        ),
+                  ],
+                ],
+              ),
+            ),
+          ] else if (proposal.confirmable) ...[
+            // Phase 7: the confirm button — ONLY for the one HIGH write.
+            // command_id is generated per press; the SERVER dedupes replays.
             const SizedBox(height: AppSpacing.sm),
             if (_result != null)
               Text(

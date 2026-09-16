@@ -93,7 +93,7 @@ Python `src/vietnamese_nlp/`, stdlib thuần, chạy TRƯỚC LLM — cố đị
 
 ## Sắp tới
 
-### ĐÃ DUYỆT — XONG trong phiên result31 (2026-09-16) · review vòng 2 kèm 2 fix — CHỜ DUYỆT COMMIT
+### ĐÃ DUYỆT — XONG trong phiên result31 (2026-09-16) · review vòng 2 kèm 2 fix — ✅ COMMIT `bda54cf` ĐÃ PUSH
 
 0. ⏳ **Review vòng 2 (result31 §11) — đã vá, chờ duyệt cùng đợt**: **F1** anchor `startsWith` vẫn nuốt câu ĐỌC lịch sử (`'thanh toán gần nhất của chị Lan...'` → `'payment gần nhất...'` → routed payment_write SAI — probe `answerQuestion()` thật) ⇒ fix `notIf` deny-list (bao nhiêu/mấy/gần nhất/mới nhất/?) → câu hỏi rơi về nhóm payment ĐỌC; +1 test round 2, falsify đạt (gỡ gate → FAIL đúng assertion). **F2** `store.cancel()` ngoài try/catch — race với `/execute` đồng thời ⇒ throw uncaught ⇒ **Node ≥15 crash cả process** (bằng chứng cơ chế: async handler throw → exit 1; suite không bắt được vì child-process cách ly) ⇒ bọc try/catch → 409. **F3** reason dùng `rawText`. Suite sau review: **Node 119/119 · Python 60/60 · Flutter 29/29 · analyze 0**.
 
@@ -102,7 +102,21 @@ Python `src/vietnamese_nlp/`, stdlib thuần, chạy TRƯỚC LLM — cố đị
 3. ✅ **Route `/execute/cancel`** (giải zombie PENDING result29 §10-F2): `store.cancel()` chỉ từ PENDING; COMPLETED ⇒ 409 + result; PENDING ⇒ `reconcilePaymentEntry()` trước — 0 chứng từ mới CANCELLED, thấy chứng từ ⇒ 409 + `erpnext_doc` (kèm test retry /execute cùng id → replay). 503 khi ERPNext chết lúc đối soát. Falsify: disable nhánh chặn → 13/14 FAIL đúng chỗ; khôi phục 14/14.
 4. ✅ **Xoá 2 PE demo `ACC-PAY-2026-00114/00115`**: đọc source tìm tool thật (`erpnext_doc_delete` — draft OK, không cần cancel vì docstatus 0); gọi qua JSON-RPC thô MỘT LẦN theo lệnh user (đường xoá KHÔNG được mở vào code sản phẩm); verify độc lập: cả 2 GONE + `ACC-SINV-2026-00047` outstanding 457.875 Unpaid — GIỐNG HẾT trước xoá.
 5. ✅ **faq.md** đầu-file + §3.2/§3.3/§9/§8 cập nhật khớp hành vi mới (nút [Xác nhận] chỉ hiện khi RA LỆNH ghi).
-6. ⏳ **14 file kèm review-fix CHỜ DUYỆT COMMIT** (vùng tiền) — message đề xuất ở result31 §7.
+6. ✅ **Commit `bda54cf` ĐÃ PUSH** (2026-09-16): 18 files +978/−66 (14 file + result31.txt + 2 handoff); secret scan CLEAN; `.env`/`idempotency-store`/rác không stage.
+
+### Bước kỹ thuật tiếp theo (KHÔNG Phase 4/8/11)
+
+- **MVP kỹ thuật Phase 7 + Phase 9 an toàn: ĐÃ XONG** (bda54cf + đợt UI STALE/F4 chờ duyệt).
+  Mọi nhánh của luồng "hỏi nợ → thu tiền → xác nhận → ghi nháp → banner từ chối nếu lệch/hết hạn"
+  đều có code + test; không còn khoảng trống kỹ thuật nào trong scope hiện tại.
+- **⏳ Đợt UI STALE + F4 (result32+33) — CHỜ DUYỆT COMMIT** (12 file: 4 Dart + 4 docs +
+  result32/33 + 2 handoff; secret scan CLEAN; Flutter 34/34). Message đề xuất:
+  `feat: phase 9 UI — stale/expired banner via real HTTP 409 (dio); params round-trip so
+  confirm works from the app`.
+- **KHÔNG mở Phase 4 (STT — chặn audio) / 8 (jobs/TTS) / 11 (write skills mới)**.
+- Việc tiếp theo: người thật (APK thiết bị thật · SUBMIT phiếu thu · thu audio 150 câu ·
+  dán GitHub Settings · rotate key) — hoặc **saga code khi user duyệt §7** (phase-09,
+  REVERSING/REVERSED, 5 test mock). Runbook demo 1 trang: `docs/demo-payment-draft.md`.
 
 ### Đã xong trong phiên docs-sync (2026-09-16)
 
