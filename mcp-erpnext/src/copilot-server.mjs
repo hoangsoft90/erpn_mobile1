@@ -21,6 +21,36 @@
 import { createMcpClient, MOCK_SERVER } from "./client.mjs";
 import { routeIntent } from "./router.mjs";
 import { buildPaymentProposal } from "./skills/payment-write.mjs";
+// ── P2 (plan2_final §12 + §14): uncertainty taxonomy + session context ──
+import { SessionContext, CONTEXT_PROVENANCE } from "./session-context.mjs";
+import { uncertaintyCopy, toUncertaintyCode, UNCERTAINTY_CODES } from "./uncertainty.mjs";
+
+/**
+ * One session-context per pipeline process. Keyed by NOTHING today (single
+ * shop console); P8 (multi-user) keys it by session id — the API already takes
+ * the instance, so the future change is at the call sites, not the store.
+ */
+const sessionContext = new SessionContext();
+/** Test seam — lets a test reset context without touching the module. */
+export function __resetSessionContext() {
+  sessionContext.clear();
+}
+export function __sessionContext() {
+  return sessionContext;
+}
+
+/**
+ * Attach taxonomy copy to a refusal result (P2 §12). `error_code` stays the
+ * raw pipeline code the tests already assert; `uncertainty` carries the
+ * canonical code + Vietnamese message the client renders verbatim.
+ * @param {object} result refusal-shaped result with error_code set
+ * @returns {object} same result + `uncertainty` (only when mappable)
+ */
+function withUncertainty(result) {
+  const canonical = toUncertaintyCode(result?.error_code);
+  if (!canonical) return result;
+  return { ...result, uncertainty: uncertaintyCopy(canonical, { detail: result?.reason ?? null }) };
+}
 import { realServerScript } from "./index.mjs";
 import { buildProposal, readProposal } from "./action-proposal.mjs";
 import { sanitizeUntrustedList, containsInstructionPattern } from "./untrusted-data.mjs";
@@ -216,17 +246,16 @@ export async function answerQuestion(rawText, opts = {}) {
   let nlp;
   try {
     nlp = await normalizeText(rawText);
-  } catch (err) {
-    return {
-      question: rawText,
-      normalized: null,
-      routed: null,
-      answer: null,
-      error_code: "NLP_UNAVAILABLE",
-      reason:
-        `dịch vụ chuẩn hoá tiếng Việt (:8787) không trả lời (${err?.message ?? err}) — KHÔNG đề xuất ghi gì, vì số tiền/ngày sẽ phải đoán. Thử lại sau khi service lên.`,
-      proposal: null,
-    };
+  } catch (err) {      return withUncertainty({
+        question: rawText,
+        normalized: null,
+        routed: null,
+        answer: null,
+        error_code: "NLP_UNAVAILABLE",
+        reason:
+          `dịch vụ chuẩn hoá tiếng Việt (:8787) không trả lời (${err?.message ?? err}) — KHÔNG đề xuất ghi gì, vì số tiền/ngày sẽ phải đoán. Thử lại sau khi service lên.`,
+        proposal: null,
+      });
   }
   const mcp = createMcpClient({ serverScript: pickServerScript() }); // real when ERPNEXT_* set, mock otherwise
   try {
@@ -235,20 +264,23 @@ export async function answerQuestion(rawText, opts = {}) {
     const route = routeIntent(nlp.text);
 
     if (!route) {
-      return {
+      return withUncertainty({
         question: rawText,
         normalized: nlp,
         routed: false,
         answer: null,
         error_code: "UNKNOWN_INTENT",
         reason: "no skill route matched — Phase 2 router covers customer/sales/payment/inventory only",
-      };
+      });
     }
 
     // P0 (plan2_final §8): a FORBIDDEN capability (document.delete) is refused
     // here, at the top of the pipeline — it must never reach a skill, never
     // produce a proposal and never touch ERPNext. Declared in the contract so
     // the refusal is explicit instead of a silent misroute into a READ group.
+    // ORDER MATTERS: the forbidden check runs BEFORE the stub check below —
+    // document.delete is both forbidden AND skill:null, and its refusal must
+    // stay FORBIDDEN_IN_AI_PATH (the safety code), never "unimplemented".
     if (route.forbidden) {
       return {
         question: rawText,
@@ -259,6 +291,25 @@ export async function answerQuestion(rawText, opts = {}) {
         reason: `thao tác "${route.capability}" bị CẤM trên đường AI (plan2_final §8) — dùng UI ERPNext nếu thật sự cần; không có đề xuất nào được tạo`,
         proposal: null,
       };
+    }
+
+    // ── P2 (plan2_final §12): an understood intent WITHOUT a skill is a
+    // different refusal than "did not understand" — surface
+    // KNOWN_INTENT_UNIMPLEMENTED so the learning loop (P4) can count them.
+    // Runs AFTER the forbidden check (see the order note above).
+    if (route.capability) {
+      const cap = getCapability(route.capability);
+      if (cap?.status === "stub" || cap?.skill === null) {
+        return withUncertainty({
+          question: rawText,
+          normalized: nlp,
+          routed: { group: route.group, matched: route.matched, capability: route.capability },
+          answer: null,
+          error_code: "KNOWN_INTENT_UNIMPLEMENTED",
+          reason: `hiểu yêu cầu "${route.capability}" nhưng skill chưa có — đã ghi nhận`,
+          proposal: null,
+        });
+      }
     }
     const skills = route.factory(mcp, knownIds);
 
@@ -361,7 +412,7 @@ export async function answerQuestion(rawText, opts = {}) {
       );
     }
     if (!customer) {
-      return {
+      return withUncertainty({
         question: rawText,
         normalized: nlp,
         routed: { group: route.group, matched: route.matched },
@@ -375,7 +426,7 @@ export async function answerQuestion(rawText, opts = {}) {
         proposal: null,
         ambiguous,
         candidates: safeCandidates,
-      };
+      });
     }
 
     const ambNote = ambiguous
@@ -401,6 +452,21 @@ export async function answerQuestion(rawText, opts = {}) {
       __contract.defaults?.entity_policy ?? null,
     );
 
+    // ── P2 §14: remember the customer for follow-up questions — with
+    // provenance. An EXACT/picked match is user-selected; a fuzzy read hit is
+    // derived (never WRITE-eligible). Recorded AFTER the guards, only when a
+    // concrete customer row exists.
+    if (customer?.name && route.group !== "payment_write") {
+      sessionContext.set("customer", {
+        id: customer.name,
+        name: customer.customer_name ?? null,
+        provenance:
+          resolution.state === "EXACT_MATCH" || picked?.ok
+            ? CONTEXT_PROVENANCE.USER_SELECTED
+            : CONTEXT_PROVENANCE.DERIVED,
+      });
+    }
+
     // Phase 7b (user decision 2026-09-16): the ONLY write-producing intent.
     // "thu tiền cho <khách> <số tiền>" → a HIGH proposal that STOPS at the
     // card; nothing is written until POST /execute (human confirm). The write
@@ -412,7 +478,7 @@ export async function answerQuestion(rawText, opts = {}) {
       // Reuse `customer`/`ambiguous`/`candidates` from the guard above; the
       // ambiguity note still travels in the answer (ambNote below).
       if (!customer) {
-        return {
+        return withUncertainty({
           question: rawText,
           normalized: nlp,
           routed: { group: route.group, matched: route.matched },
@@ -425,7 +491,7 @@ export async function answerQuestion(rawText, opts = {}) {
           ambiguous,
           candidates: candidates ?? [],
           entity: { state: resolution.state, policy: entityRule },
-        };
+        });
       }
       // §4.3/§8: WRITE is Exact-only. A fuzzy single hit (e.g. "Lan" →
       // "Nguyễn Thị Lan") or several candidates must NOT become an authoritative
@@ -433,7 +499,7 @@ export async function answerQuestion(rawText, opts = {}) {
       // there is nothing to confirm and nothing can be written.
       if (entityRule.require_picker) {
         const all = (await skills.findCustomer("")).data?.data ?? [];
-        return {
+        return withUncertainty({
           question: rawText,
           normalized: nlp,
           routed: { group: route.group, matched: route.matched },
@@ -444,10 +510,10 @@ export async function answerQuestion(rawText, opts = {}) {
           proposal: null,
           entity: { state: resolution.state, policy: entityRule },
           candidates: pickerForText(all, nameCandidates(nlp.text)),
-        };
+        });
       }
       if (entityRule.block) {
-        return {
+        return withUncertainty({
           question: rawText,
           normalized: nlp,
           routed: { group: route.group, matched: route.matched },
@@ -456,12 +522,23 @@ export async function answerQuestion(rawText, opts = {}) {
           reason: `không xác định được khách (${resolution.state}) — không ghi phiếu thu`,
           proposal: null,
           entity: { state: resolution.state, policy: entityRule },
-        };
+        });
       }
       try {
+        // ── P2 §14 deliverable 3: a WRITE may consume session context only when
+        // it is alive AND user-selected/exact. A derived (fuzzy) read from an
+        // earlier sentence never seeds a payment; an expired entry behaves like
+        // a first mention (the guards above already refused with the picker).
+        let customerId = customer.name;
+        let customerName = customer.customer_name;
+        const ctx = sessionContext.writeEligible("customer");
+        if (ctx.eligible) {
+          customerId = ctx.context.value;
+          customerName = ctx.context.name ?? ctx.context.value;
+        }
         const built = await buildPaymentProposal(
           skills,
-          { customer, ambiguous, candidates },
+          { customer: { ...customer, name: customerId, customer_name: customerName }, ambiguous, candidates },
           {
             amount_vnd: nlp.amount ?? undefined,
             // §13 + P1 exit criterion: the interactive path must never fall back
@@ -486,16 +563,23 @@ export async function answerQuestion(rawText, opts = {}) {
       } catch (err) {
         // Builder refusals are ANSWERS, not crashes: the user must know why no
         // card appeared (no open document / ambiguous name / nothing to collect).
-        return {
+        // P2 §12: every PAYMENT_* refusal maps onto BUSINESS_VALIDATION_FAILED
+        // in the taxonomy (the message stays the specific one).
+        const code = err?.code ?? null;
+        return withUncertainty({
           question: rawText,
           normalized: nlp,
           routed: { group: route.group, matched: route.matched },
           customer: customer ? { id: customer.name, name: customer.customer_name } : null,
           answer: null,
           reason: `không tạo được đề xuất thu tiền: ${err?.message ?? err}`,
-          error_code: err?.code ?? null,
+          error_code: code,
+          uncertainty: uncertaintyCopy(
+            toUncertaintyCode(code) ?? UNCERTAINTY_CODES.BUSINESS_VALIDATION_FAILED,
+            { detail: err?.message ?? String(err) },
+          ),
           proposal: null,
-        };
+        });
       }
     }
 

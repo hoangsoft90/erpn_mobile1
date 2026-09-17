@@ -6,6 +6,7 @@ import '../../../../app/providers.dart';
 import '../../../../app/theme/app_theme.dart';
 import '../../application/chat_controller.dart';
 import '../widgets/chat_bubble.dart';
+import '../widgets/pipeline_progress.dart';
 
 /// Single-screen chat MVP (phase-03 spec). Read-only copilot.
 class ChatScreen extends ConsumerStatefulWidget {
@@ -138,11 +139,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                           ChatBubble(turn: chat.turns[i]),
                     ),
             ),
-            if (chat.isLoading)
-              const Padding(
-                padding: EdgeInsets.all(AppSpacing.sm),
-                child: LinearProgressIndicator(),
-              ),
+            // P2 deliverable 4 (plan2_final §24.11): a long pipeline shows
+            // WHERE it is (hiểu → tra khách → kiểm tra → chờ xác nhận), not
+            // a bare endless spinner.
+            if (chat.isLoading) const PipelineProgress(),
             _InputBar(
               controller: _textController,
               enabled: !chat.isLoading,

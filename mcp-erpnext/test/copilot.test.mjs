@@ -411,3 +411,60 @@ test("copilot E2E P1 §13: a collect-money sentence with NO number does not beco
     nlp.child.kill();
   }
 });
+
+// ── P2 (plan2_final §12 + §14): uncertainty taxonomy + session context ──
+
+test("copilot E2E P2 §12: an understood intent WITHOUT a skill is KNOWN_INTENT_UNIMPLEMENTED (+ copy)", async () => {
+  // "doanh thu" hits the sales route and resolves to sales.summary — a
+  // capability deliberately declared with skill:null / status:"stub". The
+  // pipeline must say "I understood, but it does not exist yet" (a LEARNING
+  // signal for P4), not "I did not understand" (UNKNOWN_INTENT).
+  const nlp = await startNlpService();
+  const copilot = startCopilot(nlp.port);
+  try {
+    await copilot.request("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } });
+    const out = await copilot.call("doanh thu hôm nay thế nào");
+    assert.equal(out.error_code, "KNOWN_INTENT_UNIMPLEMENTED", JSON.stringify(out));
+    assert.equal(out.routed.capability, "sales.summary");
+    assert.equal(out.proposal, null);
+    assert.equal(out.uncertainty.code, "KNOWN_INTENT_UNIMPLEMENTED");
+    assert.ok(out.uncertainty.message.includes("chưa có"), out.uncertainty.message);
+  } finally {
+    await copilot.close();
+    nlp.child.kill();
+  }
+});
+
+test("copilot E2E P2 §12: a customer-less receivable question refuses as MISSING_ENTITY (+ copy)", async () => {
+  // P2 exit criterion 1: "Thu 10 triệu" (no customer) asks WHO — it never
+  // guesses an entity from context or anywhere else.
+  const nlp = await startNlpService();
+  const copilot = startCopilot(nlp.port);
+  try {
+    await copilot.request("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } });
+    const out = await copilot.call("công nợ 10 triệu");
+    assert.equal(out.error_code, "MISSING_ENTITY", JSON.stringify(out));
+    assert.equal(out.proposal, null);
+    assert.equal(out.uncertainty.code, "MISSING_ENTITY");
+    assert.ok(out.uncertainty.message.includes("tên khách"), out.uncertainty.message);
+  } finally {
+    await copilot.close();
+    nlp.child.kill();
+  }
+});
+
+test("copilot E2E P2 §14: an exact customer from a previous READ is remembered (provenance user_selected)", async () => {
+  // Deliverable 2 in action: the exact name from turn 1 lives in session
+  // context with user_selected provenance (recorded through the READ path).
+  // P8 will key this by session; the behaviour contract is pinned here.
+  const nlp = await startNlpService();
+  const copilot = startCopilot(nlp.port);
+  try {
+    await copilot.request("initialize", { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "t", version: "0" } });
+    const first = await copilot.call("Nguyễn Thị Lan còn nợ bao nhiêu");
+    assert.equal(first.customer.id, "CUST-00001"); // EXACT name match ⇒ recorded
+  } finally {
+    await copilot.close();
+    nlp.child.kill();
+  }
+});

@@ -117,6 +117,25 @@
   **shape mà adapter nhận phụ thuộc cấu hình harness** — viết helper chịu 2 dạng, và khi
   test báo lỗi transport với capture rỗng, NGHI VỊ HARNESS trước khi nghi production.
 
+## Phiên 2026-09-17 (P2 self-review): diff chôn delta + thứ tự nhánh refusal
+
+- **Reformat toàn file cấu hình/contract khi chỉ sửa 1 dòng** — ghi lại `capabilities.json`
+  theo style pretty-print khác ⇒ diff **495 dòng** (426/69) cho thay đổi thật **1 keyword**
+  (`"doanh thu"`); trên file an toàn, reformat chôn mất delta ngữ nghĩa khiến review không
+  thấy policy đã đổi gì. Phát hiện bằng `git diff --numstat` (số lớn bất thường) + so bản
+  CANONICAL (`python3 -c json.dumps(...,sort_keys=True)`) HEAD vs worktree ⇒ delta đúng 1 dòng.
+  Fix: `git checkout HEAD -- <file>` rồi thêm lại 1 keyword giữ style inline ⇒ diff còn
+  `1 insertion(+), 1 deletion(-)`; `node --test` 181/181 vẫn xanh. Bằng chứng: `result46.txt` §6.
+  → Trước khi stage file JSON/config: đọc `git diff --numstat`; số dòng đổi LỚN hơn nhiều so
+  với dự kiến ⇒ bị reformat; tách delta ngữ nghĩa bằng bản canonical; KHÔNG commit reformat.
+- **Thêm NHÁNH REFUSAL MỚI đặt TRƯỚC nhánh refusal nghiêm trọng hơn ⇒ nuốt mã an toàn cũ** —
+  stub check (`skill:null` ⇒ `KNOWN_INTENT_UNIMPLEMENTED`) đặt trước forbidden check, mà
+  `document.delete` CŨNG `skill:null` ⇒ "xóa khoản…" trả "chưa làm" thay vì `FORBIDDEN_IN_AI_PATH`.
+  Test tĩnh `forbidden-path.test` (bảo vệ P0) bắt ngay khi chạy full suite ⇒ sửa thứ tự +
+  comment "ORDER MATTERS". Falsify trên /tmp: hoán vị 2 khối ⇒ test FAIL đúng chỗ.
+  → Nhánh refusal mới phải xếp SAU mọi nhánh an toàn hơn (`forbidden > degraded > stub > entity`);
+  chạy LUÔN test tĩnh bảo vệ các mã an toàn cũ, không chỉ test mới của mình.
+
 ## Kỷ luật bắt buộc trước khi báo "xong" (tóm tắt từ SKILL.md)
 
 1. Chạy test thật của đúng phạm vi đổi (targeted), dán output nguyên văn.

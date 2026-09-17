@@ -62,7 +62,7 @@
     },
     {
       "group": "sales",
-      "keywords": ["hóa đơn", "hoa don", "invoice", "đơn hàng", "don hang", "order", "bán", "ban ", "sale", "còn thiếu", "chưa trả", "chua tra"],
+      "keywords": ["doanh thu", "hóa đơn", "hoa don", "invoice", "đơn hàng", "don hang", "order", "bán", "ban ", "sale", "còn thiếu", "chưa trả", "chua tra"],
       "capability_default": "invoice.lookup",
       "comment": "Specific groups before the broad customer group (batch-accuracy result9: most-specific-match wins)."
     },

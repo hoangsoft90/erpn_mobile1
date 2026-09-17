@@ -24,7 +24,7 @@ Lộ trình production trong `.plan/phases2/` (nguồn kiến trúc: `.plan/plan
 - **Vòng tự review sau P0 (2026-09-17) — 3 lỗi THẬT trong chính đợt refactor, đã sửa + falsify**: lỗi cấu hình ERPNext từng **giết cả process** (client được tạo NGOÀI `try` ⇒ unhandled rejection), từng **treo vĩnh viễn khoá ý định `(customer|invoice)`** (lỗi config để lại PENDING không `reference_no`), và **rò rỉ process con** khi `initialize()` fail. Kèm gia cố: `params.amount_vnd` thiếu ⇒ **TỪ CHỐI** (không để tầng dưới tự clamp tiền); test tĩnh no-bypass quét thêm `scripts/`. Bằng chứng: `result44.txt` §3–§9.
 - Suite: Python 60 · **Node 156** · Flutter 63 · analyze 0
 
-**Bước kỹ thuật tiếp theo = P1** (Entity Resolver 4 trạng thái + candidate picker + state machine + idempotency E2E) — **KHÔNG** nhảy P9 (skill mới) hay P5 (DSH trên `/ask`). Voice (P6) cần audio thật; không mở lại Phase 4/8/10–15 cũ.
+**Bước kỹ thuật tiếp theo = P1 → P2** (đã xong, xem 2 mục bên dưới) — **KHÔNG** nhảy P9 (skill mới) hay P5 (DSH trên `/ask`). Voice (P6) cần audio thật; không mở lại Phase 4/8/10–15 cũ.
 
 ### P1 (phases2) — Entity Execution Resilience ✅ KỸ THUẬT XONG — CHỜ DUYỆT COMMIT (vùng tiền)
 
@@ -37,6 +37,19 @@ Lộ trình production trong `.plan/phases2/` (nguồn kiến trúc: `.plan/plan
 - **Degraded: NLP down → chặn WRITE** phụ thuộc amount parse (fail-closed, không đoán số tiền)
 - **Review vòng 2 (result45)**: fix harness Flutter `_bodyOf` (dio đưa request Map nguyên vào adapter — cast `as String` ném TypeError bị bọc thành "Không kết nối được máy chủ", capture rỗng); soi 2 điểm wiring: `/execute/cancel` là lock-release CỐ ÊN không qua kill-switch (đúng thiết kế, có comment), `entity_id` re-validate đúng — không sửa gì server
 - Suite: Python 60 · **Node 172** · **Flutter 67** · analyze 0 — bằng chứng `result45.txt`
+
+### P2 (phases2) — Session context + Uncertainty UX ✅ KỸ THUẬT XONG — CHỜ DUYỆT COMMIT (policy/contract)
+
+- **Uncertainty taxonomy** `src/uncertainty.mjs`: 11 mã chuẩn + copy tiếng Việt BẮT BUỘC từng mã; `toUncertaintyCode()` map raw→chuẩn, unknown ⇒ null (không chế); mọi refusal trong copilot-server trả kèm `uncertainty:{code,message,detail}`
+- **Session context** `src/session-context.mjs`: customer 30m · invoice 10m; provenance `user_selected`/`derived`; entry hết hạn bị XOÁ khi đọc
+- **WRITE fail-closed theo context**: chỉ `user_selected`/exact trong TTL mới seed payment; derived (fuzzy READ) không bao giờ; hết hạn = như lần đầu nhắc (guard P1 hỏi lại)
+- **KNOWN_INTENT_UNIMPLEMENTED**: capability stub (sales.summary, skill:null) trả "hiểu nhưng chưa có" — tín hiệu học cho P4; cần thêm "doanh thu" vào routing keywords sales (đã sửa contract)
+- **Flutter PipelineProgress**: 4 nhãn pha (hiểu → tra khách → kiểm tra → chờ xác nhận) thay spinner trần; Timer.periodic cancel-in-dispose
+- **Falsify 3 luật** (trên /tmp): gỡ provenance check → FAIL đúng assertion; gỡ TTL expiry → FAIL 2 test; hoán vị forbidden/stub → forbidden-path FAIL
+- Deliverable 5 (optional, sửa amount trên card) ⏭ bỏ qua có lý do — chờ user
+- Suite: Python 60 · **Node 181** · **Flutter 69** · analyze 0 — `.plan/phases2/p2-result.md`
+
+**Bước kỹ thuật tiếp theo = P3** (LLM Classifier async + CI regression) — CHỈ sau khi P2 được duyệt commit; KHÔNG tự nhảy.
 
 ### Phase 0 — Foundation & Verification ✅ (`result1.txt`)
 
