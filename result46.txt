@@ -79,8 +79,10 @@ Phát hiện 1 lỗi THẬT (diff chôn delta trên file contract an toàn):
 Bài học mới (đã vào SKILL.md + LESSONS_LEARNED.md): reformat file JSON/config
 chôn delta 1 dòng thành 495 dòng — luôn đọc numstat trước khi stage.
 
-== 7. CÒN LẠI ==
-- P2 chờ user duyệt commit (policy/contract + taxonomy + context + Flutter).
-- P3 (LLM Classifier) chỉ bắt đầu sau khi P2 được duyệt — theo README phases2.
+== 7. COMMIT ==
+- ✅ ĐÃ COMMIT `33ff725` + PUSH (`ee93f13..33ff725`, branch change/flutter-chat-mvp)
+  15 files +717/−35. Secret scan CLEAN. `.env`/store/.plan không vào commit.
+- P2 = ĐÓNG. Bước kỹ thuật tiếp theo = P3 (LLM Classifier) theo README phases2.
+- P3 chỉ bắt đầu khi có lệnh user (không tự nhảy P5/P9/Voice).
 - Việc chỉ user: SUBMIT phiếu thu thật · rotate key · audio 150 câu ·
   review ai-rules.md · app icon duyệt riêng.

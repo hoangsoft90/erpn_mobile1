@@ -70,15 +70,14 @@
 - [2026-09-17] Device smoke test qua adb (Pixel 3a): 0 crash, Settings OK, footer fix f28869a xác nhận trên máy thật; E2E từ phone vào real ERPNext — "Lan" không có trong real catalog (75 khách test) ⇒ refuse đúng thiết kế; ground truth mới: P1F-ACCEPT T9 = 1.000.000đ
 - [2026-09-14] Xong + commit **33f9dc0**: Phase 1 NLP pipeline (root commit 55 files)
 
-- [2026-09-17] **P2 (phases2) kỹ thuật xong — CHỜ DUYỆT COMMIT**: taxonomy 11 mã + copy tiếng Việt (uncertainty.mjs) · session context provenance+TTL (session-context.mjs) · WRITE fail-closed theo provenance · Flutter PipelineProgress 4 pha · falsify 3 luật trên /tmp. Lỗi tự sửa: stub check nuốt forbidden (đổi thứ tự + comment ORDER MATTERS). Suite: Python 60 · Node 181 · Flutter 69 · analyze 0. `.plan/phases2/p2-result.md`.
+- [2026-09-17] **P2 (phases2) ✅ ĐÃ COMMIT `33ff725` (đã push)**: taxonomy 11 mã + copy tiếng Việt (uncertainty.mjs) · session context provenance+TTL (session-context.mjs) · WRITE fail-closed theo provenance · Flutter PipelineProgress 4 pha · falsify 3 luật trên /tmp. Lỗi tự sửa: stub check nuốt forbidden (đổi thứ tự + comment ORDER MATTERS). Suite: Python 60 · Node 181 · Flutter 69 · analyze 0. `.plan/phases2/p2-result.md`.
 - [2026-09-17] **P1 COMMIT `ee93f13` (user duyệt, đã push)**: entity 4 trạng thái + picker + snapshot + codes tách + state machine + dedup + NLP-down block + test concurrent. `p1-result.md` 9/9 deliverable (saga optional bỏ qua có lý do). Suite: Python 60 · Node 173 · Flutter 67 · analyze 0. Bài học mới: shell giữ `ERPNEXT_*` ⇒ test mock lặng lẽ đi server thật (chạy `env -u ERPNEXT_URL … node --test`) + test concurrent phải pin hợp đồng quan sát được (409 fail-closed), không pin kỳ vọng tự suy.
 - [2026-09-17] P1 kỹ thuật xong (trước commit): entity 4 trạng thái + picker + snapshot + codes tách + state machine + dedup + NLP-down block. Review vòng 2: fix harness Flutter (`_bodyOf` — dio đưa Map nguyên vào adapter), soi cancel/entity_id wiring (đã đúng). Suite: Python 60 · Node 172 · Flutter 67 · analyze 0. Bằng chứng `result45.txt`.
 - [2026-09-17] P0 commit `b4acdb1` + docs/assets `0ce2893` (đã push); review P0 sửa 3 lỗi thật + falsify (result44); REDACT key cũ trong `result10.txt` (đã rotate từ trước).
 
 ## Việc kế tiếp khi user sẵn sàng (thứ tự)
 
-0. **User: duyệt commit P1** (vùng tiền) — message đề xuất: `feat: p1 entity execution resilience — 4-state resolver + candidate picker + immutable snapshot + PROPOSAL_VERSION_STALE/ENTITY_CHANGED + UNKNOWN→RECONCILING + business dedup + NLP-down write block`
 1. User: dán 3 giá trị GitHub Settings + chọn đường endpoint (Tailscale/mở port/ngrok) → re-run CI → tải APK cài thiết bị thật
 2. Người thật: thu audio 150 câu theo `docs/audio-collection-script.md` → mở khóa Phase 4 (STT)
-3. P2 kế tiếp theo `.plan/phases2/` sau khi P1 được duyệt
+3. P3 (LLM Classifier async + CI regression) theo `.plan/phases2/` — P2 đã commit `33ff725`, không còn gap chặn
 - (Đã xong trước đó: sign-off Phase 5 ký 2026-09-15 · rotate key ERPNext)

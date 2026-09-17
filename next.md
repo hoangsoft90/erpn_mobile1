@@ -38,7 +38,7 @@ Lộ trình production trong `.plan/phases2/` (nguồn kiến trúc: `.plan/plan
 - **Review vòng 2 (result45)**: fix harness Flutter `_bodyOf` (dio đưa request Map nguyên vào adapter — cast `as String` ném TypeError bị bọc thành "Không kết nối được máy chủ", capture rỗng); soi 2 điểm wiring: `/execute/cancel` là lock-release CỐ ÊN không qua kill-switch (đúng thiết kế, có comment), `entity_id` re-validate đúng — không sửa gì server
 - Suite: Python 60 · **Node 172** · **Flutter 67** · analyze 0 — bằng chứng `result45.txt`
 
-### P2 (phases2) — Session context + Uncertainty UX ✅ KỸ THUẬT XONG — CHỜ DUYỆT COMMIT (policy/contract)
+### P2 (phases2) — Session context + Uncertainty UX ✅ ĐÃ COMMIT `33ff725` (đã push)
 
 - **Uncertainty taxonomy** `src/uncertainty.mjs`: 11 mã chuẩn + copy tiếng Việt BẮT BUỘC từng mã; `toUncertaintyCode()` map raw→chuẩn, unknown ⇒ null (không chế); mọi refusal trong copilot-server trả kèm `uncertainty:{code,message,detail}`
 - **Session context** `src/session-context.mjs`: customer 30m · invoice 10m; provenance `user_selected`/`derived`; entry hết hạn bị XOÁ khi đọc
@@ -49,7 +49,7 @@ Lộ trình production trong `.plan/phases2/` (nguồn kiến trúc: `.plan/plan
 - Deliverable 5 (optional, sửa amount trên card) ⏭ bỏ qua có lý do — chờ user
 - Suite: Python 60 · **Node 181** · **Flutter 69** · analyze 0 — `.plan/phases2/p2-result.md`
 
-**Bước kỹ thuật tiếp theo = P3** (LLM Classifier async + CI regression) — CHỈ sau khi P2 được duyệt commit; KHÔNG tự nhảy.
+**Bước kỹ thuật tiếp theo = P3** (LLM Classifier async + CI regression) — P2 đã commit `33ff725`, không còn gap chặn; KHÔNG tự nhảy sang P5/P9/Voice.
 
 ### Phase 0 — Foundation & Verification ✅ (`result1.txt`)
 
