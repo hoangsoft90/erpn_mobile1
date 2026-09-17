@@ -1,0 +1,136 @@
+========================================================================
+RESULT 39 — COMMIT F6 (`9f496bf`) + PUSH + VERIFY + DỌN MARKER DOCS
+Timestamp: 2026-09-16 (giờ shell)
+Chỉ đạo user: (1) commit F6 đúng message, chỉ 6 file; (2) xác nhận full test +
+grep call site; (3) CẤM saga/Phase 4-8-11/ERPNext write/VPS/Settings;
+(4) result39 + handoff rồi DỪNG HẲN.
+========================================================================
+
+== 1. COMMIT + PUSH (đã duyệt — vùng tiền)
+
+  Staged đúng 6 file (git diff --cached --name-only):
+    mcp-erpnext/src/copilot-server.mjs
+    mcp-erpnext/test/copilot-dup-resolve.test.mjs   (new)
+    result38.txt                                    (new)
+    handoff_20260916-result38.md                    (new)
+    checklist.md · working.md                       (docs mô tả F6)
+
+  Secret scan staged diff (pattern: ERPNEXT_API_KEY/SECRET, GEMINI/ZEN/
+  MAC_LLM_API_KEY, ASK_PASSWORD, `API_KEY = <giá trị>`, `Bearer <token>`):
+    → 0 hit (output rỗng). Không có giá trị key/secret nào vào commit.
+
+  Không lẫn file cấm (grep `.env|idempotency-store|.plan/|.gemini/|.opencode/|
+  initp` trên staged): NONE ✓
+
+  git commit (message user duyệt, body ngắn + footer):
+  → [change/flutter-chat-mvp 9f496bf] fix: payment_write reuses the outer
+    customer resolve (one round-trip per question, no second resolveCustomer
+    call)
+    6 files changed, 264 insertions(+), 1 deletion(-)
+    create mode 100644 handoff_20260916-result38.md
+    create mode 100644 mcp-erpnext/test/copilot-dup-resolve.test.mjs
+    create mode 100644 result38.txt
+
+  git push origin change/flutter-chat-mvp
+  → 2f7ec1f..9f496bf  change/flutter-chat-mvp -> change/flutter-chat-mvp
+
+== 2. XÁC NHẬN SAU COMMIT (lệnh + output thật)
+
+  grep -c "await resolveCustomer(skills" mcp-erpnext/src/copilot-server.mjs
+  → 1                      (đúng 1 call site: guard ngoài)
+
+  PYTHON  PYTHONPATH=src python3 -m unittest discover -s tests
+          → Ran 60 tests in 0.542s — OK
+  NODE    cd mcp-erpnext && node --test
+          → ℹ tests 120 · pass 120 · fail 0
+  FLUTTER cd apps/mobile && flutter test
+          → 00:04 +34: All tests passed!
+          flutter analyze → No issues found! (ran in 6.5s)
+
+== 3. DỌN MARKER TRẠNG THÁI TRONG DOCS
+
+  Sửa đúng theo bài học skill ("commit chỉ XONG khi marker khớp"):
+    · checklist.md:72 — `- [ ] CHỜ USER DUYỆT COMMIT — fix F6`
+      → `- [x] Fix F6 — ✅ ĐÃ COMMIT 9f496bf (đã push 2026-09-16)`
+    · working.md:7 — result38 `[~] ... CHỜ DUYỆT COMMIT`
+      → `[x] ... → ✅ ĐÃ COMMIT 9f496bf (đã push)`
+    · working.md:10 — 🔎 MARKER LỖI THỜI phát hiện thêm: result33 (UI STALE)
+      vẫn ghi `[~] CHỜ DUYỆT COMMIT` dù việc đó ĐÃ commit ở `31d485c`
+      → `[x] ... → ✅ ĐÃ COMMIT 31d485c (đã push)`
+
+  Quét lại marker (mong đợi: chỉ còn việc THẬT đang chờ user):
+    grep -nE "CHỜ DUYỆT|CHƯA COMMIT|chờ duyệt|chưa commit" \
+      checklist.md next.md working.md features.md
+    → checklist.md:166 (Phase 7 "chờ user SUBMIT" · "saga chờ duyệt §7") =
+      ĐÚNG, đây là 2 quyết định riêng còn chờ user
+    → các hit khác là văn kể lịch sử ("user CHƯA duyệt đợt đó ⇒ chỉ report"),
+      không phải marker trạng thái sai.
+
+  grep -c "9f496bf" → checklist.md = 1 · working.md = 1 (hash đã ghi đúng chỗ)
+
+== 4. CHƯA COMMIT (chờ user duyệt lần sau — KHÔNG tự commit)
+
+  git status --short →
+    M  checklist.md            (marker fixes ở §3)
+    M  working.md              (marker fixes ở §3)
+    ?? handoff_20260916-result37.md · ?? result37.txt   (evidence phiên 37 —
+       nằm ngoài danh sách user chỉ định stage ở phiên này)
+    ?? result39.txt · ?? handoff_20260916-result39.md   (evidence phiên này)
+    ?? .gemini/ · ?? .opencode/ · ?? initp              (rác local, KHÔNG stage)
+
+  Đề xuất (chờ user duyệt, docs-only):
+    docs: result39 + F6 commit marker sync (checklist/working)
+
+== 4b. ADDENDUM — VIẾT `setup-test.md` + TỰ BẮT 1 LỆNH SAI TRONG CHÍNH DOC ĐÓ
+
+  User yêu cầu: viết hướng dẫn cài đặt / cấu hình / test vào `setup-test.md`.
+  File mới: `setup-test.md` (~1 trang, 8 mục: yêu cầu môi trường · cài đặt ·
+  cấu hình (.env theo TÊN biến) · chạy dev 3 terminal · test (unit 4 bộ · CLI NLP ·
+  E2E HTTP · E2E dsh · APK thiết bị) · sự cố thường gặp · an toàn · tham chiếu chéo).
+  KHÔNG chứa giá trị secret nào — chỉ tên biến + placeholder `<key>`/`<secret>`.
+
+  🔴 LỖI CỦA CHÍNH TÔI, tự bắt khi verify doc:
+  Đã viết `node --test scripts/test` vào doc vì "nghe hợp lý". Chạy thật:
+    $ node --test scripts/test
+    Error: Cannot find module '.../erpn_mobile1/scripts/test'
+    ℹ tests 1 · pass 0 · fail 1
+  Nguyên nhân: positional arg của `node --test` là FILE/glob — **không nhận
+  directory trần**. Lệnh ĐÚNG (đã chạy thật, in nguyên output):
+    $ node --test scripts/test/*.test.mjs        → ℹ tests 19 · pass 19 · fail 0
+    $ cd scripts && node --test                  → ℹ tests 19 · pass 19 · fail 0
+  → Đã sửa cả 2 chỗ trong `setup-test.md` (§0 TL;DR + §5.1).
+
+  Ver hành loạt lệnh khác đã ghi trong doc (chạy thật, không tin doc tự viết):
+    · §5.2 CLI NLP — đều ra JSON đúng:
+        "Anh Nam trả 10 triệu 500 nghìn" → amount 10500000, text "Nam trả …", titles ["Anh"]
+        "Cô Ba mua 20 bao cám 25 ký, còn nợ 5 triệu" → amount 5000000, text "Ba mua … receivable 5 triệu"
+        "Bác Hai trả 2tr5" → amount 2500000, titles ["Bác"]
+    · §5.1 PYTHON  PYTHONPATH=src python3 -m unittest discover -s tests → OK
+    · §5.1 NODE    cd mcp-erpnext && npm test → ℹ tests 120 · pass 120 · fail 0
+    · §5.1 ROUTER  node --test scripts/test/*.test.mjs → ℹ tests 19 · pass 19 · fail 0
+    · §3.1 NLP_SERVICE_PORT  NLP_SERVICE_PORT=8799 python3 -m nlp_service.server
+      → {"ready": true, "port": 8799}   (đổi cổng hoạt động thật)
+    · Kiểm tên biến có thật trong code (grep): ASK_USER/ASK_PASSWORD/
+      ASK_ALLOW_PUBLIC (http-ask.mjs + test), MOCK_LLM_PORT (mock-llm.mjs),
+      E2E_LLM_MODEL (dsh-e2e.patch.yml). GH_REPO_URL/GH_TOKEN chỉ nằm trong `.env`,
+      KHÔNG đoạn code app nào đọc → đã ghi rõ điều đó trong doc (không nói quá).
+
+  Bài học mới vào skill `erpn-verify-first` (mục 1, item 6 — "Lệnh trong DOC cũng
+  phải CHẠY THẬT trước khi viết"): doc sai lệnh làm người sau mất đúng 1 vòng như
+  mình vừa mất.
+
+  (`.agents/skills/` không nằm trong repo theo quyết định user ⇒ thay đổi skill
+  không hiện trong `git status`.)
+
+  Suite sau cùng của phiên (không đổi code trong bước này):
+    Python OK (60) · Node 120/120 · Router 19/19 · Flutter 34/34 · analyze 0
+
+== 5. KẾT LUẬN
+HEAD = `9f496bf` (đã push). F6 đóng: 1 resolve/câu, hành vi ghi KHÔNG đổi
+(E2E `copilot.test.mjs` vẫn `Nguyễn Thị Lan`/500_000/SINV-0001), suite
+Python 60/60 · Node 120/120 · Flutter 34/34 · analyze 0.
+MVP kỹ thuật trong scope ĐÓNG — chờ user APK/demo + các quyết định riêng
+(SUBMIT phiếu thu · saga §7 · GitHub Settings · audio · rotate key ·
+review .project/ai-rules.md).
+DỪNG HẲN — không đề xuất phase mới.
+========================================================================

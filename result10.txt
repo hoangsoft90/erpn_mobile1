@@ -18,7 +18,12 @@ $ git log --oneline -3
   (không vá từng đoạn), .project/ + memory files commit lần đầu
 - Secret scan TRƯỚC commit: phát hiện result9.txt chứa nguyên văn key/secret cũ
   → REDACT thành <OLD-KEY-VALUE>/<OLD-SECRET-VALUE> trước khi commit. Verify sau redact:
-  $ grep -rl "9b8c37e543975b2\|1c060e650ed2dfd" (trừ .env) → CLEAN
+  $ grep -rl "<OLD-KEY-VALUE>\|<OLD-SECRET-VALUE>" (trừ .env) → CLEAN
+  [REDACT 2026-09-17] Hai giá trị key/secret cũ từng được dán NGUYÊN VĂN vào chính
+  dòng này (không phải placeholder) ⇒ đã thay bằng <OLD-KEY-VALUE>/<OLD-SECRET-VALUE>.
+  Lưu ý: giá trị thật vẫn còn trong lịch sử git (commit 2946206) — key đã được
+  rotate nhiều lần nên rủi ro thấp; muốn xoá khỏi lịch sử phải viết lại lịch sử
+  (thao tác phá huỷ, cần user quyết định riêng).
 - .env KHÔNG được commit (0 file staged khớp .env)
 - ngrok URL: CLEAN trong toàn bộ docs đã commit
 

@@ -1,0 +1,39 @@
+========================================================================
+RESULT 37 — COMMIT DOCS-ONLY `2f7ec1f` + PUSH — MVP ĐÓNG, DỪNG HẲN
+Timestamp: 2026-09-16 (giờ shell)
+Chỉ đạo user: duyệt 1 commit DOCS ONLY (không đụng apps/ · mcp-erpnext/src);
+commit + push; full test; result37 + handoff ngắn; DỪNG HẲN.
+========================================================================
+
+== 1. COMMIT DOCS-ONLY (lệnh + output thật) ==
+Stage đúng 10 file (kiểm staged list nguyên văn):
+  checklist.md · docs/demo-payment-draft.md · docs/device-test-checklist.md ·
+  features.md · handoff_20260916-result35.md · handoff_20260916-result36.md ·
+  next.md · result35.txt · result36.txt · working.md
+CẤM check trên staged: grep -cE "^\.env$|idempotency-store|^\.plan/|
+^\.gemini/|^\.opencode/|^initp$|^apps/|^mcp-erpnext/" → 0 (không lẫn file cấm).
+Secret scan staged: 1 hit duy nhất = dòng mô tả chính scan trong result35
+(grep nguyên văn dòng 236) — CLEAN.
+  git commit -m "docs: close MVP handoff — result35/36, device-test checklist,
+  demo runbook sync" + body
+  → [change/flutter-chat-mvp 2f7ec1f] 10 files changed, 262 insertions(+),
+    10 deletions(-)
+  git push origin change/flutter-chat-mvp
+  → 31d485c..2f7ec1f  change/flutter-chat-mvp -> change/flutter-chat-mvp
+
+== 2. WORKING TREE SAU COMMIT ==
+git status --short → CHỈ rác local: .gemini/ · .opencode/ · initp (không
+stage, không commit). 0 file modified, 0 file docs còn treo.
+
+== 3. FULL TEST SAU COMMIT DOCS (lệnh + output thật) ==
+  PYTHON   PYTHONPATH=src python3 -m unittest discover -s tests → OK (60)
+  NODE     node --test (mcp-erpnext) → ℹ tests 119 · pass 119 · fail 0
+  FLUTTER  flutter test → 00:04 +34: All tests passed!
+           flutter analyze → No issues found!
+
+== 4. KẾT LUẬN ==
+HEAD = 2f7ec1f — MVP kỹ thuật ĐÓNG (code 31d485c + docs 2f7ec1f, đều đã push).
+Chờ user: demo (docs/demo-payment-draft.md) · APK thật
+(docs/device-test-checklist.md) · GitHub Settings · duyệt saga §7 · SUBMIT ·
+audio · rotate key.
+DỪNG HẲN — không đề xuất phase tiếp theo.

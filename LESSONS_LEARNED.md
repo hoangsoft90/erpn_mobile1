@@ -73,6 +73,37 @@
 - **Vùng tiền/số/phân quyền: không tự commit, không tự ký duyệt** — gate của user,
   kể cả khi data là demo (tập thói quen cho VPS thật).
 
+## Phiên 2026-09-17 — P0 self-review (3 lỗi thật, đều tự gây ra trong cùng đợt refactor)
+
+> Chi tiết + lệnh/output: `result44.txt` §3–§9. Hàng bảng tương ứng trong `SKILL.md`.
+
+- **Chuyển việc THU NHẬN TÀI NGUYÊN (tạo client/spawn/mở kết nối) từ TRONG `try`
+  ra NGOÀI `try` ⇒ lỗi config thoát khỏi hàm async → thoát HTTP handler →
+  unhandled rejection ⇒ GIẾT cả process** (không chỉ hỏng 1 request). Đường cũ
+  có client trong `try` nên chỉ trả 500 — refactor tự tạo ra lỗi crash-class.
+  → Mọi thứ có thể ném (kể cả "chỉ là cấu hình") phải nằm trong `try` của hàm
+  async; thêm guard tầng HTTP; falsify bằng cách GỠ guard và assert `/health`
+  vẫn sống sau request lỗi.
+- **Lỗi KHÔNG-chắc-chắn-có-ghi (không mở được kết nối / sai config) bị đánh dấu
+  FAILED terminal, hoặc để lại PENDING không `reference_no` ⇒ khoá ý định
+  `(customer|invoice)` ⇒ một lỗi đánh máy trong `.env` TREO VĨNH VIỄN khoản nợ.**
+  → Phân loại theo câu hỏi "đã chắc chắn chưa ghi gì chưa?": chắc chắn chưa ⇒
+  non-terminal + giữ nguyên `command_id` (retry được); có thể đã ghi ⇒ PENDING
+  để reconcile; chỉ FAILED khi thất bại vĩnh viễn.
+- **Falsify chạy thẳng trên cây làm việc: lệnh bị timeout/giết giữa lúc SỬA và
+  lúc KHÔI PHỤC ⇒ code đã bị gỡ nằm lại trên disk, không gì báo cho bạn.**
+  → Falsify trên BẢN SAO (`tar` sang `/tmp`, bỏ `node_modules`/`.git`) + `timeout`
+  cứng; nếu buộc sửa cây thật thì backup trước VÀ kiểm tồn tại của fix sau khi
+  khôi phục (`grep -c`) — không tin rằng bước khôi phục đã chạy.
+- **Test tĩnh "chỉ có MỘT đường làm X" mà chỉ quét `src/` ⇒ `scripts/`/`bin/`
+  là chỗ ẩn hợp lệ cho đường thứ hai.** → Quét toàn package; ngoại lệ (tooling
+  operator) phải được khẳng định TƯỜNG MINH, không bỏ sót im lặng.
+- **Rò rỉ tài nguyên khi `initialize()` thất bại:** `close()` không được gọi ⇒
+  process con ở lại và giữ event loop sống. → Mọi cặp open/acquire phải có
+  catch-close-trước-khi-ném.
+- **Số tiền thiếu ở boundary phải TỪ CHỐI**, không được để contract flag
+  `allow_full_balance` biến "request hỏng" thành "thu hết nợ".
+
 ## Kỷ luật bắt buộc trước khi báo "xong" (tóm tắt từ SKILL.md)
 
 1. Chạy test thật của đúng phạm vi đổi (targeted), dán output nguyên văn.

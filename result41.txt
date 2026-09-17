@@ -1,0 +1,129 @@
+========================================================================
+RESULT 41 — ĐÓNG result40 (F1/F3) + STAGE CHỜ DUYỆT + F2 CHỜ QUYẾT + SAGA CHƯA DUYỆT
+Timestamp: 2026-09-16 (giờ shell)
+Chỉ đạo user: (B1) đóng result40 — xác nhận F1/F3 đã sửa, stage đúng phạm vi,
+báo diff + suite, KHÔNG tự commit; (B2) tóm tắt F2 rồi HỎI user chọn a/b;
+(B3) saga CHỈ khi user duyệt; (B4) không mở Phase 4/8/10/11.
+========================================================================
+
+== 1. XÁC NHẬN TRẠNG THÁI CODE SO VỚI `result40.txt`
+
+  F1 (setState after dispose) — ✅ ĐÃ SỬA (từ phiên result40, chưa commit):
+    grep -n "if (!mounted) return;" apps/mobile/lib/features/chat/presentation/widgets/proposal_card.dart
+    → 78 (nhánh success sau await /execute)
+      91 (nhánh `on DioException`)
+     112 (nhánh lỗi mạng / `catch (e)`)
+     125 (trong `_handleRefusal` — guard luôn `ref.read` trên scope đã dispose)
+     (nhánh `finally` vẫn giữ `if (mounted)` như cũ ⇒ tổng 4 guard mới)
+
+  F3 (problems[] fail-open) — ✅ ĐÃ SỬA:
+    proposal_card.dart:131 → `final problems = body['problems'] is List ? … : <String>[];`
+    chat_models.dart:246   → `rejectionProblems: json['rejection_problems'] is List ? … : const []`
+
+  Test hồi quy result40 — ✅ CÓ MẶT:
+    apps/mobile/test/proposal_card_test.dart:514  F1 success-path (unmount giữa chừng)
+    apps/mobile/test/proposal_card_test.dart:545  F1 409-path (unmount giữa chừng)
+    apps/mobile/test/proposal_card_test.dart:570  F3 problems[] không phải list
+    apps/mobile/test/chat_data_test.dart:194      group model tolerance (history không bị xoá)
+
+  Falsification của 2 fix đã chạy ở phiên result40 (gỡ guard → P1/P1b ĐỎ;
+  khôi phục cast cũ → P4 ĐỎ; hoàn nguyên → XANH, md5 khớp, 0 marker) — không
+  chạy lại vì code không đổi từ đó.
+
+== 2. STAGE ĐÚNG PHẠM VI (CHƯA COMMIT — chờ user duyệt)
+
+  git add (chỉ 4 file liên quan F1 + F3 + test hồi quy):
+    apps/mobile/lib/features/chat/data/chat_models.dart
+    apps/mobile/lib/features/chat/presentation/widgets/proposal_card.dart
+    apps/mobile/test/chat_data_test.dart
+    apps/mobile/test/proposal_card_test.dart
+
+  git diff --cached --stat:
+    chat_models.dart              | 10 ++-
+    proposal_card.dart            | 35 +++++-
+    chat_data_test.dart           | 52 +++++++++
+    proposal_card_test.dart       | 89 +++++++++++++++
+    4 files changed, 179 insertions(+), 7 deletions(-)
+
+  Secret scan staged diff (ERPNEXT_API_KEY/SECRET · GEMINI/ZEN/MAC_LLM_API_KEY ·
+  ASK_PASSWORD · `ghp_…` · `Bearer <token>`): CLEAN ✓
+  File cấm lọt vào staged (`.env` · idempotency-store · `.plan/` · result40 ·
+  setup-test.md · working.md · checklist.md): NONE ✓
+
+  Message đề xuất (nguyên văn user soạn ở result40, không sửa):
+    fix: chat UI crash/fail-open guards — mounted after await; tolerant
+    problems[] so a refusal always renders and removes the confirm button
+
+== 3. SUITE TỐI THIỂU (lệnh + output thật, sau khi stage)
+
+  PYTHON   PYTHONPATH=src python3 -m unittest discover -s tests
+           → Ran 60 tests in 0.519s — OK
+  NODE     cd mcp-erpnext && npm test → ℹ tests 120 · pass 120 · fail 0
+  ROUTER   node --test scripts/test/*.test.mjs → ℹ tests 19 · pass 19 · fail 0
+  FLUTTER  cd apps/mobile && flutter test → 00:04 +38: All tests passed!
+           flutter analyze → No issues found! (ran in 5.9s)
+
+== 4. 🟡 F2 — CHỜ USER QUYẾT (KHÔNG tự làm) — tóm tắt 2 phương án
+
+  Hiện tượng (đo ở result40, probe P2): ListView.builder recycle card khi
+  scroll ra khỏi viewport ⇒ state cục bộ (`_result` = "Đã ghi phiếu thu …")
+  mất ⇒ nút [Xác nhận] QUAY LẠI trên thẻ đã ghi.
+  Tiền AN TOÀN đã đo (probe P2b): bấm lại gửi CÙNG `command_id` ⇒ server replay
+  ("chống trùng"), KHÔNG có phiếu thứ hai. Banner từ chối SỐNG SÓT qua recycle
+  (đã lưu ở model) — chỉ kết quả THÀNH CÔNG là mất.
+
+  (a) Lưu kết quả xác nhận vào model (`erpnext_doc` / `paid_vnd` + toJson,
+      controller gắn sau khi /execute thành công)
+      Ưu: đối xứng với đường rejection (đã có `rejection_code`) ⇒ 1 cơ chế
+          duy nhất cho "trạng thái của card"; sống qua cả app restart; không
+          phụ thuộc vòng đời widget.
+      Nhược: ĐỔI SCHEMA lịch sử chat (`chat_history_v1`) ⇒ cần user duyệt; phải
+          xử lý tương thích dữ liệu cũ (turn chưa có field ⇒ null, an toàn) và
+          +test cho toJson/fromJson.
+
+  (b) `AutomaticKeepAliveClientMixin` cho ProposalCard (không đổi schema)
+      Ưu: sửa rất nhỏ, chỉ 1 widget; không đụng model/lịch sử.
+      Nhược: chỉ giữ state trong RAM ⇒ mất khi restart app (vẫn thấy nút lại);
+          giữ luôn card đã ghi trong bộ nhớ; KHÔNG đối xứng với đường rejection
+          (2 cơ chế lưu trạng thái khác nhau cho cùng 1 card).
+
+  ⇒ DỪNG, chờ user chọn (a) hoặc (b). Không code F2 trước khi có câu trả lời.
+
+  F4 (clone `attachRejection` đổi `command_id` khi seed null — latent, hiện
+  không khai thác được vì card bị từ chối không thể xác nhận): GHI NHẬN,
+  KHÔNG sửa (theo chỉ đạo).
+
+== 5. BƯỚC 3 — SAGA / COMPENSATION: ⏸️ CHƯA ĐƯỢC DUYỆT ⇒ KHÔNG CODE
+
+  User chưa nói "làm saga" / "duyệt §7 phase-09" trong phiên này ⇒ theo gate,
+  KHÔNG viết `REVERSING`/`REVERSED`, KHÔNG tạo test mock saga.
+  Trạng thái: **Saga chờ duyệt** (plan §7 đã có trong
+  `.plan/phases/phase-09-proposal-state-machine.md`: Draft = cancel ý định;
+  Submitted = REVERSAL `REVERSAL-<command_id>` + CRITICAL double-confirm;
+  "undo ≠ delete"; 5 test mock tối thiểu khi được duyệt).
+  Khi được duyệt sẽ tuân thủ: KHÔNG `delete` document lung tung, KHÔNG tự
+  submit/cancel trên ERPNext thật.
+
+== 6. KHÔNG LÀM TRONG PHIÊN NÀY (đúng chỉ đạo)
+
+  Phase 4 (Voice/STT — thiếu audio thật) · Phase 8 (jobs/TTS) · Phase 10
+  (multi-user/RBAC) · Phase 11 (write skill mới) · mọi thay đổi đụng ERPNext
+  thật (không có lệnh user ⇒ không probe/ghi gì).
+
+== 7. TRẠNG THÁI COMMIT
+
+  HEAD = `9f496bf` (đã push, từ phiên result39).
+  Đang STAGED (chưa commit): 4 file Dart ở §2.
+  Chưa stage (docs, chờ gộp lần sau nếu user muốn): `M checklist.md` ·
+  `M working.md` · `?? result37.txt` · `?? result39.txt` · `?? result40.txt` ·
+  `?? result41.txt` · `?? setup-test.md` · `?? handoff_20260916-result3{7,9}.md`
+  Rác local KHÔNG stage: `.gemini/` · `.opencode/` · `initp`.
+
+== 8. KẾT LUẬN
+  · F1 + F3: ĐÃ SỬA + CÓ TEST HỒI QUY + ĐÃ FALSIFY (phiên trước) — nay staged,
+    chờ user duyệt commit. Suite: Python 60 · Node 120 · Router 19 · Flutter 38
+    · analyze 0.
+  · F2: chờ user chọn (a) hay (b).
+  · Saga: chờ duyệt (không code).
+  · F4: ghi nhận, không sửa. F6/F7/F8: mức LOW, đã ghi ở result40 §5.
+========================================================================

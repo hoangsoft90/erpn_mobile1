@@ -6,6 +6,25 @@ Trạng thái roadmap chi tiết nằm ở `next.md` — file này KHÔNG nhân 
 
 ---
 
+## P0 (phases2) — Capability Contract + Safety + Golden Dataset (2026-09-17)
+
+- [x] Capability Contract `mcp-erpnext/capabilities.json` + loader validate fail-closed (7 capability, `scope.company` có từ P0)
+- [x] Router đọc trigger từ contract (không hardcode rời)
+- [x] Safety Gateway `src/safety-gateway.mjs` là cửa DUY NHẤT cho WRITE + **test tĩnh no-bypass**
+- [x] Kill switch `global_read_only` (env/flag file) ⇒ 503 `SYSTEM_MAINTENANCE`, không tiêu tốn `command_id`
+- [x] `custom_ai_action_id` Data/unique/indexed **ĐÃ TẠO + VERIFY trên ERPNext demo** (`scripts/add-correlation-field.mjs`, idempotent) + `action_id` ghi khi tạo PE + reconcile theo field
+- [x] Golden Dataset v1 200 câu/6 bucket, runner + threshold: read 50/50 · write 30/30 · kinship 39/40 · money 29/30 · ambiguous 30/30 · adversarial 20/20 · **Node 152/152**
+- [x] Untrusted-data/prompt-injection filter + test bắt buộc (tên khách chứa injection không kích WRITE)
+- [x] `document.delete` bị cấm trên AI path (403 `FORBIDDEN_IN_AI_PATH`, không proposal)
+- [x] Command store persistent: 4 test khoá hành vi (không /tmp · sống qua restart · atomic · torn file)
+- [x] ✅ **ĐÃ COMMIT + PUSH `b4acdb1`** đợt P0 (user duyệt 2026-09-17) — bằng chứng `result44.txt` + `.plan/phases2/p0-result.md`
+- [x] Vòng tự review sau P0: **3 lỗi crash/safety THẬT đã sửa + falsify** (config lỗi không còn giết process; không còn treo vĩnh viễn khoá ý định `(customer|invoice)`; đóng process con khi `initialize()` fail; test tĩnh no-bypass quét thêm `scripts/`) — chi tiết `result44.txt` §3–§8, **Node 152 → 156**
+- [ ] Việc người thật: xác nhận 1 phiếu demo thật mang `custom_ai_action_id` · diễn tập `global_read_only` (tạo/xoá flag)
+- [ ] Gap đã biết của Golden Dataset (thuộc Phase 1, cần falsify riêng): `k18` "Con Linh" (`money.py:FILLERS` chứa "linh") · `m15` "một triệu hai" · `k36` "Bác sĩ Nam"
+- [ ] (P1) Entity Resolver 4 trạng thái + candidate picker; (P1) state machine + reconcile-on-restart; (P10) rate limit (mới khai trong contract, chưa code)
+
+---
+
 ## Yêu cầu sản phẩm gốc (KHÔNG xoá — tiêu chí nghiệm thu app)
 
 - [ ] Mọi hành động thao tác app phải mượt, nếu có process ngầm phải show loading indicator
@@ -69,7 +88,10 @@ Trạng thái roadmap chi tiết nằm ở `next.md` — file này KHÔNG nhân 
 ## Chưa làm / đang làm (thứ tự)
 
 ### Đang làm
-- [ ] **CHỜ USER DUYỆT COMMIT — fix F6 (VÙNG TIỀN, `result38.txt`)**: review commit docs `2f7ec1f` (scope docs-only ✓, docs khớp code ✓) phát hiện `answerQuestion()` gọi `resolveCustomer()` 2 lần cho cùng câu `thu tiền cho <khách> <số>` (guard ngoài + nhánh `payment_write`) ⇒ mỗi câu tốn thêm 1 vòng full-catalog `findCustomer("")` chạm ERPNext, và 2 khối resolve dễ lệch nhau sau này (cùng nhóm bug guard-before-branch của fix `notIf` result31). **Fix**: nhánh write REUSE binding `customer`/`ambiguous`/`candidates` từ guard ngoài. Hành vi KHÔNG đổi — test E2E thật `copilot.test.mjs:251` vẫn xanh (`entity.name="Nguyễn Thị Lan"`, `amount_vnd=500_000`, `invoice=SINV-0001`). Test hồi quy `test/copilot-dup-resolve.test.mjs` + falsify (chèn lại call → FAIL `found 2`; gỡ → grep 0 marker, call site = 1). Suite: **Python 60/60 · Node 120/120 · Flutter 34/34 · analyze 0**. Message đề xuất: `fix: payment_write reuses the outer customer resolve (one round-trip per question, no second resolveCustomer call)`. Chưa stage `.env`/store/.plan/rác
+- [x] **✅ ĐÃ COMMIT `4546997` (user duyệt 2026-09-16, "commit nhưng KHÔNG push" — branch ahead 1)**: 4 file Dart `chat_models.dart` (parse tolerant `rejection_problems`) · `proposal_card.dart` (4 guard `mounted` sau await + banner luôn render + **F2 keep-alive `AutomaticKeepAliveClientMixin`**) · `chat_data_test.dart` · `proposal_card_test.dart` (+5 test hồi quy; Flutter 34→**39**). Lệnh + output thật ở `result40.txt` + `result42.txt`; đã **falsify cả 3 fix** (F1/F3 ở result40, F2 ở result42 §4). Message đề xuất (gộp 3 fix theo yêu cầu user "đợi làm F2 rồi gộp"): `fix: chat UI crash/fail-open guards + keep a written card alive — mounted after await; tolerant problems[]; keep-alive stops the confirm button returning after a ListView recycle`
+- [x] **F2 — USER ĐÃ CHỌN (b) `AutomaticKeepAliveClientMixin`** ✅ implement + falsify (result42): card giữ state cục bộ qua recycle (`wantKeepAlive = _confirming || _result != null || _error != null || _rejectionCode != null` — card chưa bấm vẫn scroll bình thường); test `result41 F2` trong `proposal_card_test.dart` (ListView 60 item, drag −5000/+6000) · hạn chế: không sống qua app restart (option (a) mới persist — ĐỔI SCHEMA), nhưng bấm lại sau restart vẫn replay cùng `command_id`
+- [ ] **CẦN USER QUYẾT (còn lại sau result40)**: ① F4 — clone `attachRejection` đổi command_id khi seed null (latent) ② F6 — field parse nhưng không dùng ③ F7 — `waitForNlpService` fetch thiếu AbortSignal ④ F8 — `int(Content-Length)` non-số ở nlp_service ⇒ traceback stderr
+- [x] **Fix F6 — ✅ ĐÃ COMMIT `9f496bf` (đã push 2026-09-16)**: review commit docs `2f7ec1f` (scope docs-only ✓, docs khớp code ✓) phát hiện `answerQuestion()` gọi `resolveCustomer()` 2 lần cho cùng câu `thu tiền cho <khách> <số>` (guard ngoài + nhánh `payment_write`) ⇒ mỗi câu tốn thêm 1 vòng full-catalog `findCustomer("")` chạm ERPNext, và 2 khối resolve dễ lệch nhau sau này (cùng nhóm bug guard-before-branch của fix `notIf` result31). **Fix**: nhánh write REUSE binding `customer`/`ambiguous`/`candidates` từ guard ngoài. Hành vi KHÔNG đổi — test E2E thật `copilot.test.mjs:251` vẫn xanh (`entity.name="Nguyễn Thị Lan"`, `amount_vnd=500_000`, `invoice=SINV-0001`). Test hồi quy `test/copilot-dup-resolve.test.mjs` + falsify (chèn lại call → FAIL `found 2`; gỡ → grep 0 marker, call site = 1). Suite: **Python 60/60 · Node 120/120 · Flutter 34/34 · analyze 0**. Message đề xuất: `fix: payment_write reuses the outer customer resolve (one round-trip per question, no second resolveCustomer call)`. Chưa stage `.env`/store/.plan/rác
 - [x] **COMMIT đợt result31 — ✅ `bda54cf` (đã push 2026-09-16)**: 18 files +978/−66 (14 file code/docs + result31.txt + 2 handoff); secret scan CLEAN trên staged diff; `.env` + `idempotency-store` xác nhận git-ignored; không stage `.gemini//.opencode//initp` — router payment_write (+notIftIf deny-list) · /execute/cancel + bọc try/catch quanh store.cancel (F2) · copilot-server rawText (F3) · store.cancel() · faq.md · 3 test Node + 1 widget test · docs root · result31 §11 addendum. Message đề xuất ở result31 §7.
 - [x] **Code review sâu chuỗi client (result16, 2026-09-15): 7 lỗi thật đã sửa** — 3 crash router (upstream stream không error listener / client ngắt giữa request / models path — đều giết process), 2 stuck (http-ask không deadline → socket treo vô hạn; NLP fetch không AbortSignal), 2 logic Flutter (cold-start race ghi đè lịch sử; mounted guard sau await). **+3 regression test. Node 49/49 (9s) · router 8/8 · Flutter analyze 0 · Flutter 14/14.** 4 lỗi của chính agent trong đợt này (finding sai, Promise.race timer không clear, test thiếu override, str_replace miss) đã vào skill mục 6. Chờ duyệt commit
 - [x] **Phase 5 — LLM Router nối upstream thật** (result15, 2026-09-15): endpoint chính thức điền xong (zen `opencode.ai/zen/v1` · gemini `generativelanguage.googleapis.com/v1beta/openai`); **2 bug router tự bắt khi chạy thật** (https transport + field `store` Gemini từ chối → `stripFields`) + `LLM_ROUTER_DEBUG=1`; **Gemini verify generate thật 200** qua router · **Zen bị chặn billing** (CreditsError: No payment method — glm-5.3-flash là PAID, big-pickle chỉ chạy trong OpenCode client); cơ chế dsh thật = cordis patch row (settings.yaml result6 lỗi thời) → skill mới `erpn-dsh-setup`; **E2E dsh→router→Gemini flaky do free tier 20 req/phút** (1 session dsh tốn 2–3 calls: 429 quota + 503 high demand nguyên văn trong result15 §6)
@@ -127,7 +149,7 @@ Trạng thái roadmap chi tiết nằm ở `next.md` — file này KHÔNG nhân 
 
 - [x] **[2026-09-16] Phase 7 GIAI ĐOẠN A — first write (payment) + idempotency** (mức task lớn, vùng TIỀN — **ĐÃ COMMIT `8ebfc0e`**, duyệt 2026-09-16, bằng chứng `result23.txt`):
   - **Code mới**: `mcp-erpnext/src/idempotency.mjs` (store 3 trạng thái PENDING/COMPLETED/FAILED, atomic tmp+fsync+rename; COMPLETED → replay trả CHÍNH kết quả cũ; FAILED = terminal, retry cùng id bị TỪ CHỐI; cùng id khác fingerprint → throw; default `mcp-erpnext/idempotency-store/` trong repo + gitignored — KHÔNG /tmp theo bài học result22) + `mcp-erpnext/src/skills/payment-write.mjs` (`buildPaymentProposal()` = Stage A **dừng ở proposal**, dùng lại `buildProposal()` Phase 6 KHÔNG viết proposal riêng; `executePaymentProposal()` = Stage B, hiện mock)
-  - **`/execute` route** trong `http-ask.mjs`: validate command_id (UUID) → whitelist action (`EXECUTABLE_ACTIONS` chỉ `create_payment_entry`) → có entity id đã resolve → `store.begin()` → replay/PENDING-reconcile(409 kèm reference_no)/thực thi mock
+  - **`/execute` route**: P0 (2026-09-17) đã UỶ QUYỀN toàn bộ policy cho **Safety Gateway** (`safety-gateway.mjs`, cửa duy nhất cho WRITE) — action hợp lệ lấy từ **Capability Contract** (`executableWriteActions()`), không còn hằng số `EXECUTABLE_ACTIONS` trong `http-ask.mjs`/`idempotency.mjs` → `store.begin()` → replay/PENDING-reconcile(409 kèm reference_no)/thực thi (mock hoặc thật)
   - **Guard KHÔNG bị nới**: `assertReadOnly` Phase 2 vẫn chặn mọi tool; write đi qua `callWriteTool()` TƯỜNG MINH ở `client.mjs` + mock `create_payment_entry` trong mock-server
   - **An toàn số tiền**: thu vượt dư nợ hoá đơn → clamp về đúng dư nợ + warning; hoá đơn âm (credit note) không thể thu; khách mơ hồ/không thấy → từ chối kèm message cụ thể; số tiền + khách + hoá đơn đọc LẠI từ ERPNext lúc execute (không tin params client)
   - **Flutter**: `ActionProposal.confirmable` (action=create_payment_entry + risk=HIGH + có entity id) → nút [Xác nhận thu tiền] → POST `/execute` với command_id sinh client; hiển thị "Đã ghi phiếu thu…" / "Đã ghi nhận trước đó (chống trùng)"; card READ/LOW/CRITICAL vẫn KHÔNG có nút
@@ -160,6 +182,48 @@ Trạng thái roadmap chi tiết nằm ở `next.md` — file này KHÔNG nhân 
     - 🟡 **(4) `<= 0` để lọt NaN** (`NaN <= 0` = false) ⇒ payload `paid_amount: null`. **Fix**: `Number.isFinite` + `> 0`.
     - 🟡 **(5) Docs/comment sai + 1 hàng bảng skill vỡ**: comment cũ trong http-ask, giả định tỉ giá 1:1 (nay ghi rõ single-currency), và hàng skill chứa pipe CHƯA escape ⇒ vỡ bảng markdown (đã escape, verify bằng script strip-escape trước khi đếm cột).
     - **Test**: Node **91/91** (86 → 91) · Python 58/58 · Flutter 25/25 · analyze 0 · **falsification cả 5**: gỡ từng fix → test mới FAIL đúng chỗ, khôi phục → pass (2 lần chạy thật, output trong result25 §C)
+
+### Hạ tầng dev + client (2026-09-17, `result43.txt`) — CHỜ DUYỆT COMMIT
+- [x] **A) Xác minh hạ tầng sau khi tunnel đổi URL (CHỈ config/verify, không code)**:
+  `.env` đã đúng `ERPNEXT_URL=https://prevail-pantyhose-overvalue.ngrok-free.dev` (không cần sửa) —
+  verify bằng ĐỌC THẬT qua pinned 3.0.4: `erpnext_customer_list` trả 3 khách thật · upstream
+  `mac-custom` config khớp, tunnel SỐNG (`/v1/models` 502→**200**, flaky lần đầu là tính đã ghi
+  trong `_note`) · `erpn8788.loca.lt` xác nhận là tunnel Gateway (`http-ask.mjs` default port
+  **8788**) — ⚠️ tunnel erpn8788 HIỆN TẮT (408/502, `lt` không chạy trên Mac; tình trạng MÔI TRƯỜNG)
+- [x] **B) Giới hạn lịch sử chat (mặc định 20, cấu hình được, KHÔNG cắt proposal đang treo)**:
+  `AppSettingsService` (MỚI, SharedPreferences, getter đồng bộ) + `ChatTurn.hasPendingProposal` +
+  `ChatHistoryService.trimTurns/save(maxItems)` (pure) + controller áp CÙNG luật cho cả state LẪN
+  storage; mặc định **20**, sàn **5** (clamp cả khi đọc lẫn ghi). **Falsify BẮT BUỘC ĐẠT**: gỡ nhánh
+  an toàn → 3 test đỏ đúng chỗ (Expected 21/Actual 20 ×2, 6/5 ×1) → khôi phục `markers=0` + xanh
+- [x] **C) Màn hình Settings (đổi URL/auth/cap KHÔNG cần build lại APK)**: route `/settings` +
+  icon ⚙️; `CopilotApiClient` đọc settings MỖI request ⇒ đổi URL áp dụng NGAY (test: cùng 1 client
+  instance, request 2 đi URL mới); settings RỖNG → fallback `--dart-define` (APK cũ KHÔNG đổi hành
+  vi); password `obscureText`; validate URL http/https + chặn max < 5
+- 🔎 **Review vòng sau — 2 LỖI THẬT ĐÃ SỬA**: 🔴 `attachRejection` gọi cùng luật `trimTurns` SAU khi
+  đánh dấu rejected ⇒ card (thường cũ nhất) bị CẮT NGAY, **banner lý do biến mất** đúng lúc user cần
+  thấy — test chứng minh trước khi sửa (`Expected: <6> Actual: <5>`) ⇒ fix = BỎ trim khỏi
+  `attachRejection` (B.2 cắt "sau mỗi lần thêm turn", từ chối KHÔNG thêm turn); 🟡 doc comment của
+  provider mới "dính" sang `sharedPreferencesProvider` (analyzer không báo) — đã dán lại
+- **Suite: Python 60 · Node 120 · Router 19 · Flutter 62 (39→62, +23) · analyze 0** · 3 bài học mới
+  vào skill `erpn-verify-first` · KHÔNG đụng `.env`/router config/`mcp-erpnext/src/**`/ERPNext thật
+- 🟡 **Hở test phát hiện khi user hỏi "đã test chưa"**: route `/settings` + icon ⚙️ KHÔNG test nào
+  chạm (harness cũ pump `MaterialApp(home:)` không router / render thẳng màn đích) ⇒ suite xanh nhưng
+  đường nối chưa từng chạy ⇒ thêm `test/settings_navigation_test.dart` (pump `MaterialApp.router`
+  THẬT + tap ⚙️ + assert route resolve)
+- [x] **Đã commit `c401b0f` + push + BUILD APK XANH** (user duyệt 2026-09-17): 14 file code/test
+  (1202+/12−), secret scan CLEAN (2 hit là false positive — chỉ tên biến). GH Actions run
+  `35173021349` SUCCESS 5m0s, artifact **`erpn-chat-debug-apk`** (~80 MB, hết hạn 2026-12-16):
+  https://github.com/hoangsoft90/erpn_mobile1/actions/runs/35173021349 — cùng lượt push có cả
+  `4546997` (F1/F3/F2). Docs (result37-43, setup-test.md, handoff37/39/43) **vẫn chưa commit**.
+- ⚠️ **Repo CHƯA set GitHub Variables** (`actions/variables` → rỗng) ⇒ APK có endpoint/auth RỖNG,
+  rơi về `127.0.0.1:8788`. **Cách xử lý: dùng luôn màn Settings mới** để nhập
+  `https://erpn8788.loca.lt` + auth trong app (không cần build lại). Điều kiện: `lt` phải chạy trên Mac.
+- [x] **USER REPORT (2026-09-17) "lưu URL thành công nhưng footer vẫn cũ" → 2 LỖI THẬT ĐÃ SỬA `f28869a`**:
+  footer đọc tĩnh dart-define + plain Provider không notify khi giá trị đổi (fix: footer đọc URL hiệu lực +
+  `ref.invalidate` sau Save; falsify đạt) · test hồi quy đi cả hành trình lưu→pop→assert · Flutter **63/63** ·
+  run **`35175220731` SUCCESS** → APK mới ~80 MB: https://github.com/hoangsoft90/erpn_mobile1/actions/runs/35175220731
+- [ ] Finding nhỏ chờ quyết: câu báo lỗi 401 còn ghi "APK cần build lại với --dart-define..." — nay Settings
+  nhập được credential nên đã lệch; sửa thì phải commit+push+build lại
 
 ### Các phase kế tiếp (chi tiết ở `next.md`)
 - Phase 4 (STT) — chặn bởi audio · Phase 5 (Gateway) — ĐÃ MỞ (sign-off 2026-09-15), router bản đơn giản đã code (result14) ·

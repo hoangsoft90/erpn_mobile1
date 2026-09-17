@@ -11,6 +11,21 @@ Client đích đã chốt: **Flutter** (không phải PWA).
 
 ## Đã hoàn thành
 
+### P0 (phases2) — Capability Contract + Safety foundation + Golden Dataset ✅ ĐÃ COMMIT `b4acdb1` (đã push) — `.plan/phases2/p0-result.md` §10
+
+Lộ trình production trong `.plan/phases2/` (nguồn kiến trúc: `.plan/plan2_final.md`) — **không thay** lịch sử MVP ở `.plan/phases/`.
+
+- **Capability Contract** `mcp-erpnext/capabilities.json` là single source of truth (router + skill + safety + authorization + test cùng đọc) — 7 capability, validate fail-closed
+- **Safety Gateway** `src/safety-gateway.mjs` là cửa DUY NHẤT cho mọi WRITE; `/execute` không còn policy trong HTTP layer; có **test tĩnh no-bypass**
+- **Kill switch** `global_read_only` (env hoặc flag file) ⇒ `503 SYSTEM_MAINTENANCE`, không tiêu tốn `command_id`
+- **`custom_ai_action_id`** (unique+indexed) ĐÃ có trên ERPNext demo; `action_id` ghi khi tạo PE + reconcile theo field
+- **Golden Dataset v1** 200 câu/6 bucket, runner chạy lõi deterministic — **6/6 bucket đạt ngưỡng**
+- `document.delete` **không** tồn tại trên AI path (`403 FORBIDDEN_IN_AI_PATH`, không sinh proposal)
+- **Vòng tự review sau P0 (2026-09-17) — 3 lỗi THẬT trong chính đợt refactor, đã sửa + falsify**: lỗi cấu hình ERPNext từng **giết cả process** (client được tạo NGOÀI `try` ⇒ unhandled rejection), từng **treo vĩnh viễn khoá ý định `(customer|invoice)`** (lỗi config để lại PENDING không `reference_no`), và **rò rỉ process con** khi `initialize()` fail. Kèm gia cố: `params.amount_vnd` thiếu ⇒ **TỪ CHỐI** (không để tầng dưới tự clamp tiền); test tĩnh no-bypass quét thêm `scripts/`. Bằng chứng: `result44.txt` §3–§9.
+- Suite: Python 60 · **Node 156** · Flutter 63 · analyze 0
+
+**Bước kỹ thuật tiếp theo = P1** (Entity Resolver 4 trạng thái + candidate picker + state machine + idempotency E2E) — **KHÔNG** nhảy P9 (skill mới) hay P5 (DSH trên `/ask`). Voice (P6) cần audio thật; không mở lại Phase 4/8/10–15 cũ.
+
 ### Phase 0 — Foundation & Verification ✅ (`result1.txt`)
 
 Không viết code. Chặn fabrication trước khi code (bài học `plan1_review1.md`).
@@ -103,6 +118,50 @@ Python `src/vietnamese_nlp/`, stdlib thuần, chạy TRƯỚC LLM — cố đị
 4. ✅ **Xoá 2 PE demo `ACC-PAY-2026-00114/00115`**: đọc source tìm tool thật (`erpnext_doc_delete` — draft OK, không cần cancel vì docstatus 0); gọi qua JSON-RPC thô MỘT LẦN theo lệnh user (đường xoá KHÔNG được mở vào code sản phẩm); verify độc lập: cả 2 GONE + `ACC-SINV-2026-00047` outstanding 457.875 Unpaid — GIỐNG HẾT trước xoá.
 5. ✅ **faq.md** đầu-file + §3.2/§3.3/§9/§8 cập nhật khớp hành vi mới (nút [Xác nhận] chỉ hiện khi RA LỆNH ghi).
 6. ✅ **Commit `bda54cf` ĐÃ PUSH** (2026-09-16): 18 files +978/−66 (14 file + result31.txt + 2 handoff); secret scan CLEAN; `.env`/`idempotency-store`/rác không stage.
+
+### 🆕 Review code toàn bộ + 3 lỗi thật UI/an toàn (result40 → result42)
+
+- **Review ~7.5k dòng** (Dart client · Node skill layer/router · Python bridge), tìm bằng probe chạy thật:
+  - **F1 (crash)** `proposal_card._confirm()` cập nhật UI sau `await` ở 4 nhánh không kiểm `mounted`
+    ⇒ `setState() called after dispose()` khi rời màn hình/xoá lịch sử lúc lệnh ghi đang bay → **ĐÃ SỬA** (4 guard).
+  - **F3 (fail-OPEN ở đường an toàn)** `problems[]` không phải list ⇒ ném TypeError ⇒ banner KHÔNG hiện và
+    **nút [Xác nhận] vẫn còn trên đề xuất đã bị từ chối**; cùng cast ở model còn xoá sạch lịch sử chat → **ĐÃ SỬA** (parse tolerant).
+  - Cả 2 đã **falsify** (gỡ fix → test đỏ, khôi phục → xanh) + 4 test hồi quy (**Flutter 34 → 38**).
+  - **F2 (UI nói ngược sự thật)** `ListView.builder` dispose card ngoài viewport ⇒ thẻ ĐÃ GHI bị dựng lại sạch,
+    nút [Xác nhận] quay lại (probe P2: `success=1/button=0` → `success=0/button=1`) — user chọn **(b)
+    `AutomaticKeepAliveClientMixin`** ⇒ **ĐÃ SỬA** (`wantKeepAlive` theo state cục bộ, không ghim mọi card).
+  - **✅ CẢ 3 FIX ĐÃ STAGE, CHỜ USER DUYỆT COMMIT** (`result41.txt` + `result42.txt`): 4 file Dart, 272+/8−;
+    Flutter **39/39** (+5 test hồi quy F1×2 · F3 · F2).
+- **Hạn chế của option (b)**: kết quả ghi nằm trong RAM ⇒ mất khi tắt app (option (a) mới persist — phải đổi schema).
+  An toàn tiền KHÔNG phụ thuộc hiển thị: `command_id` được ghim trong history (`ChatTurn` round-trip test) nên lần bấm
+  sau restart vẫn là **replay phía server**, không ghi phiếu thứ hai.
+- **Saga/REVERSAL (phase-09 §7)**: ⏸️ **chờ duyệt** — KHÔNG code.
+
+### 🆕 Hạ tầng dev + 2 tính năng client (result43, 2026-09-17) — CHỜ DUYỆT COMMIT
+
+- **A) Xác minh hạ tầng sau khi tunnel đổi URL** (chỉ config, không code): `.env` đã đúng
+  ngrok mới — verify bằng đọc thật `erpnext_customer_list` (3 khách) · `mac-custom` config
+  khớp, tunnel sống (502→200) · `erpn8788.loca.lt` = tunnel Gateway (port 8788).
+  ⚠️ tunnel erpn8788 hiện TẮT (tình trạng môi trường, không phải lỗi config).
+- **B) Giới hạn lịch sử chat** `maxChatItems` (mặc định **20**, sàn 5, sửa được): cắt turn
+  CŨ NHẤT khi vượt cap, **TRỪ turn có proposal đang treo** — luật nằm ở
+  `ChatHistoryService.trimTurns` (pure) áp cho cả state lẫn storage; **falsify bắt buộc đạt**.
+- **C) Màn hình Settings** (route `/settings` + icon ⚙️): đổi Gateway URL / auth user /
+  auth password / max chat items — `CopilotApiClient` đọc settings MỖI request nên **áp dụng
+  ngay, không cần build lại APK**; settings rỗng ⇒ vẫn dùng `--dart-define` (APK cũ không đổi).
+- 🔎 **Review vòng sau tìm 3 vấn đề thật**: `attachRejection` từng cắt luôn card VỪA bị từ chối
+  (banner lý do biến mất — test chứng minh `6→5` trước khi sửa) → đã bỏ trim ở đường đó;
+  doc comment provider bị dán lệch (analyzer không báo) → đã sửa; **hở test ở đường nối mới**
+  (route `/settings` + ⚙️ không test nào chạm vì harness cũ đi vòng qua nó) → đã thêm
+  `test/settings_navigation_test.dart` chạy qua `appRouter` THẬT.
+- **Suite: Python 60 · Node 120 · Router 19 · Flutter 62 (39→62) · analyze 0**.
+- **✅ ĐÃ COMMIT `c401b0f` + PUSH + BUILD APK XANH** (user duyệt 2026-09-17): GH Actions run
+  `35173021349` SUCCESS 5m0s → artifact `erpn-chat-debug-apk` (~80 MB, hạn 2026-12-16).
+  ⚠️ Repo chưa set GitHub Variables ⇒ APK endpoint/auth rỗng → **dùng màn Settings trong app**
+  để nhập `https://erpn8788.loca.lt` + auth (không cần build lại).
+- **Hạn chế đã ghi rõ**: `/execute` đọc `dioProvider` trực tiếp nên chỉ theo URL mới SAU khi có
+  ≥1 lần `/ask` (fail-CLOSED, không ghi sai); card đã ghi vẫn "pending" trong model nên không
+  bao giờ bị cắt (an toàn > gọn); password lưu SharedPreferences thường (app-private, CHƯA mã hoá).
 
 ### Bước kỹ thuật tiếp theo (KHÔNG Phase 4/8/11)
 
