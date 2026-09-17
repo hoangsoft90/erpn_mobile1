@@ -175,7 +175,16 @@ src/copilot-server.mjs · .gitignore
 
 == 13. Trạng thái commit
 
-Xem §14 — hash ghi sau khi commit.
+  $ git commit …
+  b4acdb1 feat: P0 capability contract + Safety Gateway (single WRITE boundary) + kill switch + golden dataset
+  $ git push -q origin change/flutter-chat-mvp
+  b4acdb1 (origin/change/flutter-chat-mvp)   PUSHED
+
+Nội dung commit: mcp-erpnext/capabilities.json · src/{capability-contract,
+kill-switch,safety-gateway,untrusted-data}.mjs · 6 file src sửa · 7 test mới +
+test/golden/golden-dataset.json · scripts/add-correlation-field.mjs · result44.txt
+· .gitignore. Secret scan trước khi stage: **0 file** chứa nội dung giống secret;
+`.env` git-ignored (verified `git check-ignore`).
 
 == 14. Gap còn lại cho P1 (không giấu, đã có trong p0-result.md §8)
 

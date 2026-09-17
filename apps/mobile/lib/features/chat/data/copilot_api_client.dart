@@ -92,12 +92,19 @@ class CopilotApiClient {
 
   /// Throws [CopilotException] subclasses — the controller maps them to UI
   /// state; the UI must never see a raw DioError.
-  Future<AskResult> ask(String text) async {
+  /// [entityId] is the customer the user picked in the candidate picker (P1
+  /// §4.4). It is sent back so the server can re-validate it against a fresh
+  /// ERPNext read — the id is a hint, never authority (the server refuses an id
+  /// that is not in the list it just read).
+  Future<AskResult> ask(String text, {String? entityId}) async {
     _applySettings();
     try {
       final res = await dio.post<Map<String, dynamic>>(
         '/ask',
-        data: {'text': text},
+        data: {
+          'text': text,
+          if (entityId != null && entityId.isNotEmpty) 'entity_id': entityId,
+        },
       );
       final body = res.data ?? const {};
       final ok = body['ok'];

@@ -22,7 +22,7 @@ import { randomUUID } from "node:crypto";
 
 import { assertReadOnly } from "../readonly-guard.mjs";
 import { buildProposal } from "../action-proposal.mjs";
-import { detectDrift } from "../proposal-freshness.mjs";
+import { classifyDriftCode, detectDrift } from "../proposal-freshness.mjs";
 import { getCapability } from "../capability-contract.mjs";
 
 /** The ONE doctype this project may ever create (fail-closed everywhere). */
@@ -348,7 +348,20 @@ export async function buildPaymentProposal(skills, resolved, opts = {}) {
   }
 
   const warnings = [];
-  let amount = Math.round(Number(opts.amount_vnd ?? outstanding) || 0);
+  // P1 (§13 degraded mode + §9 amount policy): the interactive path passes
+  // `requireExplicitAmount`, because "the user said a number but the parser did
+  // not catch it" must NOT silently become "thu toàn bộ nợ". Collecting the
+  // whole debt stays a legitimate capability, but it has to be an explicit
+  // intent — not the default a failed parse lands on.
+  const hasExplicitAmount = Number.isFinite(Number(opts.amount_vnd));
+  if (opts.requireExplicitAmount === true && !hasExplicitAmount) {
+    const err = new Error(
+      "câu nói thiếu số tiền (bộ chuẩn hoá không đọc ra số) — không tự đoán, hãy nói rõ số tiền cần thu",
+    );
+    err.code = "PAYMENT_AMOUNT_MISSING";
+    throw err;
+  }
+  let amount = Math.round(Number(hasExplicitAmount ? opts.amount_vnd : outstanding) || 0);
   if (amount <= 0) {
     const err = new Error("số tiền thu phải là số dương (VND)");
     err.code = "PAYMENT_AMOUNT_INVALID";
@@ -365,6 +378,10 @@ export async function buildPaymentProposal(skills, resolved, opts = {}) {
     entity: { kind: "customer", id: customer.name, name: customer.customer_name },
     params: {
       amount_vnd: amount,
+      // §9 provenance: was this number the user's (explicit) or derived from the
+      // document (full balance)? Recorded in the snapshot so a later reviewer can
+      // tell what was actually approved.
+      amount_source: hasExplicitAmount ? "explicit" : "full_balance",
       invoice: target.name,
       outstanding_vnd: outstanding,
       mode: opts.mode ?? "Tiền mặt",
@@ -454,7 +471,10 @@ export async function executePaymentProposal(mcp, proposal, commandId, store) {
   if (drift.length > 0) {
     throw Object.assign(
       new Error(`đề xuất đã lệch so với dữ liệu thật: ${drift.join("; ")} — KHÔNG ghi, hãy xác nhận lại`),
-      { code: "PROPOSAL_STALE", problems: drift },
+      // P1: name WHICH kind of staleness (taxonomy §12) — the generic
+      // PROPOSAL_STALE stays for compatibility, `drift_code` is what the
+      // gateway answers with.
+      { code: "PROPOSAL_STALE", drift_code: classifyDriftCode(drift), problems: drift },
     );
   }
 

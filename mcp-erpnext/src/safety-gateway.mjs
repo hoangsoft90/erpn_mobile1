@@ -28,7 +28,8 @@
 import { createMcpClient } from "./client.mjs";
 import { pickServerScript } from "./copilot-server.mjs";
 import { fingerprintProposal, isValidCommandId } from "./idempotency.mjs";
-import { assertFresh } from "./proposal-freshness.mjs";
+import { assertFresh, assertProposalSnapshot } from "./proposal-freshness.mjs";
+import { BusinessDedupLedger, businessFingerprint, requiresDedupAck } from "./business-dedup.mjs";
 import { executePaymentProposal, reconcilePaymentEntry } from "./skills/payment-write.mjs";
 import {
   assertCapabilityExecutable,
@@ -75,7 +76,7 @@ export function checkAmountPolicy(cap, rawAmount) {
  * @param {() => object} [req.createClient] test seam; defaults to the real client
  * @returns {Promise<{status:number, body:object}>}
  */
-export async function runExecute({ command_id, proposal, store, createClient } = {}) {
+export async function runExecute({ command_id, proposal, store, createClient, dedup_ack = false, ledger = null } = {}) {
   if (!isValidCommandId(command_id)) {
     return refuse(400, { error: "command_id must be a client-generated UUID" });
   }
@@ -134,6 +135,30 @@ export async function runExecute({ command_id, proposal, store, createClient } =
   const freshness = assertFresh(proposal);
   if (!freshness.ok) {
     return refuse(409, { code: freshness.code, error: freshness.error });
+  }
+
+  // 5b. SNAPSHOT INTEGRITY (P1 §9) — the proposal must be an immutable snapshot
+  //     this code knows how to execute. A missing/older `version` means the
+  //     fields validated here are not the fields the executor reads.
+  const snapshot = assertProposalSnapshot(proposal);
+  if (!snapshot.ok) {
+    return refuse(409, { code: snapshot.code, error: snapshot.error });
+  }
+
+  // 5c. BUSINESS DEDUP (§10.5) — a SECOND proposal for the same real intent
+  //     (same customer + amount + capability inside the window) needs an extra
+  //     acknowledgement. Checked before the idempotency gate on purpose: a
+  //     missing ack is a client mistake and must not burn a command_id.
+  //     This layer is ADDITIVE — command_id idempotency below is unchanged.
+  if (requiresDedupAck(proposal) && dedup_ack !== true) {
+    return refuse(409, {
+      code: "BUSINESS_DEDUP_CONFIRM_REQUIRED",
+      error:
+        proposal.business_dedup?.message ??
+        "đề xuất này trùng ý định với một đề xuất gần đây — cần xác nhận thêm trước khi ghi",
+      business_dedup: proposal.business_dedup ?? null,
+      retry_same_command_id: true,
+    });
   }
 
   // 6. IDEMPOTENCY GATE — from here on the command_id is owned.
@@ -220,6 +245,7 @@ export async function runExecute({ command_id, proposal, store, createClient } =
   const { client, release } = opened;
   try {
     const result = await executePaymentProposal(client, proposal, command_id, store);
+    recordExecutedIntent(store, proposal, command_id, ledger);
     return { status: 200, body: { ok: true, replay: false, result } };
   } catch (err) {
     // Classify before writing the terminal state (review finding 2026-09-16).
@@ -242,8 +268,17 @@ export async function runExecute({ command_id, proposal, store, createClient } =
       // The intent no longer matches ERPNext (debt changed / invoice moved).
       // The check runs BEFORE setReference, so nothing was written; the command
       // is terminal so the client re-asks instead of retrying a stale intent.
+      // P1 (§12): the refusal carries the SPECIFIC taxonomy code —
+      // PROPOSAL_VERSION_STALE (data moved) vs PROPOSAL_ENTITY_CHANGED (the
+      // customer itself is gone) — because the UX differs, with the old generic
+      // code kept as `legacy_code` for clients that only know that one.
       store.fail(command_id, err.message);
-      return refuse(409, { code: "PROPOSAL_STALE", error: err.message, problems: err.problems ?? [] });
+      return refuse(409, {
+        code: err.drift_code ?? "PROPOSAL_STALE",
+        legacy_code: "PROPOSAL_STALE",
+        error: err.message,
+        problems: err.problems ?? [],
+      });
     }
     store.fail(command_id, err?.message ?? String(err));
     return refuse(500, { error: `execute failed: ${err?.message ?? err}` });
@@ -298,3 +333,23 @@ async function openClient(createClient) {
 
 /** Test seam — pins the leak guard (close the spawned server when initialize fails). */
 export const __openClientForTest = openClient;
+
+/**
+ * Remember that this real-world intent was executed (§10.5), so the NEXT
+ * proposal for the same customer+amount+capability inside the window can warn.
+ * Never allowed to fail a write that already succeeded: the money moved, so a
+ * bookkeeping problem is logged, not surfaced as a payment error.
+ */
+function recordExecutedIntent(store, proposal, commandId, injectedLedger) {
+  try {
+    const ledger = injectedLedger ?? new BusinessDedupLedger(store.dir);
+    ledger.record({
+      fingerprint: proposal?.business_dedup?.fingerprint ?? businessFingerprint(proposal),
+      phase: "executed",
+      proposal_id: proposal?.proposal_id ?? null,
+      command_id: commandId,
+    });
+  } catch (err) {
+    process.stderr.write(`[dedup] không ghi được ledger (bỏ qua): ${err?.message ?? err}\n`);
+  }
+}

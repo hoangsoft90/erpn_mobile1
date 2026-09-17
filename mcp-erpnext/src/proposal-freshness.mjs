@@ -18,6 +18,9 @@
 /** Spec: 10–15 phút. 10 is the conservative end; override with PROPOSAL_TTL_MS. */
 export const DEFAULT_TTL_MS = 10 * 60 * 1000;
 
+/** Proposal schema version accepted by the executor (keep in sync with action-proposal.mjs). */
+export const PROPOSAL_VERSION = 1;
+
 /**
  * How much clock skew is tolerated before a "created_at in the future" is
  * treated as forged rather than a wrong device clock.
@@ -37,6 +40,60 @@ export function proposalTtlMs(env = process.env) {
  * @param {object} proposal
  * @returns {number|null} epoch ms, or null when absent/unparseable
  */
+/**
+ * Snapshot integrity gate (plan2_final §9 + §12).
+ *
+ * P1 splits what used to be one generic `PROPOSAL_STALE` refusal into the three
+ * codes the taxonomy asks for, because the UX differs:
+ *
+ *   PROPOSAL_EXPIRED        → time ran out           → re-ask and re-propose
+ *   PROPOSAL_VERSION_STALE  → the snapshot is from different/older code, or the
+ *                             underlying document changed → re-resolve
+ *   PROPOSAL_ENTITY_CHANGED → the customer is gone/disabled → block + tell why
+ *
+ * Runs BEFORE the TTL check is irrelevant — both are refuse-only, and this one
+ * is cheaper (no date parsing).
+ *
+ * @param {object} proposal
+ * @returns {{ok:true} | {ok:false, code:string, error:string}}
+ */
+export function assertProposalSnapshot(proposal) {
+  if (!proposal || typeof proposal !== "object") {
+    return { ok: false, code: "PROPOSAL_VERSION_STALE", error: "không có proposal để kiểm — TỪ CHỐI ghi" };
+  }
+  const version = Number(proposal.version);
+  if (!Number.isFinite(version) || version < PROPOSAL_VERSION) {
+    return {
+      ok: false,
+      code: "PROPOSAL_VERSION_STALE",
+      error: `đề xuất thuộc phiên bản cũ (version=${proposal.version ?? "thiếu"} < ${PROPOSAL_VERSION}) — hãy hỏi lại để tạo đề xuất mới`,
+    };
+  }
+  if (typeof proposal.proposal_id !== "string" || proposal.proposal_id.trim() === "") {
+    return {
+      ok: false,
+      code: "PROPOSAL_VERSION_STALE",
+      error: "đề xuất thiếu proposal_id — không xác minh được snapshot, TỪ CHỐI ghi",
+    };
+  }
+  return { ok: true };
+}
+
+/**
+ * Classify drift problems into the taxonomy code (plan2_final §12).
+ *
+ * The problems themselves stay human-readable strings (the Flutter banner
+ * renders them verbatim) — this only decides WHICH code the refusal carries.
+ *
+ * @param {string[]} problems
+ * @returns {string} "PROPOSAL_ENTITY_CHANGED" when the entity itself is the
+ *          problem, otherwise "PROPOSAL_VERSION_STALE"
+ */
+export function classifyDriftCode(problems = []) {
+  const entityish = problems.some((p) => /không còn thuộc khách|khách .* không|customer/i.test(String(p)));
+  return entityish ? "PROPOSAL_ENTITY_CHANGED" : "PROPOSAL_VERSION_STALE";
+}
+
 export function proposalCreatedAtMs(proposal) {
   const raw = proposal?.created_at ?? proposal?.createdAt;
   if (typeof raw !== "string" || raw.trim() === "") return null;

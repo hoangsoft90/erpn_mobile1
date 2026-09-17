@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../../../app/theme/app_theme.dart';
 import '../../data/chat_models.dart';
+import 'entity_picker.dart';
 import 'proposal_card.dart';
 
 /// One chat turn rendered as a PAIR of bubbles: the user's question (right)
@@ -100,6 +101,14 @@ class _CopilotBubble extends StatelessWidget {
             ],
             // Phase 6: proposal summary card below the answer (display-only).
             if (turn.proposal != null) ProposalCard(proposal: turn.proposal!),
+            // P1 §4.4: a write that could not settle the customer offers the
+            // candidates instead of a proposal. No card, no confirm button —
+            // nothing can be written until the user picks.
+            if (turn.awaitingEntityPick)
+              EntityPicker(
+                candidates: turn.candidates,
+                question: turn.question,
+              ),
           ],
         ),
       ),

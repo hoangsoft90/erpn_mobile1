@@ -186,6 +186,10 @@ for (const k of Object.keys(process.env)) {
 
 const PROPOSAL = {
   schema: "erpn.proposal/v1",
+  // P1 §9 immutable snapshot: produced by buildProposal() for real proposals;
+  // declared here because these tests POST a proposal over the wire.
+  proposal_id: "prp_test-http-execute",
+  version: 1,
   action: "create_payment_entry",
   risk: "HIGH",
   // Phase 9: the age gate needs the server build time, and the drift check
@@ -662,7 +666,11 @@ test("/execute Phase 9: a proposal whose SNAPSHOT drifted is refused (409), NOT 
     });
     const body = await r.json();
     assert.equal(r.status, 409, JSON.stringify(body));
-    assert.equal(body.code, "PROPOSAL_STALE");
+    // P1 §12 taxonomy: the refusal names WHICH kind of staleness. Data moved
+    // (the debt changed) ⇒ PROPOSAL_VERSION_STALE; the old generic code stays
+    // as `legacy_code` so a client that only knows that one keeps working.
+    assert.equal(body.code, "PROPOSAL_VERSION_STALE");
+    assert.equal(body.legacy_code, "PROPOSAL_STALE");
     assert.ok(body.problems.some((p) => /nợ lúc tạo đề xuất/.test(p)), JSON.stringify(body.problems));
     assert.equal(store.status(cid).status, "FAILED", "a stale intent is terminal — the user re-asks");
     // No state file ⇒ the mock never wrote ⇒ zero rows (that IS the assertion).
@@ -763,3 +771,159 @@ test("/execute: FAILED command is terminal (409) even before any ERPNext call", 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("P1 §10.5: a business-dedup warning blocks the write until dedup_ack=true (and never burns the command_id)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "idem-dedup-"));
+  let server = null;
+  process.env.MOCK_ERP_STATE = join(dir, "mock-erp.json");
+  try {
+    const { createAskServer } = await import("../src/http-ask.mjs");
+    const { IdempotencyStore } = await import("../src/idempotency.mjs");
+    const { readFileSync } = await import("node:fs");
+    const store = new IdempotencyStore(dir);
+    server = createAskServer({ port: 0, host: "127.0.0.1", idemStore: store });
+    const port = await new Promise((res, rej) => {
+      server.once("error", rej);
+      server.listen(0, "127.0.0.1", () => res(server.address().port));
+    });
+
+    // The proposal the server produces when it detects a repeated intent.
+    const warned = {
+      ...PROPOSAL,
+      proposal_id: "prp_test-dedup-2",
+      business_dedup: {
+        fingerprint: "fp-test-dedup",
+        duplicate_of: ["prp_test-dedup-1"],
+        require_extra_confirm: true,
+        message: "Bạn vừa có đề xuất tương tự vài phút trước.",
+      },
+    };
+    const cid = randomUUID();
+
+    // 1. No acknowledgement ⇒ refuse, and the command_id is NOT consumed (the
+    //    same id must still be usable once the user actually confirms).
+    const first = await fetch(`http://127.0.0.1:${port}/execute`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ command_id: cid, proposal: warned }),
+    });
+    const firstBody = await first.json();
+    assert.equal(first.status, 409, JSON.stringify(firstBody));
+    assert.equal(firstBody.code, "BUSINESS_DEDUP_CONFIRM_REQUIRED");
+    assert.equal(store.status(cid), null, "a missing ack must not burn the command_id");
+    assert.equal(existsSync(process.env.MOCK_ERP_STATE), false, "nothing may be written");
+
+    // 2. With the acknowledgement the SAME command_id goes through, once.
+    const second = await fetch(`http://127.0.0.1:${port}/execute`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ command_id: cid, proposal: warned, dedup_ack: true }),
+    });
+    const secondBody = await second.json();
+    assert.equal(second.status, 200, JSON.stringify(secondBody));
+    assert.equal(secondBody.ok, true);
+    const rows = JSON.parse(readFileSync(process.env.MOCK_ERP_STATE, "utf8")).payments ?? [];
+    assert.equal(rows.filter((p) => p.reference_no === cid).length, 1, "exactly one write");
+  } finally {
+    delete process.env.MOCK_ERP_STATE;
+    server?.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("P1 §9: an executable proposal with NO version is refused as VERSION_STALE (the snapshot gate)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "idem-ver-"));
+  let server = null;
+  try {
+    const { createAskServer } = await import("../src/http-ask.mjs");
+    const { IdempotencyStore } = await import("../src/idempotency.mjs");
+    const store = new IdempotencyStore(dir);
+    server = createAskServer({ port: 0, host: "127.0.0.1", idemStore: store });
+    const port = await new Promise((res, rej) => {
+      server.once("error", rej);
+      server.listen(0, "127.0.0.1", () => res(server.address().port));
+    });
+    const legacy = { ...PROPOSAL };
+    delete legacy.version;
+    delete legacy.proposal_id;
+    const cid = randomUUID();
+    const r = await fetch(`http://127.0.0.1:${port}/execute`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ command_id: cid, proposal: legacy }),
+    });
+    const body = await r.json();
+    assert.equal(r.status, 409, JSON.stringify(body));
+    assert.equal(body.code, "PROPOSAL_VERSION_STALE");
+    assert.equal(store.status(cid), null, "refused before the gate ⇒ no command consumed");
+  } finally {
+    server?.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test(
+  "/execute chaos: CONCURRENT confirms — the same command_id racing through begin() yields exactly ONE mock write",
+  async () => {
+    // P1 deliverable 9: "concurrent confirm". A double-tap (or two app
+    // instances restored from history) can fire the SAME command_id twice at
+    // the same time. Technical idempotency must collapse them to one document,
+    // and the second response must be a replay — not an error the user
+    // misreads as "the first tap failed".
+    const dir = mkdtempSync(join(tmpdir(), "idem-concurrent-"));
+    const stateFile = join(dir, "mock-erp.json");
+    let server = null;
+    process.env.MOCK_ERP_STATE = stateFile;
+    try {
+      const { createAskServer } = await import("../src/http-ask.mjs");
+      const { readFileSync } = await import("node:fs");
+      server = createAskServer({ port: 0, host: "127.0.0.1" });
+      const port = await new Promise((res, rej) => {
+        server.once("error", rej);
+        server.listen(0, "127.0.0.1", () => res(server.address().port));
+      });
+      const cid = randomUUID();
+      const post = () =>
+        fetch(`http://127.0.0.1:${port}/execute`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ command_id: cid, proposal: PROPOSAL }),
+        }).then(async (r) => ({ status: r.status, body: await r.json() }));
+
+      // Fire THREE confirms simultaneously (double-tap + one racing retry).
+      // CONTRACT (observed, fail-closed): the request that WINS begin() does the
+      // write (200); the losers see a PENDING record whose server reference is
+      // not yet registered, so they are refused with 409 — the gateway never
+      // guesses on behalf of a write that may or may not have landed. The
+      // assertion below pins THAT contract: no second write, no fake success.
+      const results = await Promise.all([post(), post(), post()]);
+
+      const oks = results.filter((r) => r.status === 200 && r.body.ok === true);
+      const refused = results.filter((r) => r.status === 409);
+      assert.equal(oks.length, 1, `exactly one confirm writes — got ${oks.length}`);
+      assert.equal(refused.length, 2, `the racing losers are refused, got ${refused.length}`);
+      for (const r of refused) {
+        assert.match(r.body.error, /KHÔNG ghi để tránh trùng/);
+      }
+
+      // ERPNext itself holds exactly ONE document for this command.
+      const rows = JSON.parse(readFileSync(stateFile, "utf8")).payments ?? [];
+      assert.equal(
+        rows.filter((p) => p.reference_no === cid).length,
+        1,
+        "a concurrent confirm storm must still produce a single Payment Entry",
+      );
+
+      // After the winner settled, the SAME command_id replays cleanly — the
+      // user who double-tapped ends up looking at ONE completed payment.
+      const after = await post();
+      assert.equal(after.status, 200, JSON.stringify(after.body));
+      assert.equal(after.body.ok, true);
+      assert.equal(after.body.replay, true);
+    } finally {
+      delete process.env.MOCK_ERP_STATE;
+      server?.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  },
+);

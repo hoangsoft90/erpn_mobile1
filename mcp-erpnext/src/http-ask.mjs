@@ -304,6 +304,9 @@ export function createAskServer({ port = 8788, host = "127.0.0.1", policy = null
           command_id: body?.command_id,
           proposal: body?.proposal,
           store,
+          // P1 §10.5: the extra acknowledgement for a business-level duplicate.
+          // Absent/false ⇒ the gateway refuses with BUSINESS_DEDUP_CONFIRM_REQUIRED.
+          dedup_ack: body?.dedup_ack === true,
         });
       } catch (err) {
         sendJson(res, 500, {
@@ -319,10 +322,17 @@ export function createAskServer({ port = 8788, host = "127.0.0.1", policy = null
     }
     if (req.method === "POST" && path === "/ask") {
       let text;
+      let pickedEntityId = null;
       try {
         const raw = await readBody(req);
         const parsed = raw ? JSON.parse(raw) : {};
         text = parsed?.text;
+        // P1 §4.2/§4.4: the client may send back the id the USER picked in the
+        // candidate picker. It is validated server-side against a fresh ERPNext
+        // read before it can become authoritative (never trusted as-is).
+        pickedEntityId = typeof parsed?.entity_id === "string" && parsed.entity_id.trim() !== ""
+          ? parsed.entity_id.trim()
+          : null;
       } catch (err) {
         sendJson(res, 400, { ok: false, error: `invalid request body: ${err.message}` });
         return;
@@ -342,7 +352,7 @@ export function createAskServer({ port = 8788, host = "127.0.0.1", policy = null
         // cancel it, and an uncleared timer keeps the event loop alive for
         // the full 120s per request (broke node --test + clean shutdown).
         const result = await Promise.race([
-          answerQuestion(text),
+          answerQuestion(text, { pickedEntityId }),
           new Promise((_, reject) => {
             deadlineTimer = setTimeout(
               () => reject(new Error("ask deadline exceeded (120s)")),

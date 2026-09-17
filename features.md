@@ -111,6 +111,8 @@ Lớp chuẩn hóa chạy **TRƯỚC** LLM, cố định bằng code chứ khôn
 - **Phase 11 — Mở rộng write skills:** sales order, inventory, purchase
 
 ### An toàn & tin cậy (không cắt để rút ngắn thời gian)
+- **P0 phases2 — Capability Contract + Safety (✅ ĐÃ COMMIT `b4acdb1`):** `capabilities.json` single source of truth (7 capability, validate fail-closed) · Safety Gateway là cửa DUY NHẤT cho WRITE + test tĩnh no-bypass (quét cả `scripts/`) · kill switch `503 SYSTEM_MAINTENANCE` (không đốt `command_id`) · `custom_ai_action_id` (unique+indexed trên ERPNext demo) ghi khi tạo PE + reconcile theo field · Golden Dataset v1 200 câu/6 bucket (6/6 đạt ngưỡng) · `document.delete` cấm trên AI path (`403 FORBIDDEN_IN_AI_PATH`)
+- **P1 phases2 — Entity Execution Resilience (✅ kỹ thuật, CHỜ DUYỆT COMMIT):** entity 4 trạng thái (`EXACT/FUZZY_SINGLE/AMBIGUOUS/NO_MATCH` theo contract) · WRITE HIGH **không** auto-select fuzzy; AMBIGUOUS → **candidate picker** Flutter (`entity_picker.dart`) → `/ask` nhận `entity_id`, server re-validate trên fresh read · **immutable proposal snapshot** (`proposal_id`/`version`/`expires_at`) · mã tách `PROPOSAL_EXPIRED` vs `PROPOSAL_VERSION_STALE`/`PROPOSAL_ENTITY_CHANGED` (Flutter banner phân biệt) · `UNKNOWN_EXECUTION_STATE` → RECONCILING theo `custom_ai_action_id` · **business dedup** fingerprint warn + `dedup_ack` (không thay `command_id`) · **NLP down → chặn WRITE** phụ thuộc amount (fail-closed). Suite: Node 172 · Flutter 67 · Python 60 · analyze 0 (result45)
 - **Phase 5 — AI Gateway core:** ✅ bản đơn giản ĐÃ XONG theo sign-off (không scrub): auth, LLM Router config-driven, audit log; client mobile **không bao giờ** giữ ERPNext/LLM key. Còn: user quyết upstream thật (Zen payment / Gemini free-paid)
 - **Phase 6 — Entity resolution + Action Proposal card:** "Anh A" → đúng customer nào khi trùng tên/liên chi nhánh; card xác nhận tiếng Việt dễ hiểu + Risk Level
 - **Phase 7 — Idempotency** — chống double-tap ghi tiền 2 lần
@@ -132,6 +134,7 @@ Lớp chuẩn hóa chạy **TRƯỚC** LLM, cố định bằng code chứ khôn
 - ⚠️ `phase-15` **phụ thuộc vào Flutter client track** (chưa định nghĩa)
 
 ### Nợ kỹ thuật / dạng chưa hỗ trợ (Phase 1)
+- Golden Dataset phơi 3 gap Phase 1 (đã truy nguyên nhân, chưa sửa): `k18` "Con Linh" không strip "Con" (FILLERS chứa "linh") · `m15` "một triệu hai" chưa hỗ trợ shorthand 1.2M · `k36` "Bác sĩ Nam" strip nhầm "Bác" (không biết từ ghép "bác sĩ") — hiện lại mỗi lần chạy Golden để không quên
 - ~~Tiếng lóng miền Nam `trẹo`/`chai`~~ ✅ đã làm 2026-09-13; còn `bạc` (không rõ mệnh giá) + viết tắt `m` (= triệu, nhưng `m` cũng = mét)
 - ~~Hậu tố tiền tệ dính liền số~~ ✅ đã fix 2026-09-13 (58/58 PASS, 259/259 = 100% — `result3.txt`)
 - Cờ `approximate`/so sánh: `"khoảng 10 triệu"`, `"hơn 10 triệu"`

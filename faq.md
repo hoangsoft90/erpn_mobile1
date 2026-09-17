@@ -110,6 +110,15 @@ phải app lỗi. Cách xử lý: nói tên đầy đủ hoặc tên đặc trư
   `⚠️ tên khách trùng nhiều kết quả — đã lấy kết quả đầu tiên`.
   **Hãy đọc cảnh báo này** — nó nghĩa là "tôi chưa chắc".
 
+### 2.4b "App hỏi lại chọn khách" (danh sách ứng viên) — chọn 1 cái là xong
+
+- Khi tên khớp **nhiều khách**, lệnh GHI (thu tiền) sẽ **không tự chọn** — app hiện
+  danh sách ứng viên để bạn bấm chọn đúng người (P1).
+- Bấm chọn xong app **gửi lại đúng câu cũ** với khách đã chọn — câu lệnh không bị đổi ý.
+- Nếu bạn gõ tay `CUST-00001` vào câu (thay vì bấm chọn) — id chỉ là **gợi ý**:
+  server luôn đọc lại danh sách khách từ ERPNext trước khi nhận; id không nằm trong
+  danh sách vừa đọc ⇒ bị từ chối (app không tự bịa khách). (§2.5)
+
 ### 2.5 `CUST-00001` không phải mã khách của bạn
 
 Card đề xuất hiển thị `entity.id` = **ID nội bộ ERPNext**. Đừng dùng nó như mã khách
@@ -362,3 +371,5 @@ curl -X POST http://127.0.0.1:8788/execute/cancel -H 'Content-Type: application/
 | "bạc" = mệnh giá nào · có nhận "m" = triệu không | hai cách nói phổ biến hiện **không** ra số (§1.2) |
 | Cờ "khoảng/hơn" cho số tiền | hiện "hơn 10 triệu" bị hiểu là **đúng** 10 triệu (§1.2) |
 | Route `/execute/cancel` đã có (huỷ lệnh PENDING khi ERPNext xác nhận chưa ghi) | giải quyết "đề xuất treo" — giờ có đường thoát, không còn phải chờ vô hạn |
+| **Lệnh giống lệnh vừa ghi (fingerprint trùng)** — app cảnh báo "giao dịch trùng lặp?" | P1: xác nhận lần 2 phải kèm "tôi biết là trùng" (`dedup_ack`) — chống bấm nhầm 2 lần; vẫn **không** ghi 2 phiếu nhờ `command_id` idempotency (§3.1) |
+| **Card hết hạn/tức thời đổi** — banner phân biệt: ⏰ hết hạn (quá 10 phút) vs 🔄 dữ liệu đã đổi (số nợ/khách lệch lúc bấm) | P1: tách mã `PROPOSAL_EXPIRED` (hết hạn) khỏi `PROPOSAL_VERSION_STALE`/`PROPOSAL_ENTITY_CHANGED` (dữ liệu đổi) — đọc banner là biết phải làm lại đề xuất hay kiểm tra hóa đơn |

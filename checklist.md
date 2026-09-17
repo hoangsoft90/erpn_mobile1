@@ -21,7 +21,9 @@ Trạng thái roadmap chi tiết nằm ở `next.md` — file này KHÔNG nhân 
 - [x] Vòng tự review sau P0: **3 lỗi crash/safety THẬT đã sửa + falsify** (config lỗi không còn giết process; không còn treo vĩnh viễn khoá ý định `(customer|invoice)`; đóng process con khi `initialize()` fail; test tĩnh no-bypass quét thêm `scripts/`) — chi tiết `result44.txt` §3–§8, **Node 152 → 156**
 - [ ] Việc người thật: xác nhận 1 phiếu demo thật mang `custom_ai_action_id` · diễn tập `global_read_only` (tạo/xoá flag)
 - [ ] Gap đã biết của Golden Dataset (thuộc Phase 1, cần falsify riêng): `k18` "Con Linh" (`money.py:FILLERS` chứa "linh") · `m15` "một triệu hai" · `k36` "Bác sĩ Nam"
-- [ ] (P1) Entity Resolver 4 trạng thái + candidate picker; (P1) state machine + reconcile-on-restart; (P10) rate limit (mới khai trong contract, chưa code)
+- [x] **P1 (phases2) — Entity Execution Resilience KỸ THUẬT XONG (chờ duyệt commit — vùng tiền)**: entity 4 trạng thái (`EXACT/FUZZY_SINGLE/AMBIGUOUS/NO_MATCH`) · WRITE HIGH không auto-select fuzzy + AMBIGUOUS → candidate picker (Flutter `entity_picker.dart`, `/ask` nhận `entity_id`, server re-validate trên fresh read) · immutable proposal snapshot (`proposal_id`/`version`/`expires_at`) · mã tách `PROPOSAL_EXPIRED` vs `PROPOSAL_VERSION_STALE`/`PROPOSAL_ENTITY_CHANGED` · `UNKNOWN_EXECUTION_STATE` → RECONCILING theo `custom_ai_action_id` · business dedup (fingerprint) warn + `dedup_ack` qua `/execute` · NLP down → chặn WRITE phụ thuộc amount · **Node 156 → 172** · Flutter 63 → 67 · Python 60/60 · analyze 0 · review vòng 2: fix harness `_bodyOf` (dio đưa Map nguyên vào adapter, không phải chuỗi JSON — result45 §1) + soi 2 điểm wiring (cancel lock-release CỐ ÊN không qua kill-switch; entity_id re-validate) — bằng chứng `result45.txt`
+- [ ] **CHỜ USER: duyệt commit P1** (entity/execution/dedup + tests + result45) — không tự commit vùng tiền
+- [ ] (P10) rate limit (mới khai trong contract, chưa code)
 
 ---
 
@@ -260,6 +262,7 @@ Trạng thái roadmap chi tiết nằm ở `next.md` — file này KHÔNG nhân 
 
 ## Note
 
+- **P1 đang chờ duyệt commit** — danh sách file: `mcp-erpnext/src/{entity-resolution,execution-state,business-dedup,action-proposal,proposal-freshness,safety-gateway,copilot-server,http-ask}.mjs` + `capabilities.json` + tests mới/sửa + Flutter (chat_models/proposal_card/chat_bubble/entity_picker/copilot_api_client/chat_controller) + `result45.txt`. KHÔNG stage `.env`/store/`.plan`.
 - Đừng báo "xong" bằng lời — mọi claim cần lệnh + output thật (`erpn-verify-first` skill).
 - **Vùng tiền/số/phân quyền: AI KHÔNG tự ký duyệt, KHÔNG tự commit** — chờ user review.
 - **Gate pháp lý Phase 5: ĐÃ KÝ 2026-09-15 (không scrub)** — quyết định lưu ở `SIGNOFF-phase5-pii.md`; các gate ký duyệt TƯƠNG TỰ về sau vẫn chờ user.

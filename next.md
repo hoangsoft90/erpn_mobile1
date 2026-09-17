@@ -26,6 +26,18 @@ Lộ trình production trong `.plan/phases2/` (nguồn kiến trúc: `.plan/plan
 
 **Bước kỹ thuật tiếp theo = P1** (Entity Resolver 4 trạng thái + candidate picker + state machine + idempotency E2E) — **KHÔNG** nhảy P9 (skill mới) hay P5 (DSH trên `/ask`). Voice (P6) cần audio thật; không mở lại Phase 4/8/10–15 cũ.
 
+### P1 (phases2) — Entity Execution Resilience ✅ KỸ THUẬT XONG — CHỜ DUYỆT COMMIT (vùng tiền)
+
+- **Entity 4 trạng thái** (`EXACT_MATCH`/`FUZZY_SINGLE_MATCH`/`AMBIGUOUS_MATCH`/`NO_MATCH`) theo contract `capabilities.json` (policy nằm trong contract, không hard-code) — `src/entity-resolution.mjs`
+- **WRITE HIGH không auto-select fuzzy**; AMBIGUOUS → candidate picker Flutter (`entity_picker.dart` + `chat_bubble.dart` render) → `/ask` nhận `entity_id`, server **re-validate trên fresh ERPNext read** (id chỉ là hint, không phải authority)
+- **Immutable proposal snapshot** (`proposal_id` + `version` + `expires_at` + entity/amount đóng băng lúc tạo) — confirm gửi kèm snapshot identity
+- **Mã từ chối tách rõ**: `PROPOSAL_EXPIRED` (TTL) vs `PROPOSAL_VERSION_STALE` / `PROPOSAL_ENTITY_CHANGED` (re-validate lệch) — Flutter banner phân biệt, không còn gộp chung STALE
+- **State machine subset + `UNKNOWN_EXECUTION_STATE` → RECONCILING** theo `custom_ai_action_id` — `src/execution-state.mjs`
+- **Business dedup (fingerprint)**: cùng ý định (customer|invoice|amount) cảnh báo trước, confirm phải gửi `dedup_ack: true` — **không thay** `command_id` idempotency — `src/business-dedup.mjs`
+- **Degraded: NLP down → chặn WRITE** phụ thuộc amount parse (fail-closed, không đoán số tiền)
+- **Review vòng 2 (result45)**: fix harness Flutter `_bodyOf` (dio đưa request Map nguyên vào adapter — cast `as String` ném TypeError bị bọc thành "Không kết nối được máy chủ", capture rỗng); soi 2 điểm wiring: `/execute/cancel` là lock-release CỐ ÊN không qua kill-switch (đúng thiết kế, có comment), `entity_id` re-validate đúng — không sửa gì server
+- Suite: Python 60 · **Node 172** · **Flutter 67** · analyze 0 — bằng chứng `result45.txt`
+
 ### Phase 0 — Foundation & Verification ✅ (`result1.txt`)
 
 Không viết code. Chặn fabrication trước khi code (bài học `plan1_review1.md`).

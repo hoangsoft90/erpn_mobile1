@@ -12,7 +12,18 @@
  * The card the Flutter UI renders comes from this object — never raw JSON.
  */
 
+import { randomUUID } from "node:crypto";
+
 import { RISK_LEVELS, RISK_DISPLAY, RISK_ORDER, riskFor, isExecutable } from "./risk-levels.mjs";
+import { proposalTtlMs } from "./proposal-freshness.mjs";
+
+/**
+ * Proposal schema version (plan2_final §9). Bumped only when the shape of an
+ * executable proposal changes: the Safety Gateway refuses an executable
+ * proposal whose version is missing or older, because "the fields I validated"
+ * and "the fields the executor reads" must be the same contract.
+ */
+export const PROPOSAL_VERSION = 1;
 
 /**
  * Build one standard proposal object. Throws (does not silently default)
@@ -42,15 +53,23 @@ export function buildProposal({ action, risk, entity, params = {}, summary = "",
     throw new Error(`PROPOSAL_INVALID: unknown risk "${level}" for action "${action}"`);
   }
   const display = RISK_DISPLAY[level];
+  const createdAt = new Date();
   const proposal = {
     schema: "erpn.proposal/v1",
+    // §9 Immutable Action Proposal: the proposal IS the snapshot of what the
+    // user approved. `proposal_id` identifies this snapshot, `version` lets the
+    // gateway refuse a snapshot built by older code, and `expires_at` makes the
+    // TTL visible to the client instead of being a server-only rule.
+    proposal_id: `prp_${randomUUID()}`,
+    version: PROPOSAL_VERSION,
+    expires_at: new Date(createdAt.getTime() + proposalTtlMs()).toISOString(),
     action,
     // Phase 9: age gate. A proposal that cannot prove when it was built (or is
     // older than PROPOSAL_TTL_MS) is refused by /execute — see
     // proposal-freshness.mjs. Additive field: clients that ignore it still work
     // (they just cannot execute), and it survives the client round-trip so a
     // restored card carries the ORIGINAL build time.
-    created_at: new Date().toISOString(),
+    created_at: createdAt.toISOString(),
     risk: level,
     risk_display: { icon: display.icon, label: display.label },
     need_confirm: display.needConfirm,
@@ -60,6 +79,11 @@ export function buildProposal({ action, risk, entity, params = {}, summary = "",
       kind: entity.kind ?? "customer",
       id: entity.id ?? null,
       name: entity.name ?? null,
+      // §9: the display name is a SNAPSHOT. Execute must never re-look-up the
+      // customer by text ("Nguyễn Văn A") — only by this id, re-validated
+      // against live data. Kept separate from `name` so the two can be
+      // compared: a divergence means the source data moved.
+      name_snapshot: entity.name ?? null,
     },
     params,
     summary,

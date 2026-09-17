@@ -32,6 +32,11 @@ delete process.env.COPILOT_DISABLE_CAPABILITIES;
 
 const PROPOSAL = {
   schema: "erpn.proposal/v1",
+  // P1 §9: an executable proposal is an immutable snapshot; the gateway refuses
+  // one without proposal_id/version (see the "snapshot" test). Real proposals
+  // get these from buildProposal().
+  proposal_id: "prp_test-safety-gateway",
+  version: 1,
   action: "create_payment_entry",
   risk: "HIGH",
   created_at: new Date().toISOString(),

@@ -26,6 +26,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { RISK_ORDER } from "./risk-levels.mjs";
+import { ENTITY_STATES } from "./entity-resolution.mjs";
 
 const CONTRACT_PATH = process.env.ERPN_CAPABILITY_CONTRACT
   ? process.env.ERPN_CAPABILITY_CONTRACT
@@ -57,6 +58,43 @@ function loadContract(path = CONTRACT_PATH) {
  * trusted must stop the process, not degrade into a weaker safety posture.
  * @param {object} contract
  */
+/**
+ * Entity-resolution policy is SAFETY policy (plan2_final §4.3): a WRITE must
+ * never auto-select a fuzzy match, and a capability that cannot say what to do
+ * per resolution state cannot be trusted. Validated fail-closed, with the
+ * WRITE rule asserted explicitly so nobody can "relax" it by editing JSON.
+ *
+ * @param {string} id capability id
+ * @param {object} cap capability entry
+ * @param {object} contract full contract (for defaults)
+ */
+function validateEntityPolicy(id, cap, contract) {
+  if (cap.execution?.forbidden_in_ai_path === true) return; // never runs on the AI path
+  const policy = cap.entity_policy ?? contract.defaults?.entity_policy;
+  if (!policy || typeof policy !== "object") {
+    throw new Error(`CAPABILITY_CONTRACT_INVALID: ${id} has no entity_policy (and defaults declares none)`);
+  }
+  for (const state of Object.keys(ENTITY_STATES)) {
+    const rule = policy[state];
+    if (!rule || typeof rule !== "object") {
+      throw new Error(`CAPABILITY_CONTRACT_INVALID: ${id} entity_policy is missing state ${state}`);
+    }
+    for (const key of ["auto_select", "require_picker", "block"]) {
+      if (typeof rule[key] !== "boolean") {
+        throw new Error(`CAPABILITY_CONTRACT_INVALID: ${id} entity_policy.${state}.${key} must be boolean`);
+      }
+    }
+    if (rule.block === true && rule.auto_select === true) {
+      throw new Error(`CAPABILITY_CONTRACT_INVALID: ${id} entity_policy.${state} both blocks and auto-selects`);
+    }
+  }
+  if (cap.type === "WRITE" && policy.FUZZY_SINGLE_MATCH.auto_select !== false) {
+    throw new Error(
+      `CAPABILITY_CONTRACT_INVALID: ${id} is a WRITE but entity_policy.FUZZY_SINGLE_MATCH.auto_select is not false — plan2_final §4.3 forbids auto-selecting a fuzzy customer for a write`,
+    );
+  }
+}
+
 export function validateContract(contract) {
   if (contract?.schema !== "erpn.capability-contract/v1") {
     throw new Error(`CAPABILITY_CONTRACT_SCHEMA: expected erpn.capability-contract/v1, got ${contract?.schema}`);
@@ -97,6 +135,7 @@ export function validateContract(contract) {
         `CAPABILITY_CONTRACT_INVALID: ${id} must declare authorization.scope.company (plan2_final §24.2 — scope from P0)`,
       );
     }
+    validateEntityPolicy(id, cap, contract);
   }
 
   for (const route of contract.routing) {

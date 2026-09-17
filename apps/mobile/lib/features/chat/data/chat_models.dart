@@ -2,6 +2,35 @@ import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 
+/// P1 §4.4 — one candidate the user may pick when a WRITE could not settle the
+/// customer by itself. `id` is the ERPNext id the picker sends back; it is
+/// re-validated server-side, so this list is a suggestion, never authority.
+@immutable
+class EntityCandidate {
+  const EntityCandidate({required this.id, this.name, this.label});
+
+  factory EntityCandidate.fromJson(Map<String, dynamic> json) =>
+      EntityCandidate(
+        id: json['id'] as String? ?? '',
+        name: json['name'] as String?,
+        label: json['label'] as String?,
+      );
+
+  final String id;
+  final String? name;
+  final String? label;
+
+  String get display => (label?.isNotEmpty == true)
+      ? label!
+      : ((name?.isNotEmpty == true) ? '$name ($id)' : id);
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        if (name != null) 'name': name,
+        if (label != null) 'label': label,
+      };
+}
+
 /// Parsed body of one POST /ask response (`result` field).
 ///
 /// Contract (verified from copilot-server.mjs answerQuestion()):
@@ -10,6 +39,9 @@ import 'package:flutter/foundation.dart';
 /// - `routed` is false OR {group, matched}.
 /// - `customer` is {id, name} when one was resolved.
 /// - `reason` explains a null answer (no route / customer not found).
+/// - P1: `error_code` names the refusal (ENTITY_PICK_REQUIRED, NLP_UNAVAILABLE,
+///   PAYMENT_AMOUNT_MISSING, AMBIGUOUS_ENTITY...) and `candidates` carries the
+///   picker options when the customer could not be settled for a write.
 @immutable
 class AskResult {
   const AskResult({
@@ -25,6 +57,9 @@ class AskResult {
     this.amount,
     this.reason,
     this.proposal,
+    this.errorCode,
+    this.candidates = const <EntityCandidate>[],
+    this.entityState,
   });
 
   factory AskResult.fromJson(Map<String, dynamic> json) {
@@ -83,6 +118,19 @@ class AskResult {
       amount: amount,
       reason: json['reason'] as String?,
       proposal: proposal,
+      errorCode: json['error_code'] as String?,
+      // Tolerant parse (the result40 lesson: a non-list here used to throw and
+      // wipe the whole history on load).
+      candidates: json['candidates'] is List
+          ? (json['candidates'] as List)
+              .whereType<Map<String, dynamic>>()
+              .map(EntityCandidate.fromJson)
+              .where((c) => c.id.isNotEmpty)
+              .toList(growable: false)
+          : const <EntityCandidate>[],
+      entityState: json['entity'] is Map<String, dynamic>
+          ? (json['entity'] as Map<String, dynamic>)['state'] as String?
+          : null,
     );
   }
 
@@ -97,6 +145,17 @@ class AskResult {
   final String? normalizedText;
   final int? amount;
   final String? reason;
+
+  /// P1 — the machine-readable refusal code from the pipeline, when there is
+  /// no answer (ENTITY_PICK_REQUIRED, NLP_UNAVAILABLE, ...). Null on success.
+  final String? errorCode;
+
+  /// P1 §4.4 — picker options offered when a write needs the user to choose.
+  final List<EntityCandidate> candidates;
+
+  /// P1 §4.1 — the resolution state the server reached (EXACT_MATCH,
+  /// FUZZY_SINGLE_MATCH, AMBIGUOUS_MATCH, NO_MATCH).
+  final String? entityState;
 
   /// Phase 6 action proposal (erpn.proposal/v1) — display-only for now;
   /// the confirm-execute flow arrives with Phase 7.
@@ -115,6 +174,7 @@ class ChatTurn {
     required this.ts,
     this.routedGroup,
     this.proposal,
+    this.candidates = const <EntityCandidate>[],
   });
 
   /// [typedQuestion] is what the user actually typed — preferred over the
@@ -130,6 +190,9 @@ class ChatTurn {
         ts: DateTime.now(),
         routedGroup: r.routedGroup,
         proposal: r.proposal,
+        // P1: the picker lives on the turn, so it survives a restart — the
+        // user can still choose which customer they meant after reopening.
+        candidates: r.candidates,
       );
 
   factory ChatTurn.fromJson(Map<String, dynamic> json) => ChatTurn(
@@ -141,6 +204,13 @@ class ChatTurn {
         proposal: json['proposal'] is Map<String, dynamic>
             ? ActionProposal.fromJson(json['proposal'] as Map<String, dynamic>)
             : null,
+        candidates: json['candidates'] is List
+            ? (json['candidates'] as List)
+                .whereType<Map<String, dynamic>>()
+                .map(EntityCandidate.fromJson)
+                .where((c) => c.id.isNotEmpty)
+                .toList(growable: false)
+            : const <EntityCandidate>[],
       );
 
   final String question;
@@ -151,6 +221,13 @@ class ChatTurn {
 
   /// Phase 6 proposal card source (null = no proposal this turn).
   final ActionProposal? proposal;
+
+  /// P1 §4.4 — candidates to offer while the customer is not settled.
+  final List<EntityCandidate> candidates;
+
+  /// True when this turn is waiting for the user to pick a customer: the server
+  /// refused to guess and offered candidates instead (no proposal exists yet).
+  bool get awaitingEntityPick => candidates.isNotEmpty && proposal == null;
 
   /// True while this turn carries an action proposal that has NO final outcome
   /// yet: not refused, and still offering its confirm affordance.
@@ -179,6 +256,8 @@ class ChatTurn {
         'ts': ts.toIso8601String(),
         if (routedGroup != null) 'routed_group': routedGroup,
         if (proposal != null) 'proposal': proposal!.toJson(),
+        if (candidates.isNotEmpty)
+          'candidates': candidates.map((c) => c.toJson()).toList(),
       };
 }
 
@@ -207,6 +286,11 @@ class ActionProposal {
     this.rejectionCode,
     this.rejectionProblems = const <String>[],
     this.params,
+    this.proposalId,
+    this.version,
+    this.expiresAt,
+    this.dedupRequiresAck = false,
+    this.dedupMessage,
   });
 
   factory ActionProposal.fromJson(Map<String, dynamic> json) {
@@ -277,6 +361,25 @@ class ActionProposal {
           ? Map<String, dynamic>.unmodifiable(
               json['params'] as Map<String, dynamic>)
           : null,
+      // P1 §9: the immutable snapshot's identity. These MUST round-trip —
+      // /execute now refuses a proposal that cannot prove its version
+      // (PROPOSAL_VERSION_STALE), so dropping them here would make every
+      // confirm press fail. Exactly the result33-F4 lesson: a field the server
+      // reads must exist in the model that echoes the proposal back.
+      proposalId: json['proposal_id'] as String?,
+      version: (json['version'] as num?)?.toInt(),
+      expiresAt: json['expires_at'] as String?,
+      // P1 §10.5: the business-dedup warning. `require_extra_confirm` is set by
+      // the server when the same intent was proposed minutes ago; pressing
+      // confirm after seeing the warning IS the acknowledgement (sent as
+      // dedup_ack), so the flag has to survive restore too — otherwise a
+      // restored card would look like a fresh intent and be refused.
+      dedupRequiresAck: json['business_dedup'] is Map<String, dynamic> &&
+          (json['business_dedup'] as Map<String, dynamic>)['require_extra_confirm'] ==
+              true,
+      dedupMessage: json['business_dedup'] is Map<String, dynamic>
+          ? (json['business_dedup'] as Map<String, dynamic>)['message'] as String?
+          : null,
     );
   }
 
@@ -311,6 +414,17 @@ class ActionProposal {
   /// moved...). Empty unless [rejectionCode] == PROPOSAL_STALE.
   final List<String> rejectionProblems;
 
+  /// P1 §9 — identity + version of the immutable snapshot (server: buildProposal).
+  final String? proposalId;
+  final int? version;
+
+  /// P1 §9 — when the server considers this proposal too old (ISO-8601).
+  final String? expiresAt;
+
+  /// P1 §10.5 — the server saw a similar intent recently: warn + extra confirm.
+  final bool dedupRequiresAck;
+  final String? dedupMessage;
+
   /// Operation parameters echoed back on /execute (result33 F4). The server's
   /// money-shape gate reads `params.amount_vnd` and the drift check reads
   /// `params.outstanding_vnd`/`params.invoice` from what the CLIENT sends, so
@@ -341,6 +455,19 @@ class ActionProposal {
         // result33 F4: keep the confirmed numbers on the wire (money-shape
         // gate + drift check read them server-side).
         if (params != null) 'params': params,
+        // P1 §9: same rule for the snapshot identity — /execute refuses a
+        // proposal that cannot prove its version.
+        if (proposalId != null) 'proposal_id': proposalId,
+        if (version != null) 'version': version,
+        if (expiresAt != null) 'expires_at': expiresAt,
+        // P1 §10.5: the paid-forward warning travels with the card so a
+        // restored duplicate still asks for the extra confirmation. Emitted only
+        // when there IS a warning — a normal proposal's payload is unchanged.
+        if (dedupRequiresAck || dedupMessage != null)
+          'business_dedup': {
+            'require_extra_confirm': dedupRequiresAck,
+            if (dedupMessage != null) 'message': dedupMessage,
+          },
         // Phase 9 UI: the rejection survives history restore too — a stale
         // card reopened after a restart must still show WHY it was refused.
         if (rejectionCode != null) 'rejection_code': rejectionCode,

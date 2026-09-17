@@ -89,7 +89,16 @@ class _ProposalCardState extends ConsumerState<ProposalCard>
       final commandId = proposal.commandId;
       final res = await dio.post<Map<String, dynamic>>(
         '/execute',
-        data: jsonEncode({'command_id': commandId, 'proposal': proposal.toJson()}),
+        data: jsonEncode({
+          'command_id': commandId,
+          'proposal': proposal.toJson(),
+          // P1 §10.5: the server warned that this intent looks like one proposed
+          // minutes ago. Pressing confirm AFTER that warning is shown is exactly
+          // the acknowledgement it asks for — without it the server refuses with
+          // BUSINESS_DEDUP_CONFIRM_REQUIRED, so sending it is what makes the
+          // warned card usable at all.
+          if (proposal.dedupRequiresAck) 'dedup_ack': true,
+        }),
       );
       // The card can be unmounted while /execute is in flight (user navigates
       // away or clears history) — after the await the State may be defunct and
@@ -271,6 +280,26 @@ class _ProposalCardState extends ConsumerState<ProposalCard>
                 color: scheme.onSurfaceVariant,
                 fontSize: 11,
                 fontFamily: 'monospace',
+              ),
+            ),
+          ],
+          // P1 §10.5: the server saw the same intent (customer + amount) minutes
+          // ago. The warning is shown BEFORE the button, and pressing confirm
+          // afterwards is what sends dedup_ack — the user is told, then decides.
+          // Never a silent block: an additional, legitimate payment is allowed.
+          if (proposal.dedupRequiresAck) ...[
+            const SizedBox(height: AppSpacing.xs),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(AppSpacing.xs),
+              decoration: BoxDecoration(
+                color: scheme.tertiaryContainer,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                proposal.dedupMessage ??
+                    'Đề xuất này trùng ý định với một đề xuất gần đây — kiểm tra kỹ trước khi xác nhận.',
+                style: TextStyle(color: scheme.onTertiaryContainer, fontSize: 12),
               ),
             ),
           ],

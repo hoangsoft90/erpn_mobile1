@@ -6,7 +6,31 @@
     "currency": "VND",
     "allowed_currencies": ["VND", "USD"],
     "amount_precision": { "VND": 0, "USD": 2 },
-    "user_timezone": "Asia/Ho_Chi_Minh"
+    "user_timezone": "Asia/Ho_Chi_Minh",
+    "entity_policy": {
+      "comment": "plan2_final §4.3 — policy theo resolution state, KHÔNG suy diễn ở code. READ mặc định: fuzzy single được auto (READ LOW), ambiguous thì hỏi. WRITE tự khai riêng (xem payment.create).",
+      "EXACT_MATCH": { "auto_select": true, "require_picker": false, "block": false },
+      "FUZZY_SINGLE_MATCH": { "auto_select": true, "require_picker": false, "block": false },
+      "AMBIGUOUS_MATCH": { "auto_select": false, "require_picker": true, "block": false },
+      "NO_MATCH": { "auto_select": false, "require_picker": false, "block": false }
+    },
+    "execution_states": {
+      "comment": "plan2_final §10.1 + §10.2 — state machine tối thiểu implement được; transition hợp lệ được enforce ở code (execution-state.mjs) và test.",
+      "states": [
+        "PROPOSED",
+        "WAITING_CONFIRM",
+        "CONFIRMED",
+        "EXECUTING",
+        "RETRYING",
+        "RECONCILING",
+        "SUCCEEDED",
+        "VERIFIED",
+        "FAILED",
+        "CANCELLED"
+      ],
+      "terminal": ["VERIFIED", "FAILED", "CANCELLED"],
+      "unknown_execution_state": "RECONCILING"
+    }
   },
   "operational_controls": {
     "kill_switch": {
@@ -165,6 +189,19 @@
         "allow_negative": false,
         "clamp_to_outstanding": "refuse_not_clamp"
       },
+      "entity_policy": {
+        "comment": "plan2_final §4.3/§8 — WRITE là Exact-only: fuzzy KHÔNG bao giờ auto-select (kể cả LLM tự tin), phải để user chọn/xác nhận; no match thì block.",
+        "EXACT_MATCH": { "auto_select": true, "require_picker": false, "block": false },
+        "FUZZY_SINGLE_MATCH": { "auto_select": false, "require_picker": true, "block": false },
+        "AMBIGUOUS_MATCH": { "auto_select": false, "require_picker": true, "block": false },
+        "NO_MATCH": { "auto_select": false, "require_picker": false, "block": true }
+      },
+      "business_dedup": {
+        "comment": "plan2_final §10.5 — bổ sung cho idempotency, KHÔNG thay command_id: cùng ý định thực tế (customer+amount+capability trong 1 cửa sổ) ⇒ cảnh báo + xác nhận thêm, không block im lặng.",
+        "fingerprint": ["customer_id", "amount_vnd", "capability", "time_bucket"],
+        "time_bucket": "15m",
+        "action": "warn_extra_confirm"
+      },
       "risk": { "level": "HIGH", "requires_confirmation": true, "double_confirm": false },
       "authorization": { "permissions": ["Accounts User"], "scope": { "company": "required" }, "row_level": "optional" },
       "confirmation": { "ttl": "10m", "immutable": true },
@@ -183,7 +220,12 @@
         "INSUFFICIENT_PERMISSION",
         "PAYMENT_INVOICE_ALREADY_SETTLED",
         "PROPOSAL_EXPIRED",
+        "PROPOSAL_VERSION_STALE",
+        "PROPOSAL_ENTITY_CHANGED",
         "PROPOSAL_STALE",
+        "NLP_UNAVAILABLE",
+        "BUSINESS_DEDUP_CONFIRM_REQUIRED",
+        "ENTITY_PICK_REQUIRED",
         "UNKNOWN_EXECUTION_STATE",
         "SYSTEM_MAINTENANCE"
       ],

@@ -104,6 +104,19 @@
 - **Số tiền thiếu ở boundary phải TỪ CHỐI**, không được để contract flag
   `allow_full_balance` biến "request hỏng" thành "thu hết nợ".
 
+## Phiên 2026-09-17 (chiều) — P1 self-review: harness Flutter tự che chính nó
+
+- **Test harness cast cứng shape dữ liệu request** (`jsonDecode(options.data as String)`)
+  trong khi dio đưa Map NGUYÊN vào HttpClientAdapter trong harness đó ⇒ TypeError bị dio
+  bọc thành `CopilotNetworkException` ⇒ test thấy "Không kết nối được máy chủ" với capture
+  RỖNG — nhìn như lỗi mạng/client, thật ra là lỗi của chính harness. 3 test còn lại cùng
+  file XANH vì không đọc body ⇒ suite "xanh 3/4" che luôn chỗ hỏng. Sửa: helper `_bodyOf`
+  chịu cả Map lẫn String. Probe debug (gọi thẳng `ask()` với adapter, in `dataType` +
+  exception thật) là thứ cho ra nguyên nhân — đoán không ra. Bằng chứng: `result45.txt` §1.
+  → Đối chiếu row `"test wire phải đi qua adapter thật"` trong SKILL.md: lesson MỚI là
+  **shape mà adapter nhận phụ thuộc cấu hình harness** — viết helper chịu 2 dạng, và khi
+  test báo lỗi transport với capture rỗng, NGHI VỊ HARNESS trước khi nghi production.
+
 ## Kỷ luật bắt buộc trước khi báo "xong" (tóm tắt từ SKILL.md)
 
 1. Chạy test thật của đúng phạm vi đổi (targeted), dán output nguyên văn.

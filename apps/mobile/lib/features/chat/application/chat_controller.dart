@@ -47,7 +47,15 @@ class ChatController extends _$ChatController {
 
   /// Sends one question. Returns true when an answer was recorded (input may
   /// be cleared); false on failure (input must be kept — tasks.md 2.5).
-  Future<bool> send(String text) async {
+  /// P1 §4.4: the user tapped a candidate in the picker. Re-ask the SAME
+  /// sentence with the chosen id — the server re-validates it and, if it holds,
+  /// returns the proposal the fuzzy match was not allowed to produce.
+  /// The pick is deliberately NOT a new question: the text comes from the turn
+  /// that offered the picker, so the intent cannot drift.
+  Future<bool> pickEntity(EntityCandidate candidate, {required String question}) =>
+      send(question, entityId: candidate.id);
+
+  Future<bool> send(String text, {String? entityId}) async {
     final trimmed = text.trim();
     if (trimmed.isEmpty) return false;
     // Cold-start race guard: while build() is still loading history the state
@@ -60,7 +68,7 @@ class ChatController extends _$ChatController {
 
     state = AsyncData(current.copyWith(isLoading: true, clearError: true));
     try {
-      final result = await ref.read(copilotApiClientProvider).ask(trimmed);
+      final result = await ref.read(copilotApiClientProvider).ask(trimmed, entityId: entityId);
       await _append(ChatTurn.fromAskResult(result, typedQuestion: trimmed));
       return true;
     } on CopilotException catch (err) {
@@ -101,6 +109,7 @@ class ChatController extends _$ChatController {
         ok: turn.ok,
         ts: turn.ts,
         routedGroup: turn.routedGroup,
+        candidates: turn.candidates,
         proposal: ActionProposal(
           schema: p.schema,
           action: p.action,
@@ -119,6 +128,14 @@ class ChatController extends _$ChatController {
           rejectionCode: code,
           rejectionProblems: problems,
           params: p.params,
+          // P1: carry the snapshot identity + dedup warning through the rebuild.
+          // Dropping them here is the result33-F4 bug class (a field the server
+          // reads must survive every model rebuild).
+          proposalId: p.proposalId,
+          version: p.version,
+          expiresAt: p.expiresAt,
+          dedupRequiresAck: p.dedupRequiresAck,
+          dedupMessage: p.dedupMessage,
         ),
       );
     }).toList();

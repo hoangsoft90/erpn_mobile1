@@ -24,6 +24,14 @@ import { buildPaymentProposal } from "./skills/payment-write.mjs";
 import { realServerScript } from "./index.mjs";
 import { buildProposal, readProposal } from "./action-proposal.mjs";
 import { sanitizeUntrustedList, containsInstructionPattern } from "./untrusted-data.mjs";
+import { __contract, getCapability } from "./capability-contract.mjs";
+import {
+  classifyResolution,
+  entityPolicy,
+  pickFromCandidates,
+  pickerCandidates,
+  pickerForText,
+} from "./entity-resolution.mjs";
 
 /**
  * ERPNext target selection (user decision 2026-09-14: "khi tôi cung cấp
@@ -198,8 +206,28 @@ function replyError(id, code, message) {
 }
 
 /** Core pipeline — exported for tests; the MCP handler is a thin shell over it. */
-export async function answerQuestion(rawText) {
-  const nlp = await normalizeText(rawText);
+export async function answerQuestion(rawText, opts = {}) {
+  // ── Degraded mode, plan2_final §13 ─────────────────────────────────────────
+  // When the Python normalizer is down we cannot trust the AMOUNT/DATE parse,
+  // and a write must never be proposed from a guessed number. So the whole
+  // question fails closed with NLP_UNAVAILABLE and **no proposal at all** —
+  // rather than a best-effort answer that might build a payment for the wrong
+  // sum. (``proposal: null`` is the contract with the client: nothing to confirm.)
+  let nlp;
+  try {
+    nlp = await normalizeText(rawText);
+  } catch (err) {
+    return {
+      question: rawText,
+      normalized: null,
+      routed: null,
+      answer: null,
+      error_code: "NLP_UNAVAILABLE",
+      reason:
+        `dịch vụ chuẩn hoá tiếng Việt (:8787) không trả lời (${err?.message ?? err}) — KHÔNG đề xuất ghi gì, vì số tiền/ngày sẽ phải đoán. Thử lại sau khi service lên.`,
+      proposal: null,
+    };
+  }
   const mcp = createMcpClient({ serverScript: pickServerScript() }); // real when ERPNEXT_* set, mock otherwise
   try {
     await mcp.initialize();
@@ -306,7 +334,22 @@ export async function answerQuestion(rawText) {
 
     // Customer-bound intents: resolve the name first — IDs only ever come from
     // a tool result (the guard refuses invented ones).
-    const { customer, ambiguous, candidates } = await resolveCustomer(skills, nlp.text);
+    let { customer, ambiguous, candidates } = await resolveCustomer(skills, nlp.text);
+    // An explicit PICK from the Flutter picker (additive `/ask` field) replaces
+    // the fuzzy guess — but only for an id that exists in the list we just read
+    // from ERPNext (§4.2: nothing downstream may invent an ERP id).
+    let picked = null;
+    if (opts.pickedEntityId) {
+      const all = (await skills.findCustomer("")).data?.data ?? [];
+      picked = pickFromCandidates(all, opts.pickedEntityId);
+      if (picked.ok) {
+        customer = picked.customer;
+        ambiguous = false;
+        candidates = [];
+      } else {
+        process.stderr.write(`[copilot] entity pick refused: ${picked.error}\n`);
+      }
+    }
     // P0 §24.1 — ERPNext field values are UNTRUSTED DATA. The candidate names
     // are echoed back to the user (and, from P3, into an LLM): strip anything
     // that looks like an instruction so a customer literally named
@@ -339,6 +382,25 @@ export async function answerQuestion(rawText) {
       ? " (⚠️ tên khách trùng nhiều kết quả — đã lấy kết quả đầu tiên, entity resolution mở rộng là Phase 6.5)"
       : "";
 
+    // ── P1 §4.3: name the resolution state, then apply the CONTRACT's policy ──
+    // The state is what makes the risk rule checkable: a fuzzy substring hit is
+    // FUZZY_SINGLE_MATCH, and for a WRITE the contract forbids auto-selecting
+    // it. Nothing here is inferred from confidence — only from how the name
+    // actually matched.
+    const resolution = classifyResolution(
+      { customer, ambiguous, candidates },
+      {
+        candidates: nameCandidates(nlp.text),
+        pickedEntityId: picked?.ok ? picked.customer.name : null,
+      },
+    );
+    const capabilityId = route.capability ?? null;
+    const entityRule = entityPolicy(
+      resolution.state,
+      capabilityId ? getCapability(capabilityId) : null,
+      __contract.defaults?.entity_policy ?? null,
+    );
+
     // Phase 7b (user decision 2026-09-16): the ONLY write-producing intent.
     // "thu tiền cho <khách> <số tiền>" → a HIGH proposal that STOPS at the
     // card; nothing is written until POST /execute (human confirm). The write
@@ -358,16 +420,55 @@ export async function answerQuestion(rawText) {
           reason: ambiguous
             ? `tên khách trong "${rawText}" khớp nhiều kết quả (${(candidates ?? []).slice(0, 5).join(", ")}) — cần nói rõ tên đầy đủ trước khi ghi phiếu thu`
             : `không tìm thấy khách hàng trong "${rawText}" — không ghi phiếu thu`,
+          error_code: entityRule.code ?? (ambiguous ? "AMBIGUOUS_ENTITY" : "MISSING_ENTITY"),
           proposal: null,
           ambiguous,
           candidates: candidates ?? [],
+          entity: { state: resolution.state, policy: entityRule },
+        };
+      }
+      // §4.3/§8: WRITE is Exact-only. A fuzzy single hit (e.g. "Lan" →
+      // "Nguyễn Thị Lan") or several candidates must NOT become an authoritative
+      // customer id by itself — the user picks. No proposal is built yet, so
+      // there is nothing to confirm and nothing can be written.
+      if (entityRule.require_picker) {
+        const all = (await skills.findCustomer("")).data?.data ?? [];
+        return {
+          question: rawText,
+          normalized: nlp,
+          routed: { group: route.group, matched: route.matched },
+          answer: null,
+          error_code: entityRule.code ?? "ENTITY_PICK_REQUIRED",
+          reason:
+            `tên khách "${safeCandidates[0] ?? rawText}" khớp ${resolution.state === "AMBIGUOUS_MATCH" ? "nhiều khách" : "một khách KHÔNG trùng tên chính xác"} — ghi phiếu thu cần chọn đúng khách trước (chưa có đề xuất nào)`,
+          proposal: null,
+          entity: { state: resolution.state, policy: entityRule },
+          candidates: pickerForText(all, nameCandidates(nlp.text)),
+        };
+      }
+      if (entityRule.block) {
+        return {
+          question: rawText,
+          normalized: nlp,
+          routed: { group: route.group, matched: route.matched },
+          answer: null,
+          error_code: entityRule.code ?? "ENTITY_NOT_FOUND_BLOCKED",
+          reason: `không xác định được khách (${resolution.state}) — không ghi phiếu thu`,
+          proposal: null,
+          entity: { state: resolution.state, policy: entityRule },
         };
       }
       try {
         const built = await buildPaymentProposal(
           skills,
           { customer, ambiguous, candidates },
-          { amount_vnd: nlp.amount ?? undefined },
+          {
+            amount_vnd: nlp.amount ?? undefined,
+            // §13 + P1 exit criterion: the interactive path must never fall back
+            // to "collect the whole debt" when the number was not understood —
+            // that turns a failed parse into a bigger payment.
+            requireExplicitAmount: true,
+          },
         );
         const amt = built.proposal.params.amount_vnd;
         const answer = `Đề xuất thu ${formatVnd(amt)}đ từ ${customer.customer_name} cho chứng từ ${built.invoice} — kiểm tra và bấm [Xác nhận] để ghi phiếu thu (đề xuất chỉ TẠO PHIẾU NHÁP, chưa submit).${ambNote}`;
@@ -484,7 +585,11 @@ async function copilotAsk(args) {
   if (typeof rawText !== "string" || rawText.trim().length === 0) {
     return { isError: true, content: [{ type: "text", text: "copilot_ask requires non-empty `text`" }] };
   }
-  const structured = await answerQuestion(rawText.trim());
+  // P1 §4.4: the candidate picker sends the chosen ERPNext id back through the
+  // tool. It is re-validated against a fresh read server-side — never trusted.
+  const structured = await answerQuestion(rawText.trim(), {
+    pickedEntityId: typeof args?.entity_id === "string" ? args.entity_id : null,
+  });
   return {
     content: [{ type: "text", text: JSON.stringify(structured, null, 2) }],
     structuredContent: structured,
