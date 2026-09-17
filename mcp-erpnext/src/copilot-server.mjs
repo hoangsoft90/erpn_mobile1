@@ -23,6 +23,7 @@ import { routeIntent } from "./router.mjs";
 import { buildPaymentProposal } from "./skills/payment-write.mjs";
 import { realServerScript } from "./index.mjs";
 import { buildProposal, readProposal } from "./action-proposal.mjs";
+import { sanitizeUntrustedList, containsInstructionPattern } from "./untrusted-data.mjs";
 
 /**
  * ERPNext target selection (user decision 2026-09-14: "khi tôi cung cấp
@@ -211,7 +212,24 @@ export async function answerQuestion(rawText) {
         normalized: nlp,
         routed: false,
         answer: null,
+        error_code: "UNKNOWN_INTENT",
         reason: "no skill route matched — Phase 2 router covers customer/sales/payment/inventory only",
+      };
+    }
+
+    // P0 (plan2_final §8): a FORBIDDEN capability (document.delete) is refused
+    // here, at the top of the pipeline — it must never reach a skill, never
+    // produce a proposal and never touch ERPNext. Declared in the contract so
+    // the refusal is explicit instead of a silent misroute into a READ group.
+    if (route.forbidden) {
+      return {
+        question: rawText,
+        normalized: nlp,
+        routed: { group: route.group, matched: route.matched, capability: route.capability },
+        answer: null,
+        error_code: "FORBIDDEN_IN_AI_PATH",
+        reason: `thao tác "${route.capability}" bị CẤM trên đường AI (plan2_final §8) — dùng UI ERPNext nếu thật sự cần; không có đề xuất nào được tạo`,
+        proposal: null,
       };
     }
     const skills = route.factory(mcp, knownIds);
@@ -289,6 +307,16 @@ export async function answerQuestion(rawText) {
     // Customer-bound intents: resolve the name first — IDs only ever come from
     // a tool result (the guard refuses invented ones).
     const { customer, ambiguous, candidates } = await resolveCustomer(skills, nlp.text);
+    // P0 §24.1 — ERPNext field values are UNTRUSTED DATA. The candidate names
+    // are echoed back to the user (and, from P3, into an LLM): strip anything
+    // that looks like an instruction so a customer literally named
+    // "Ignore previous instructions..." cannot become a prompt.
+    const safeCandidates = sanitizeUntrustedList(candidates);
+    if ((candidates ?? []).some((c) => containsInstructionPattern(c))) {
+      process.stderr.write(
+        `[copilot] untrusted-data violation logged: instruction pattern inside an ERPNext customer name (${safeCandidates.length} candidate(s))\n`,
+      );
+    }
     if (!customer) {
       return {
         question: rawText,
@@ -297,12 +325,13 @@ export async function answerQuestion(rawText) {
         answer: null,
         // Phase 6 distinction (spec: "≥2 candidate gần nhau: hỏi lại user"):
         // ambiguous ⇒ say WHICH names collided, never a bare "not found".
+        error_code: ambiguous ? "AMBIGUOUS_ENTITY" : "MISSING_ENTITY",
         reason: ambiguous
-          ? `tên khách trong "${nlp.text}" khớp nhiều kết quả (${(candidates ?? []).slice(0, 5).join(", ")}) — cần nói rõ tên đầy đủ`
+          ? `tên khách trong "${nlp.text}" khớp nhiều kết quả (${safeCandidates.slice(0, 5).join(", ")}) — cần nói rõ tên đầy đủ`
           : `không tìm thấy khách hàng trong "${nlp.text}" (entity resolution mở rộng là Phase 6.5)`,
         proposal: null,
         ambiguous,
-        candidates: candidates ?? [],
+        candidates: safeCandidates,
       };
     }
 

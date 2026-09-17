@@ -164,6 +164,13 @@ const TOOLS = {
       mode_of_payment: data.mode_of_payment ?? "Tiền mặt",
       reference_no: reference,
       reference_date: data.reference_date,
+      // P0 §10.4 — the correlation field is stored exactly like the real site
+      // stores it once the Custom Field exists. A real ERPNext WITHOUT the
+      // field simply drops the key, so the mock must be able to represent that
+      // absence too (it is what the executor reports as correlation_field_missing).
+      ...(data.custom_ai_action_id !== undefined && data.custom_ai_action_id !== null
+        ? { custom_ai_action_id: data.custom_ai_action_id }
+        : {}),
       references: data.references ?? [],
       docstatus: 0, // created as DRAFT — submitting is a separate decision
     };

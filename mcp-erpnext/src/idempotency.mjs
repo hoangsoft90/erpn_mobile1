@@ -40,8 +40,11 @@ export function isValidCommandId(id) {
   return typeof id === "string" && UUID_RE.test(id);
 }
 
-/** Only this action may ever pass through the execute path in Phase 7. */
-export const EXECUTABLE_ACTIONS = Object.freeze(["create_payment_entry"]);
+// NOTE (P0): there used to be an `EXECUTABLE_ACTIONS` constant here. It was a
+// SECOND copy of a policy that now lives in `capabilities.json`
+// (`executableWriteActions()`), which plan2_final §2 D5 forbids. The contract
+// is the only source: the Safety Gateway asks it, this store never decides what
+// may be executed.
 
 export class IdempotencyStore {
   /**

@@ -1,0 +1,215 @@
+{
+  "schema": "erpn.capability-contract/v1",
+  "version": 1,
+  "comment": "P0 Capability Contract (plan2_final §2 D5, §5-8, §18, §24.2). SINGLE SOURCE OF TRUTH: the router reads its trigger table from here, the skill layer reads required entities, the Safety Gateway reads risk/amount/execution policy, authorization reads permissions+scope, and the UI reads confirmation requirements. Do not hardcode the same policy in another module.",
+  "defaults": {
+    "currency": "VND",
+    "allowed_currencies": ["VND", "USD"],
+    "amount_precision": { "VND": 0, "USD": 2 },
+    "user_timezone": "Asia/Ho_Chi_Minh"
+  },
+  "operational_controls": {
+    "kill_switch": {
+      "levels": ["global_read_only", "disable_capability", "disable_user", "disable_llm"],
+      "env": "COPILOT_GLOBAL_READ_ONLY",
+      "flag_file": "control/read-only.flag",
+      "audit": "log every toggle"
+    },
+    "rate_limit": {
+      "per_user": { "read": "30/minute", "write_proposal": "10/minute", "write_execute": "5/minute" },
+      "per_capability": { "payment.create": "20/hour" }
+    }
+  },
+  "routing": [
+    {
+      "group": "document_delete",
+      "forbidden": true,
+      "keywords": ["xóa", "xoá", "huỷ", "hủy", "delete", "remove", "bỏ khoản"],
+      "capability_default": "document.delete",
+      "comment": "plan2_final §8: document.delete is FORBIDDEN_IN_AI_PATH. Declared so the contract can REFUSE it explicitly instead of silently misrouting it into a READ group."
+    },
+    {
+      "group": "payment_write",
+      "keywords": ["payment"],
+      "startsWith": true,
+      "notIf": "bao nhiêu|bao nhieu|mấy|may |gần nhất|gan nhat|mới nhất|moi nhat|\\?",
+      "capability_default": "payment.create",
+      "comment": "Phase 7b: a collect-money COMMAND starts with the canonical verb (Phase 1 rewrites thu tiền/trả tiền/thanh toán -> payment). Sentence-start anchor + question deny-list; a misrouted write only ever shows a HIGH card."
+    },
+    {
+      "group": "sales",
+      "keywords": ["hóa đơn", "hoa don", "invoice", "đơn hàng", "don hang", "order", "bán", "ban ", "sale", "còn thiếu", "chưa trả", "chua tra"],
+      "capability_default": "invoice.lookup",
+      "comment": "Specific groups before the broad customer group (batch-accuracy result9: most-specific-match wins)."
+    },
+    {
+      "group": "payment",
+      "keywords": ["trả tiền", "tra tien", "thanh toán", "thanh toan", "phiếu thu", "phieu thu", "payment", "đã trả", "da tra", "trả", "tra "],
+      "capability_default": "payment.history"
+    },
+    {
+      "group": "inventory",
+      "keywords": ["tồn kho", "ton kho", "stock", "kho", "cám", "cam ", "hàng", "hang ", "nhập hàng", "nhap hang", "purchase", "xuất kho", "xuat kho", "delivery"],
+      "capability_default": "stock.balance",
+      "comment": "\"còn bao nhiêu\" deliberately ABSENT — it stole \"còn nợ\" questions (result9 fix)."
+    },
+    {
+      "group": "customer",
+      "keywords": ["khách", "khach", "customer", "công nợ", "cong no", "receivable", "còn nợ", "còn lại", "must pay", "nợ", "no "],
+      "capability_default": "customer.balance",
+      "comment": "BROAD group LAST — catches bare receivable questions no specific group claimed."
+    }
+  ],
+  "capabilities": {
+    "customer.balance": {
+      "type": "READ",
+      "route_group": "customer",
+      "description": "Current receivable (net outstanding, credit notes included) for one customer",
+      "triggers": ["công nợ", "cong no", "còn nợ", "receivable", "còn lại", "nợ", "balance"],
+      "entities": { "required": ["customer"], "optional": [] },
+      "amount_policy": null,
+      "risk": { "level": "READ", "requires_confirmation": false },
+      "authorization": { "permissions": [], "scope": { "company": "optional", "warehouse": "n/a" }, "row_level": "optional" },
+      "confirmation": null,
+      "execution": { "idempotent": false, "verify_document": false, "reconcile_on_unknown": false },
+      "errors": ["CUSTOMER_NOT_FOUND", "AMBIGUOUS_CUSTOMER", "ERP_UNAVAILABLE"],
+      "skill": "skills/customer.mjs#getCustomerBalance",
+      "proposal_action": "read_balance"
+    },
+    "customer.lookup": {
+      "type": "READ",
+      "route_group": "customer",
+      "description": "Find a customer and show their master data",
+      "triggers": ["tìm khách", "tim khach", "tra khách", "thông tin khách", "khách hàng nào", "customer"],
+      "entities": { "required": ["customer"], "optional": [] },
+      "amount_policy": null,
+      "risk": { "level": "READ", "requires_confirmation": false },
+      "authorization": { "permissions": [], "scope": { "company": "optional" }, "row_level": "optional" },
+      "confirmation": null,
+      "execution": { "idempotent": false, "verify_document": false, "reconcile_on_unknown": false },
+      "errors": ["CUSTOMER_NOT_FOUND", "AMBIGUOUS_CUSTOMER"],
+      "skill": "skills/customer.mjs#findCustomer",
+      "proposal_action": "read_customer"
+    },
+    "stock.balance": {
+      "type": "READ",
+      "route_group": "inventory",
+      "description": "Stock on hand for an item / warehouse",
+      "triggers": ["tồn kho", "ton kho", "còn bao nhiêu", "kho", "stock"],
+      "entities": { "required": [], "optional": ["item", "warehouse"] },
+      "amount_policy": null,
+      "risk": { "level": "READ", "requires_confirmation": false },
+      "authorization": { "permissions": [], "scope": { "company": "optional", "warehouse": "optional" } },
+      "confirmation": null,
+      "execution": { "idempotent": false, "verify_document": false, "reconcile_on_unknown": false },
+      "errors": ["ITEM_NOT_FOUND", "ERP_UNAVAILABLE"],
+      "skill": "skills/inventory.mjs#listInventory",
+      "proposal_action": "read_stock_balance"
+    },
+    "invoice.lookup": {
+      "type": "READ",
+      "route_group": "sales",
+      "description": "Open (unpaid) invoices for a customer",
+      "triggers": ["hóa đơn", "hoa don", "invoice", "chưa trả", "chưa thanh toán", "còn thiếu"],
+      "entities": { "required": ["customer"], "optional": ["invoice"] },
+      "amount_policy": null,
+      "risk": { "level": "READ", "requires_confirmation": false },
+      "authorization": { "permissions": [], "scope": { "company": "optional" }, "row_level": "optional" },
+      "confirmation": null,
+      "execution": { "idempotent": false, "verify_document": false, "reconcile_on_unknown": false },
+      "errors": ["CUSTOMER_NOT_FOUND", "AMBIGUOUS_CUSTOMER", "ERP_UNAVAILABLE"],
+      "skill": "skills/sales.mjs#listUnpaidInvoices",
+      "proposal_action": "read_open_invoices"
+    },
+    "sales.summary": {
+      "type": "READ",
+      "route_group": "sales",
+      "description": "Sales summary for a period (doanh thu / bán được bao nhiêu)",
+      "triggers": ["doanh thu", "bán được", "ban duoc", "tổng bán", "sales summary", "hôm nay bán"],
+      "entities": { "required": [], "optional": ["date_range", "customer"] },
+      "amount_policy": null,
+      "risk": { "level": "READ", "requires_confirmation": false },
+      "authorization": { "permissions": [], "scope": { "company": "required" } },
+      "confirmation": null,
+      "execution": { "idempotent": false, "verify_document": false, "reconcile_on_unknown": false },
+      "errors": ["NOT_IMPLEMENTED", "ERP_UNAVAILABLE"],
+      "skill": null,
+      "status": "stub",
+      "proposal_action": "read_sales_summary"
+    },
+    "payment.history": {
+      "type": "READ",
+      "route_group": "payment",
+      "description": "Payment entries already recorded for a customer",
+      "triggers": ["phiếu thu", "phieu thu", "đã trả", "đã thanh toán", "thanh toán gần nhất", "payment"],
+      "entities": { "required": ["customer"], "optional": [] },
+      "amount_policy": null,
+      "risk": { "level": "READ", "requires_confirmation": false },
+      "authorization": { "permissions": [], "scope": { "company": "optional" }, "row_level": "optional" },
+      "confirmation": null,
+      "execution": { "idempotent": false, "verify_document": false, "reconcile_on_unknown": false },
+      "errors": ["CUSTOMER_NOT_FOUND", "AMBIGUOUS_CUSTOMER", "ERP_UNAVAILABLE"],
+      "skill": "skills/payment.mjs#listPaymentEntries",
+      "proposal_action": "read_payment_history"
+    },
+    "payment.create": {
+      "type": "WRITE",
+      "route_group": "payment_write",
+      "description": "Record a customer payment (draft Payment Entry) against an open invoice",
+      "triggers": ["thu tiền", "thu tien", "nhận tiền", "nhan tien", "ghi nhận thanh toán", "payment"],
+      "entities": { "required": ["customer", "amount"], "optional": ["payment_method", "note", "invoice"] },
+      "amount_policy": {
+        "allow_explicit": true,
+        "allow_full_balance": true,
+        "allow_zero": false,
+        "allow_negative": false,
+        "clamp_to_outstanding": "refuse_not_clamp"
+      },
+      "risk": { "level": "HIGH", "requires_confirmation": true, "double_confirm": false },
+      "authorization": { "permissions": ["Accounts User"], "scope": { "company": "required" }, "row_level": "optional" },
+      "confirmation": { "ttl": "10m", "immutable": true },
+      "execution": {
+        "idempotent": true,
+        "verify_document": true,
+        "reconcile_on_unknown": true,
+        "write_doctype": "Payment Entry",
+        "correlation_field": "custom_ai_action_id",
+        "reference_field": "reference_no"
+      },
+      "errors": [
+        "CUSTOMER_NOT_FOUND",
+        "AMBIGUOUS_CUSTOMER",
+        "INVALID_AMOUNT",
+        "INSUFFICIENT_PERMISSION",
+        "PAYMENT_INVOICE_ALREADY_SETTLED",
+        "PROPOSAL_EXPIRED",
+        "PROPOSAL_STALE",
+        "UNKNOWN_EXECUTION_STATE",
+        "SYSTEM_MAINTENANCE"
+      ],
+      "skill": "skills/payment-write.mjs#buildPaymentProposal",
+      "proposal_action": "create_payment_entry"
+    },
+    "document.delete": {
+      "type": "WRITE",
+      "route_group": "document_delete",
+      "description": "Deleting an ERPNext document",
+      "triggers": ["xóa", "xoá", "huỷ", "hủy", "delete", "remove"],
+      "entities": { "required": ["document"], "optional": [] },
+      "amount_policy": null,
+      "risk": { "level": "CRITICAL", "requires_confirmation": true, "double_confirm": true },
+      "authorization": { "permissions": ["System Manager"], "scope": { "company": "required" } },
+      "confirmation": { "ttl": "0m", "immutable": true },
+      "execution": {
+        "idempotent": false,
+        "verify_document": false,
+        "reconcile_on_unknown": false,
+        "forbidden_in_ai_path": true,
+        "reason": "plan2_final §8 — document.delete has no legitimate use case in the AI UI; needs a separate admin UI"
+      },
+      "errors": ["FORBIDDEN_IN_AI_PATH", "UNSUPPORTED_OPERATION"],
+      "skill": null,
+      "proposal_action": "delete_document"
+    }
+  }
+}

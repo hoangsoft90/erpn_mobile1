@@ -18,12 +18,31 @@
  *    own reference field becomes the second, server-side idempotency half.
  */
 
+import { randomUUID } from "node:crypto";
+
 import { assertReadOnly } from "../readonly-guard.mjs";
 import { buildProposal } from "../action-proposal.mjs";
 import { detectDrift } from "../proposal-freshness.mjs";
+import { getCapability } from "../capability-contract.mjs";
 
 /** The ONE doctype this project may ever create (fail-closed everywhere). */
 export const WRITE_DOCTYPE = "Payment Entry";
+
+/**
+ * P0 §10.4 — ERPNext-side correlation field, read from the contract (single
+ * source of truth), NOT hardcoded here.
+ * `custom_ai_action_id` (Data, unique, indexed) is the field an operator adds
+ * to every WRITE doctype; the value written is the immutable proposal's
+ * `action_id`, so a later lookup never has to guess from customer+amount+date.
+ */
+export function correlationField() {
+  return getCapability("payment.create")?.execution?.correlation_field ?? "custom_ai_action_id";
+}
+
+/** `act_<uuid>` — a unique id for one logical action (plan2_final §2 D9). */
+export function newActionId() {
+  return `act_${randomUUID()}`;
+}
 
 /**
  * Unwrapping, in one place (learned the hard way: the client wraps every
@@ -57,6 +76,7 @@ export function buildPaymentEntryData({
   customerId,
   paid,
   commandId,
+  actionId,
   mode = "Tiền mặt",
   invoice,
   invoiceTotal,
@@ -86,6 +106,11 @@ export function buildPaymentEntryData({
     // server-side half of the once-only guarantee (reconcile searches by it).
     reference_no: commandId,
     reference_date: postingDate,
+    // P0 §10.4 — business-level correlation. ERPNext IGNORES fields that are
+    // not on the doctype meta, so sending it is harmless on a site that has not
+    // run the migration yet; once the Custom Field exists it is stored (and a
+    // unique constraint there is the DB-level half of the duplicate guard).
+    [correlationField()]: actionId ?? null,
     remarks: `ERPNext Voice Copilot · xác nhận bởi người dùng · command_id ${commandId}`,
     references: [
       {
@@ -202,21 +227,46 @@ export async function resolvePaymentAccounts(mcp, { invoice, mode = "Tiền mặ
  *
  * @returns {Promise<{found: boolean, count: number, doc: object|null, duplicates: boolean}>}
  */
-export async function reconcilePaymentEntry(mcp, commandId) {
+export async function reconcilePaymentEntry(mcp, commandId, { actionId = null } = {}) {
   assertReadOnly("erpnext_doc_list");
+  const fields = ["name", "docstatus", "paid_amount", "party", "reference_no", "posting_date"];
   const res = await mcp.callTool("erpnext_doc_list", {
     doctype: WRITE_DOCTYPE,
-    fields: ["name", "docstatus", "paid_amount", "party", "reference_no", "posting_date"],
+    fields,
     filters: [["reference_no", "=", commandId]],
     limit: 5,
   });
   const rows = rowsOf(res);
+
+  // P0 §10.4 — ALSO look the action up by the correlation field. A site that
+  // has not added the Custom Field yet makes Frappe reject the filter
+  // (unknown field), which is caught here and reported — never fatal, because
+  // the reference_no lookup above already proves the primary key is complete.
+  let byAction = [];
+  let correlationFieldUnavailable = false;
+  const field = correlationField();
+  if (actionId) {
+    try {
+      const res2 = await mcp.callTool("erpnext_doc_list", {
+        doctype: WRITE_DOCTYPE,
+        fields: [...fields, field],
+        filters: [[field, "=", actionId]],
+        limit: 5,
+      });
+      byAction = rowsOf(res2);
+    } catch {
+      correlationFieldUnavailable = true;
+    }
+  }
+  const merged = [...rows, ...byAction.filter((r) => !rows.some((x) => x.name && x.name === r.name))];
   return {
-    found: rows.length > 0,
-    count: rows.length,
-    doc: rows[0] ?? null,
+    found: merged.length > 0,
+    count: merged.length,
+    doc: merged[0] ?? null,
     // >1 means a second write slipped through: surface it loudly, never hide it.
-    duplicates: rows.length > 1,
+    duplicates: merged.length > 1,
+    correlation_field: field,
+    correlation_field_unavailable: correlationFieldUnavailable,
   };
 }
 
@@ -224,13 +274,20 @@ export async function reconcilePaymentEntry(mcp, commandId) {
  * Read the written document BACK from ERPNext and check it really carries the
  * values we intended — the response of the write call itself is not evidence.
  */
-export async function verifyWrittenPayment(mcp, docName, { commandId, paid, customerId }) {
+export async function verifyWrittenPayment(mcp, docName, { commandId, paid, customerId, actionId }) {
   const res = await mcp.callTool("erpnext_doc_get", { doctype: WRITE_DOCTYPE, name: docName });
   const doc = docOf(res);
   const problems = [];
   if (String(doc.reference_no ?? "") !== String(commandId)) problems.push(`reference_no=${doc.reference_no}`);
   if (Math.round(Number(doc.paid_amount)) !== Math.round(Number(paid))) problems.push(`paid_amount=${doc.paid_amount}`);
   if (String(doc.party ?? "") !== String(customerId)) problems.push(`party=${doc.party}`);
+  // P0 §10.4 — verify the correlation field ONLY when the site actually stores
+  // it. A site without the migration must not fail a perfectly good write; the
+  // absence is reported instead (execution.correlation_field_missing).
+  const field = correlationField();
+  if (actionId && doc && Object.prototype.hasOwnProperty.call(doc, field)) {
+    if (String(doc[field] ?? "") !== String(actionId)) problems.push(`${field}=${doc[field]}`);
+  }
   if (problems.length) {
     throw Object.assign(
       new Error(`đọc lại phiếu ${docName} thấy sai lệch: ${problems.join(", ")} — cần đối soát thủ công`),
@@ -316,11 +373,15 @@ export async function buildPaymentProposal(skills, resolved, opts = {}) {
     extra: {
       ambiguous,
       warnings,
+      // P0 §9/§10.4 — the immutable action id travels WITH the proposal, so the
+      // client round-trip cannot change what the ERPNext document is correlated
+      // to (it is generated once, server-side, at proposal build time).
+      action_id: newActionId(),
       schema_note: "params.amount_vnd là ĐỀ XUẤT — execute sẽ đọc lại nợ thật từ ERPNext và kẹp trần",
     },
   });
 
-  return { proposal, invoice: target.name, outstanding_vnd: outstanding, warnings };
+  return { proposal, invoice: target.name, outstanding_vnd: outstanding, warnings, action_id: proposal.action_id };
 }
 
 /**
@@ -420,10 +481,12 @@ export async function executePaymentProposal(mcp, proposal, commandId, store) {
     throw Object.assign(new Error("EXECUTE_CLIENT_UNSUPPORTED: this MCP client has no write method"), { code: "EXECUTE_CLIENT_UNSUPPORTED" });
   }
   const postingDate = new Date().toISOString().slice(0, 10);
+  const actionId = proposal.action_id ?? null;
   const data = buildPaymentEntryData({
     customerId,
     paid,
     commandId,
+    actionId,
     mode,
     invoice: target.name,
     invoiceTotal: Math.round(Number(target.grand_total) || liveOutstanding),
@@ -444,7 +507,7 @@ export async function executePaymentProposal(mcp, proposal, commandId, store) {
   }
 
   // 5. VERIFY by reading the document back — the write response is not evidence.
-  const verified = await verifyWrittenPayment(mcp, docName, { commandId, paid, customerId });
+  const verified = await verifyWrittenPayment(mcp, docName, { commandId, paid, customerId, actionId });
 
   const result = {
     erpnext_doc: docName,
@@ -452,10 +515,16 @@ export async function executePaymentProposal(mcp, proposal, commandId, store) {
     invoice: target.name,
     customer: customerId,
     reference_no: commandId,
+    action_id: actionId,
     docstatus: verified.docstatus ?? 0,
     mode_of_payment: mode,
     note: "phiếu tạo ở trạng thái NHÁP (docstatus 0) — submit là bước riêng, cần người quyết định",
   };
+  if (actionId && !Object.prototype.hasOwnProperty.call(verified, correlationField())) {
+    // The site has not run the schema migration yet: the value could not be
+    // stored. Say so instead of pretending the correlation exists (§10.4).
+    result.correlation_field_missing = correlationField();
+  }
   if (mode !== modeRequested) {
     // Surface the substitution — silently paying into a different channel
     // would be a reportable business difference, not a cosmetic detail.

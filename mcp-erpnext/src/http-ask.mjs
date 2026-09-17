@@ -7,11 +7,18 @@
  * HTTP <-> that function — no routing logic, no money logic, no new guard
  * surface (answerQuestion keeps every Phase 2 fail-safe).
  *
+ * P0 (plan2_final §7, §26): the WRITE endpoint `/execute` no longer holds any
+ * policy. It delegates to the Safety Gateway (safety-gateway.mjs), which is the
+ * single boundary every ERPNext WRITE must pass. This file only parses the
+ * request and maps the gateway's {status, body} back to HTTP.
+ *
  * Endpoints:
  *   GET  /health -> {ok:true, service:"copilot-ask", port}
  *   POST /ask    -> body {"text": "..."} -> {ok:true, result:{answer...}}
  *                   missing/invalid text -> 400 {ok:false,error}
  *                   internal failure    -> 500 {ok:false,error} (no stack)
+ *   POST /execute        -> Safety Gateway (confirm + execute one WRITE)
+ *   POST /execute/cancel -> release a zombie PENDING command (reconcile-verified)
  *
  * Bind + auth policy (user decision 2026-09-14 — REAL customer debt data
  * must never be exposed to the public internet without auth):
@@ -31,10 +38,10 @@
 import http from "node:http";
 import { timingSafeEqual, createHash } from "node:crypto";
 import { answerQuestion, pickServerScript } from "./copilot-server.mjs";
-import { IdempotencyStore, fingerprintProposal, isValidCommandId, EXECUTABLE_ACTIONS } from "./idempotency.mjs";
-import { executePaymentProposal, reconcilePaymentEntry } from "./skills/payment-write.mjs";
+import { IdempotencyStore, isValidCommandId } from "./idempotency.mjs";
+import { reconcilePaymentEntry } from "./skills/payment-write.mjs";
 import { createMcpClient } from "./client.mjs";
-import { assertFresh } from "./proposal-freshness.mjs";
+import { runExecute } from "./safety-gateway.mjs";
 
 const MAX_BODY = 1_000_000; // one utterance is ~200 chars; 1MB is generous
 
@@ -177,6 +184,9 @@ export function createAskServer({ port = 8788, host = "127.0.0.1", policy = null
       // written ⇒ the record is terminal-safe to mark CANCELLED, releasing the
       // intent lock. If reconcile finds a document (or errors), we NEVER cancel:
       // the money may exist — the human resolves that on ERPNext.
+      //
+      // Cancel is a LOCK RELEASE, not an ERPNext write, so the kill switch does
+      // not block it: refusing cancel during maintenance would freeze intents.
       let body;
       try {
         const raw = await readBody(req);
@@ -273,11 +283,9 @@ export function createAskServer({ port = 8788, host = "127.0.0.1", policy = null
       return;
     }
     if (req.method === "POST" && path === "/execute") {
-      // Phase 7 confirm-execute endpoint. Runs against the REAL ERPNext server
-      // when ERPNEXT_* is configured (verified end-to-end 2026-09-16), the mock
-      // otherwise. The write itself is `erpnext_doc_create` with doctype
-      // "Payment Entry" — the tool name was verified in the pinned package
-      // source, never assumed. Same auth/bind policy as /ask.
+      // P0: EVERY ERPNext write goes through the Safety Gateway. This endpoint
+      // owns no policy — it parses the request, calls the gateway, and maps the
+      // verdict back to HTTP (plan2_final §7 invariant: no bypass).
       let body;
       try {
         const raw = await readBody(req);
@@ -286,179 +294,27 @@ export function createAskServer({ port = 8788, host = "127.0.0.1", policy = null
         sendJson(res, 400, { ok: false, error: `invalid request body: ${err.message}` });
         return;
       }
-      const { command_id, proposal } = body ?? {};
-      if (!isValidCommandId(command_id)) {
-        sendJson(res, 400, { ok: false, error: "command_id must be a client-generated UUID" });
-        return;
-      }
-      if (!proposal || typeof proposal !== "object" || proposal.action !== "create_payment_entry") {
-        sendJson(res, 400, { ok: false, error: "only create_payment_entry proposals are executable in Phase 7" });
-        return;
-      }
-      if (!EXECUTABLE_ACTIONS.includes(proposal.action)) {
-        sendJson(res, 403, { ok: false, error: "action not executable" });
-        return;
-      }
-      if (!proposal.entity?.id) {
-        sendJson(res, 400, { ok: false, error: "proposal entity has no resolved ERPNext id — resolve the customer first" });
-        return;
-      }
-      // Money-shape gate, at the boundary so a malformed request never reserves
-      // a command_id: an invalid amount must be rejected, never "rounded up"
-      // into a larger payment by the executor (review finding, 2026-09-16).
-      const amountVnd = Number(proposal.params?.amount_vnd);
-      if (!Number.isFinite(amountVnd) || amountVnd <= 0) {
-        sendJson(res, 400, {
-          ok: false,
-          error: "params.amount_vnd phải là số VND > 0",
-        });
-        return;
-      }
-      // Phase 9 — age gate. Refused BEFORE store.begin() so an expired/stale
-      // proposal never burns its command_id (result26 lesson: validation that
-      // runs after the gate costs the user a new intent).
-      const freshness = assertFresh(proposal);
-      if (!freshness.ok) {
-        sendJson(res, 409, { ok: false, code: freshness.code, error: freshness.error });
-        return;
-      }
-
-      const fp = fingerprintProposal(proposal);
-      let gate;
+      // Last-resort guard: the gateway returns verdicts rather than throwing,
+      // but ANY unexpected throw inside an async handler becomes an unhandled
+      // rejection and kills the whole gateway (Node ≥15). Refuse loudly instead
+      // — a dead process takes /ask and /execute down with it.
+      let verdict;
       try {
-        gate = store.begin(command_id, {
-          action: proposal.action,
-          fingerprint: fp,
-          // Phase 9 — the (customer, invoice) pair is the INTENT. While one
-          // command is PENDING on it, a second command_id must not execute it:
-          // two proposals for the same debt are legitimate, paying it twice is
-          // not.
-          intentKey: `${proposal.entity.id}|${proposal.params?.invoice ?? ""}`,
+        verdict = await runExecute({
+          command_id: body?.command_id,
+          proposal: body?.proposal,
+          store,
         });
       } catch (err) {
-        sendJson(res, 409, {
+        sendJson(res, 500, {
           ok: false,
-          error: err.message,
-          // Review 2026-09-16: when the gate refuses because ANOTHER command is
-          // in flight on the same (customer, invoice), tell the client WHICH
-          // one to resume instead of leaving it to parse a message string.
-          ...(err?.code === "IDEMPOTENCY_INTENT_IN_FLIGHT"
-            ? { code: err.code, clash_command_id: err.clashCommandId ?? null }
-            : {}),
+          code: "EXECUTE_UNEXPECTED_ERROR",
+          error: `lỗi không mong đợi trong Safety Gateway: ${err?.message ?? err}`,
+          command_id: body?.command_id ?? null,
         });
         return;
       }
-      if (gate.replay) {
-        // once-only guarantee: the FIRST execution's result is returned again
-        sendJson(res, 200, { ok: true, replay: true, result: gate.result });
-        return;
-      }
-      // RESUMED command (crash recovery): reconcile against ERPNext BEFORE any
-      // new write. The earlier attempt may have written and died before
-      // recording it, and ERPNext's reference_no is NOT unique — this check is
-      // the only thing standing between a retry and a second payment
-      // (proven for real on 2026-09-16, see result25).
-      const existing = store.status(command_id);
-      if (gate.resumed) {
-        if (!existing?.reference_no) {
-          // Cannot tell whether the earlier attempt wrote anything ⇒ refuse
-          // rather than guess. A human must check ERPNext for a document in
-          // this customer/amount window before retrying.
-          sendJson(res, 409, {
-            ok: false,
-            error:
-              "command đang PENDING nhưng thiếu server reference — không thể đối soát, KHÔNG ghi để tránh trùng; cần người kiểm tra ERPNext",
-            command_id,
-          });
-          return;
-        }
-        let mcpRec;
-        try {
-          mcpRec = createMcpClient({ serverScript: pickServerScript() });
-          await mcpRec.initialize();
-          const rec = await reconcilePaymentEntry(mcpRec, existing.reference_no);
-          if (rec.found) {
-            // Already written: complete the command with the FOUND document and
-            // answer as a replay — never write a second payment.
-            const result = {
-              erpnext_doc: rec.doc?.name ?? null,
-              paid_vnd: Math.round(Number(rec.doc?.paid_amount) || 0),
-              invoice: proposal.params?.invoice ?? null,
-              customer: proposal.entity.id,
-              reference_no: existing.reference_no,
-              docstatus: rec.doc?.docstatus ?? null,
-              reconciled: true,
-            };
-            store.complete(command_id, result);
-            sendJson(res, 200, {
-              ok: true,
-              replay: true,
-              reconciled: true,
-              duplicate_documents: rec.duplicates ? rec.count : 0,
-              result,
-            });
-            return;
-          }
-          // Not found ⇒ the earlier attempt never landed. Safe to write now.
-        } catch (err) {
-          // Reconciliation itself failed (network/ERPNext down): refuse rather
-          // than guess. Guessing here is how double payments happen.
-          sendJson(res, 503, {
-            ok: false,
-            error: `không đối soát được với ERPNext — KHÔNG ghi để tránh trùng: ${err?.message ?? err}`,
-            command_id,
-            reference_no: existing.reference_no,
-          });
-          return;
-        } finally {
-          if (mcpRec) await mcpRec.close().catch(() => {});
-        }
-      }
-      let mcp;
-      try {
-        mcp = createMcpClient({ serverScript: pickServerScript() });
-        await mcp.initialize();
-        const result = await executePaymentProposal(mcp, proposal, command_id, store);
-        sendJson(res, 200, { ok: true, replay: false, result });
-      } catch (err) {
-        // Classify before writing the terminal state (review finding, 2026-09-16).
-        // A failure AFTER the ERPNext reference was registered (i.e. during the
-        // write or its read-back check) may mean the document DID land and only
-        // the response was lost. Marking that FAILED would (a) make reconcile
-        // impossible — begin() refuses a FAILED command — and (b) push the user
-        // toward a NEW command_id, which is exactly how a second payment gets
-        // written. Keep it PENDING: the next attempt reconciles against ERPNext
-        // and either completes it or writes once.
-        const afterWrite =
-          err?.code === "PAYMENT_WRITE_UNVERIFIED" || Boolean(store.status(command_id)?.reference_no);
-        if (afterWrite) {
-          sendJson(res, 503, {
-            ok: false,
-            retry_same_command_id: true,
-            error: `chưa xác minh được kết quả ghi: ${err?.message ?? err} — gửi lại ĐÚNG command_id này để hệ thống đối soát với ERPNext (KHÔNG tạo command_id mới)`,
-          });
-          return;
-        }
-        if (err?.code === "PROPOSAL_STALE") {
-          // The intent no longer matches ERPNext (debt changed / invoice moved).
-          // The check runs BEFORE setReference, so nothing was written; the
-          // command is terminal so the client re-asks instead of retrying a
-          // stale intent.
-          store.fail(command_id, err.message);
-          sendJson(res, 409, {
-            ok: false,
-            code: "PROPOSAL_STALE",
-            error: err.message,
-            problems: err.problems ?? [],
-          });
-          return;
-        }
-        store.fail(command_id, err?.message ?? String(err));
-        sendJson(res, 500, { ok: false, error: `execute failed: ${err?.message ?? err}` });
-        return;
-      } finally {
-        if (mcp) await mcp.close().catch(() => {});
-      }
+      sendJson(res, verdict.status, verdict.body);
       return;
     }
     if (req.method === "POST" && path === "/ask") {

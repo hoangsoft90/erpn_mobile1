@@ -1,0 +1,190 @@
+========================================================================
+RESULT 44 — P0 (phases2): CAPABILITY CONTRACT + SAFETY GATEWAY + GOLDEN
+            DATASET + custom_ai_action_id, VÀ VÒNG TỰ REVIEW TÌM RA 3 LỖI THẬT
+Timestamp: 2026-09-17 (giờ shell, UTC+0)
+Phạm vi: CHỈ P0 theo `.plan/phases2/p0-capability-contract-safety.md`.
+KHÔNG làm lại Phase 0–3/7/9 cũ · KHÔNG mở Voice/DSH/skill WRITE mới ·
+KHÔNG `unknown → DSH` · giữ nguyên 8787/8788 + luồng payment NHÁP.
+Nguồn sự thật: mọi claim dưới đây = lệnh + output thật (dán nguyên văn),
+không suy đoán. Báo cáo P0 đầy đủ ở `.plan/phases2/p0-result.md`.
+========================================================================
+
+== 1. P0 đã giao gì (tóm tắt — chi tiết ở p0-result.md §1–§6)
+
+- `mcp-erpnext/capabilities.json` = SINGLE SOURCE OF TRUTH (7 capability:
+  5 Reference READ + `payment.history` + `payment.create` HIGH +
+  `document.delete` **forbidden**), loader `src/capability-contract.mjs`
+  validate **fail-closed** lúc import; `router.mjs` bỏ hardcode, đọc trigger
+  từ contract.
+- `src/safety-gateway.mjs` = CỬA DUY NHẤT cho WRITE; `/execute` trong
+  `http-ask.mjs` chỉ parse HTTP rồi uỷ quyền (bỏ hết policy khỏi HTTP layer).
+- `src/kill-switch.mjs` (env `COPILOT_GLOBAL_READ_ONLY` hoặc file
+  `mcp-erpnext/control/read-only.flag`, thêm `COPILOT_DISABLE_CAPABILITIES`)
+  ⇒ `503 SYSTEM_MAINTENANCE` **trước** idempotency gate.
+- `src/untrusted-data.mjs` (strip pattern chỉ dẫn + cap 500 + wrap delimiter).
+- `custom_ai_action_id` ĐÃ TẠO + VERIFY trên ERPNext THẬT bằng script
+  operator idempotent `scripts/add-correlation-field.mjs` (REST, ngoài AI path).
+- Golden Dataset v1: 200 câu / 6 bucket (`test/golden/golden-dataset.json` +
+  runner spawn NLP, không LLM/credential).
+
+== 2. VÌ SAO CÓ VÒNG REVIEW NÀY
+
+User yêu cầu "review code những gì vừa làm". Vòng này KHÔNG phải để xác nhận
+"suite xanh" (suite đã xanh 152/152 trước review) mà để tìm lỗi MÀ TEST KHÔNG
+BẮT ĐƯỢC — đúng bài học đã học trong dự án: suite xanh chỉ là lưới, không phải
+bằng chứng. Kết quả: **3 lỗi thật, tất cả đều do CHÍNH đợt refactor P0 tạo ra**
+(đường cũ không có), và cả 3 đều nằm trên đường TIỀN.
+
+== 3. LỖI D1 — lỗi cấu hình ERPNext GIẾT CẢ PROCESS (crash-class)
+
+Cơ chế: refactor tách Safety Gateway ra khỏi http-ask thì `openClient()` bị đặt
+**trước** khối `try` (cả nhánh resume lẫn nhánh execute). `pickServerScript()`
+ném `PARTIAL_ERPNEXT_CONFIG` / `INVALID_ERPNEXT_URL` khi env ERPNEXT_* thiếu
+hoặc sai ⇒ lỗi thoát khỏi `runExecute()` ⇒ thoát khỏi async handler của
+`/execute` (không có try/catch) ⇒ **unhandled rejection ⇒ process chết**, kéo
+theo cả `/ask` và `/health`. Đường CŨ có `createMcpClient` NẰM TRONG `try` nên
+chỉ trả 500.
+
+Probe (chứng minh trước khi sửa):
+
+  $ node /tmp/probe-escape.mjs
+  THREW_OUT_OF_GATEWAY: PARTIAL_ERPNEXT_CONFIG: set all three or none — missing: ERPNEXT_API_KEY, ERPNEXT_API_SECRET
+  store_status: {"status":"PENDING","action":"create_payment_entry","fingerprint":"48b51244...","intent_key":"CUST-00001|SINV-0001",...}
+
+Fix: `openClientOrRefuse()` — mọi lỗi mở client trả `503 PAYMENT_CLIENT_UNAVAILABLE`
+(verdict, KHÔNG throw); thêm guard tầng HTTP (`EXECUTE_UNEXPECTED_ERROR`) vì
+ranh giới sai kiểu này biến lỗi 1 request thành sập cả service.
+
+== 4. LỖI D2 — lỗi cấu hình làm TREO VĨNH VIỄN khoản nợ (zombie intent)
+
+Cùng probe trên: command để lại `status: PENDING` **không có `reference_no`**.
+Vì khoá ý định là `(customer|invoice)`, mọi `command_id` KHÁC cho cùng khoản nợ
+sau đó bị `IDEMPOTENCY_INTENT_IN_FLIGHT` chặn ⇒ một lỗi đánh máy trong `.env`
+treo vĩnh viễn khoản nợ đó (không `/execute` được, `/execute/cancel` cũng cần
+client để reconcile ⇒ cũng không mở được).
+
+Fix: lỗi mở-kết-nối được phân loại là "CHẮC CHẮN CHƯA GHI GÌ" ⇒
+`503 + retry_same_command_id: true`, **KHÔNG** `store.fail` (fail terminal sẽ
+bắt user tạo `command_id` mới một cách vô cớ), giữ nguyên command_id để sửa
+config rồi gửi lại ĐÚNG lệnh cũ. Test khẳng định lại `begin()` cùng cid ⇒
+`resumed: true` (khoá ý định không bị kẹt).
+
+== 5. LỖI D3 — rò rỉ process con khi `initialize()` thất bại
+
+`openClient()` gọi `await client.initialize()`; nếu initialize ném thì `close()`
+không bao giờ được gọi ⇒ process con (MCP server qua stdio) ở lại, giữ event
+loop sống (đúng loại lỗi đã gặp ở deadline timer trong http-ask).
+Fix: catch quanh `initialize()` → `close()` rồi ném lại.
+
+== 6. FALSIFY từng fix (gỡ thật → đỏ đúng chỗ → khôi phục → xanh)
+
+Falsify A+B (gỡ refusal D1/D2 + gỡ leak guard D3, chạy trên cây thật):
+
+  falsified A+B
+  ✔ INVARIANT (static): the write path is referenced from exactly one module — the gateway
+  ✖ config failure: refuses (503, non-terminal) instead of throwing out of the gateway
+  ✖ config failure over HTTP: 503 + the gateway process survives (a bad .env must not kill it)
+  ✖ client open: a failing initialize still closes the spawned server (no leaked child process)
+  ℹ tests 10 · pass 7 · fail 3
+  --- restore ---
+  ℹ tests 10 · pass 10 · fail 0
+
+Falsify C (gỡ luôn guard tầng HTTP) — chạy trên BẢN SAO `/tmp/falsify-c`:
+
+  A+C falsified in SCRATCH COPY only
+  ✖ config failure over HTTP: 503 + the gateway process survives (a bad .env must not kill it)
+  ✖ test/safety-gateway.test.mjs (59922.206463ms)
+  Error: PARTIAL_ERPNEXT_CONFIG: set all three or none — missing: ERPNEXT_API_KEY, ERPNEXT_API_SECRET
+      at pickServerScript (.../src/copilot-server.mjs:46:11)
+      at openClient (.../src/safety-gateway.mjs:289:39)
+      at openClientOrRefuse (.../src/safety-gateway.mjs:270:44)
+      at runExecute (.../src/safety-gateway.mjs:218:24)
+      at Server.<anonymous> (.../src/http-ask.mjs:301:29)
+  'Promise resolution is still pending but the event loop has already resolved'
+
+⇒ Kết quả đúng của falsify C không phải "assertion đỏ" mà là **test bị CANCELLED
++ file treo tới trần 60s**: request lỗi làm process không còn phục vụ ⇒ chính là
+hành vi mà guard ngăn.
+
+== 7. SỰ CỐ TRONG LÚC FALSIFY (ghi lại vì đã thành bài học)
+
+Lần falsify A+C đầu tiên chạy quá 180s (process bị giết giữa chừng) nên lệnh
+`cp` khôi phục KHÔNG kịp chạy → **cây làm việc vẫn ở trạng thái ĐÃ GỠ FIX**.
+Phát hiện bằng grep đối chiếu, không bằng trực giác:
+
+  $ grep -c "PAYMENT_CLIENT_UNAVAILABLE" src/safety-gateway.mjs   → 0   (đang bị gỡ!)
+  $ grep -c "EXECUTE_UNEXPECTED_ERROR"   src/http-ask.mjs         → 0   (đang bị gỡ!)
+  --- restore từ /tmp/sg.bak + /tmp/ha.bak ---
+  PAYMENT_CLIENT_UNAVAILABLE   1
+  EXECUTE_UNEXPECTED_ERROR     1
+  Do not leak the spawned server 1
+  openClientOrRefuse           3   (1 định nghĩa + 2 call site)
+
+Bài học: falsify phải chạy trên BẢN SAO (vd `tar` sang `/tmp/...` bỏ
+`node_modules`/`.git`) + `timeout` cứng; nếu buộc sửa cây thật thì backup
+trước VÀ kiểm tồn tại của fix SAU khi khôi phục. (Vòng falsify C lần 2 đã chạy
+đúng cách trên bản sao và đã xoá bản sao sau khi xong.)
+
+== 8. LỖI D4 (nhỏ) — test tĩnh chống bypass QUÉT THIẾU thư mục
+
+`INVARIANT (static)` chỉ quét `src/**.mjs`; `scripts/add-correlation-field.mjs`
+(tooling operator, CÓ ghi schema thật qua REST) nằm ngoài tầm quét ⇒ `scripts/`
+là chỗ ẩn hợp lệ để lén thêm đường ghi thứ hai mà cổng kiểm không thấy.
+Fix: quét thêm `scripts/**.mjs` và khẳng định không gọi
+`executePaymentProposal(`/`callWriteTool(`.
+
+== 9. Gia cố thêm: "số tiền thiếu" phải bị TỪ CHỐI (pinned)
+
+`capabilities.json` khai `allow_full_balance: true`, nhưng boundary vẫn phải
+TỪ CHỐI khi `params.amount_vnd` thiếu — vì người điền số tiền là
+`buildPaymentProposal()`, còn request thiếu tiền là request HỎNG, không phải
+"thu hết nợ". Thêm test khoá hành vi này để phiên sau không ai "sửa" thành
+nhận-giá-trị-thiếu rồi để tầng dưới tự clamp tiền.
+
+== 10. Kiểm tra bảng integrity của skill bài học (đã phát hiện 1 hàng hỏng)
+
+Check bằng script đếm ô (bỏ qua pipe đã escape `\|`):
+
+  MALFORMED line 329: 2 cells, expected 3     ← hàng cũ từ phiên trước, THIẾU ô "rule"
+  --- sửa (bổ sung ô rule) ---
+  tables=3 data rows=84 TOTAL malformed rows: 0 | last table rows=13
+
+== 11. SUITE CUỐI (sau tất cả fix + falsify, khôi phục xong)
+
+  $ cd mcp-erpnext && node --test
+  ℹ tests 156 · pass 156 · fail 0 · cancelled 0        (152 → 156: +4 test review)
+  $ PYTHONPATH=src python3 -m unittest discover -s tests
+  Ran 60 tests in 0.535s — OK
+  $ cd apps/mobile && flutter test
+  00:11 +63: All tests passed!
+  $ flutter analyze
+  No issues found! (ran in 5.6s)
+
+== 12. File trong đợt P0
+
+MỚI: mcp-erpnext/capabilities.json · src/capability-contract.mjs ·
+src/kill-switch.mjs · src/safety-gateway.mjs · src/untrusted-data.mjs ·
+scripts/add-correlation-field.mjs · test/capability-contract.test.mjs ·
+test/safety-gateway.test.mjs · test/correlation-field.test.mjs ·
+test/untrusted-data.test.mjs · test/command-store-persistence.test.mjs ·
+test/forbidden-path.test.mjs · test/golden-dataset.test.mjs ·
+test/golden/golden-dataset.json · result44.txt
+SỬA: src/router.mjs · src/http-ask.mjs (uỷ quyền + guard tầng HTTP) ·
+src/idempotency.mjs · src/mock-server.mjs · src/skills/payment-write.mjs ·
+src/copilot-server.mjs · .gitignore
+
+== 13. Trạng thái commit
+
+Xem §14 — hash ghi sau khi commit.
+
+== 14. Gap còn lại cho P1 (không giấu, đã có trong p0-result.md §8)
+
+- Entity Resolver chưa có 4 trạng thái (EXACT/FUZZY/AMBIGUOUS/NO_MATCH) → P1.
+- Proposal chưa immutable snapshot đầy đủ (proposal_id/version/snapshot) → P1.
+- Execution state machine + `UNKNOWN_EXECUTION_STATE → RECONCILING` → P1.
+- Rate limit mới khai trong contract, chưa code (không thuộc exit criteria P0).
+- 3 gap Golden Dataset (k18/m15/k36) thuộc tầng money/kinship Phase 1 — cần
+  falsify riêng, KHÔNG sửa lén trong P0/P1.
+- 1 mảnh bằng chứng người thật còn thiếu: 1 phiếu demo thật mang
+  `custom_ai_action_id` == `result.action_id` (agent không tự ghi PE thật).
+========================================================================
