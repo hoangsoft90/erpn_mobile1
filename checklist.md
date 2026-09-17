@@ -26,7 +26,7 @@ Trạng thái roadmap chi tiết nằm ở `next.md` — file này KHÔNG nhân 
 - [x] **P2 (phases2) — Session context + Uncertainty UX KỸ THUẬT XONG**: taxonomy 11 mã + copy TV bắt buộc (`uncertainty.mjs`) · session context provenance+TTL 30m/10m, hết hạn = xoá (`session-context.mjs`) · WRITE chỉ nhận context `user_selected`/exact, hết hạn → hỏi lại (fail-closed) · `KNOWN_INTENT_UNIMPLEMENTED` cho capability stub (cần thêm "doanh thu" vào routing sales trong contract) · Flutter `PipelineProgress` 4 pha · falsify 3 luật trên bản sao /tmp (F1 provenance, F2 TTL, F3 thứ tự refusal) · **Node 181 · Flutter 69 · Python 60 · analyze 0** · `.plan/phases2/p2-result.md`
 - [x] **P2 ĐÃ COMMIT `33ff725` (đã push)** — 15 file +717/−35; secret scan CLEAN; suite Python 60 · Node 181 · Flutter 69 · analyze 0
 - [x] **P3 (phases2) — LLM Classifier + Regression gate KỸ THUẬT XONG**: classifier semantic-only qua LLM Router (không agent loop/DSH) · không bao giờ trả ERP id (regex + allowlist 2 lớp) · intent ∈ contract (forbidden không offerable) · routeByCapability → cùng Safety path · LLM down → rule-only, low confidence → LOW_CONFIDENCE · golden classifier regression 9 case mock LLM (CI gate) · falsify F1/F3/F4 trên /tmp · fix 1 test flaky có sẵn (bucket P1) · **Node 195 · Flutter 69 · Python 60 · analyze 0** · `.plan/phases2/p3-result.md` · `result47.txt`
-- [ ] **CHỜ USER: duyệt commit P3** (routing/policy + LLM trên `/ask`) — không tự commit vùng tiền/policy
+- [x] **P3 ĐÃ COMMIT `c38e4ea` (đã push)** — 13 file +1025/−7; secret scan staged diff CLEAN; suite Python 60 · Node 196 · Flutter 69 · analyze 0
 - [ ] (P10) rate limit (mới khai trong contract, chưa code)
 
 ---

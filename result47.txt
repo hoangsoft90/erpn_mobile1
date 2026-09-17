@@ -78,8 +78,13 @@ p1-entity-state.test.mjs "same real intent in the window" dùng Date.now() rồi
   $ flutter analyze  → No issues found!
 (env -u ERPNEXT_* vì shell còn biến từ probe — bài học mock/real.)
 
-== 9. CÒN LẠI ==
-- P3 CHỜ USER DUYỆT COMMIT (routing/policy + LLM trên /ask).
+== 9. COMMIT ==
+- ✅ P3 ĐÃ COMMIT `c38e4ea` + PUSH (`59dcc54..c38e4ea`, branch change/flutter-chat-mvp)
+  13 file +1025/−7; secret scan staged diff CLEAN; .env/store/.plan/.agents không vào commit.
+- Review sau commit: thêm guard fail-closed `routeByCapability` (capability runnable thiếu
+  factory ⇒ null, không crash) + test phủ mọi capability (Node 195 → 196); falsify trên /tmp
+  bằng cách chèn route_group 'sales2' không factory ⇒ coverage test đỏ.
+- CÒN LẠI:
 - Bước kỹ thuật tiếp theo = P4 (learning loop) theo README phases2 — chỉ khi có lệnh.
 - Việc chỉ user: SUBMIT phiếu thu thật · rotate key · audio 150 câu · APK thật ·
   GitHub Settings · review ai-rules.md · duyệt app icon · smoke upstream thật (optional).

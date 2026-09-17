@@ -49,7 +49,7 @@ Lộ trình production trong `.plan/phases2/` (nguồn kiến trúc: `.plan/plan
 - Deliverable 5 (optional, sửa amount trên card) ⏭ bỏ qua có lý do — chờ user
 - Suite: Python 60 · **Node 181** · **Flutter 69** · analyze 0 — `.plan/phases2/p2-result.md`
 
-### P3 (phases2) — LLM Classifier (async) + Regression gate ✅ KỸ THUẬT XONG — CHỜ DUYỆT COMMIT (routing/policy + LLM trên `/ask`)
+### P3 (phases2) — LLM Classifier (async) + Regression gate ✅ ĐÃ COMMIT `c38e4ea` (đã push)
 
 - **Classifier semantic-only** `src/classifier.mjs`: gọi LLM Router Phase 5 (`POST /v1/chat/completions`, OpenAI-compatible) — **không** agent loop, **không** DSH, **không** tool-call
 - **Không bao giờ trả ERP id**: 2 lớp — regex `ID_LIKE_KEY` (`*_id`/`docname`/`erpnext_id`…) + allowlist `SLOT_KEYS` (text-only); ID chỉ từ Entity Resolver
@@ -61,7 +61,7 @@ Lộ trình production trong `.plan/phases2/` (nguồn kiến trúc: `.plan/plan
 - Falsify 3 luật trên /tmp (F4 forbidden-offerable, F1 id-leak, F3 low-confidence) đều đỏ đúng chỗ; fix thêm 1 **test flaky có sẵn** (bucket 15-phút của P1 dedup)
 - Suite: Python 60 · **Node 195** (181→195) · **Flutter 69** · analyze 0 — `.plan/phases2/p3-result.md` · `result47.txt`
 
-**Bước kỹ thuật tiếp theo = P4** (Learning loop: log/cluster unknown + human approval) — P3 chờ duyệt commit; KHÔNG tự nhảy sang P5/P9/Voice.
+**Bước kỹ thuật tiếp theo = P4** (Learning loop: log/cluster unknown + human approval) — P3 đã commit `c38e4ea`, không còn gap chặn; KHÔNG tự nhảy sang P5/P9/Voice.
 
 ### Phase 0 — Foundation & Verification ✅ (`result1.txt`)
 
