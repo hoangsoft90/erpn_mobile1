@@ -136,6 +136,32 @@
   → Nhánh refusal mới phải xếp SAU mọi nhánh an toàn hơn (`forbidden > degraded > stub > entity`);
   chạy LUÔN test tĩnh bảo vệ các mã an toàn cũ, không chỉ test mới của mình.
 
+## Phiên 2026-09-17 (P3 — LLM Classifier): guard 2 lớp, coercion số, test flaky theo đồng hồ
+
+- **Validator dùng `Number(x)` trần để chuẩn hoá field số ⇒ `null`/`true`/`""` lọt qua** —
+  `Number(null)===0`, `Number(true)===1` nên `confidence:null` được coi là 0 (hợp lệ) thay vì
+  bị từ chối. → Luôn type-check `typeof x === "number"` TRƯỚC khi so khoảng; test có ca
+  `null`/`true`/`"0.9"`. Bằng chứng: `result47.txt` §6, bài học vào `SKILL.md`.
+- **Falsify guard nhiều lớp mà chỉ gỡ 1 lớp ⇒ test vẫn xanh (lớp kia che).** Luật "classifier
+  không lộ ERP id" có 2 lớp (regex `ID_LIKE` + allowlist `SLOT_KEYS`); thêm `customer_id` vào
+  allowlist vẫn PASS vì regex chặn trước — phải gỡ CẢ 2 mới đỏ. → Trước khi falsify: liệt kê
+  mọi lớp bảo vệ, gỡ đồng thời; test xanh sau khi gỡ 1 lớp ⇒ đi tìm lớp còn lại.
+- **Test dùng wall-clock bucket rồi cộng offset ⇒ flaky gần biên.** `p1-entity-state` dedup
+  dùng `Date.now()` + `now+60s` với bucket 15' ⇒ tách 2 mốc khi chạy trong 60s cuối bucket
+  (đo thật: còn 2.9s). Đây là flaky CÓ SẴN, không do P3, nhưng P3 là phase về CI gate nên đã
+  sửa (ghim `now` vào giữa bucket). → Test có window/bucket phải tiêm `now` cố định.
+- **Bait assertion quá rộng:** assert "toàn kết quả không chứa `CUST-00001`" SAI vì ID đó hợp
+  lệ từ Entity Resolver — thay bằng ca mạnh hơn: mock trả id SAI (CUST-00002) nhưng text nói
+  "lan" ⇒ chứng minh id của LLM KHÔNG được dùng làm authoritative (ID chỉ từ resolver).
+- **Review P3 tìm thêm 1 điểm mong manh thật:** route suy từ contract (`routeByCapability`:
+  `route_group` → skill factory) có thể trả route thiếu implementation (factory undefined) ⇒
+  ném ở thời điểm gọi ⇒ sập cả request. Hôm nay mọi group runnable đều có factory nên không
+  test nào đỏ — nhưng entry tương lai thì có. Đã thêm guard fail-closed (thiếu factory + không
+  forbidden ⇒ trả null → UNKNOWN_INTENT) + test phủ mọi capability. Falsify trên /tmp: chèn
+  `route_group:"sales2"` (không factory) ⇒ coverage test đỏ; bỏ guard ⇒ route lọt với
+  factory=undefined (đúng ca sẽ crash). → Bảng ánh xạ suy từ cấu hình phải có guard + test phủ,
+  KHÔNG tin "hiện tại chưa có ca lỗi".
+
 ## Kỷ luật bắt buộc trước khi báo "xong" (tóm tắt từ SKILL.md)
 
 1. Chạy test thật của đúng phạm vi đổi (targeted), dán output nguyên văn.

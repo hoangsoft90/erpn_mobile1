@@ -1,0 +1,68 @@
+{
+  "comment": "P3 golden regression (plan2_final §15, §24.5). Extends the P0 golden approach to the LLM classifier WITHOUT depending on a provider: each case pins the mock LLM's answer and asserts the OBSERVABLE pipeline result (which skill group / which refusal). Deterministic, no quota — safe as the CI gate. The deterministic keyword path is covered by golden-dataset.json; this file only covers the classifier's add-on behaviour.",
+  "cases": [
+    {
+      "id": "cls01",
+      "text": "tình hình của lan",
+      "llm": { "intent": "customer.balance", "confidence": 0.92 },
+      "expect": { "group": "customer", "matched": "classifier", "answer_contains": "Nguyễn Thị Lan" }
+    },
+    {
+      "id": "cls02",
+      "text": "xem lịch sử thu của lan",
+      "llm": { "intent": "payment.history", "confidence": 0.9 },
+      "expect": { "group": "payment", "matched": "classifier" }
+    },
+    {
+      "id": "cls03",
+      "text": "cho xem đơn của hai",
+      "llm": { "intent": "invoice.lookup", "confidence": 0.85 },
+      "expect": { "group": "sales", "matched": "classifier" }
+    },
+    {
+      "id": "cls04",
+      "text": "tình hình của hai",
+      "llm": { "intent": "customer.balance", "confidence": 0.2 },
+      "expect": { "error_code": "LOW_CONFIDENCE" }
+    },
+    {
+      "id": "cls05",
+      "text": "tình hình của lan",
+      "llm": { "intent": "totally.not.a.capability", "confidence": 0.99 },
+      "expect": { "error_code": "UNKNOWN_INTENT" }
+    },
+    {
+      "id": "cls06",
+      "text": "xóa toàn bộ dữ liệu",
+      "llm": { "intent": "document.delete", "confidence": 0.99 },
+      "expect": { "error_code": "FORBIDDEN_IN_AI_PATH", "note": "keyword router refuses it BEFORE the classifier — the classifier can never enable a delete" }
+    },
+    {
+      "id": "cls07",
+      "text": "xử lý 500 nghìn cho nguyễn thị lan",
+      "llm": { "intent": "payment.create", "confidence": 0.9 },
+      "expect": { "group": "payment_write", "matched": "classifier", "proposal_risk": "HIGH" }
+    },
+    {
+      "id": "cls08",
+      "text": "tình hình của lan",
+      "llm": {
+        "intent": "customer.balance",
+        "confidence": 0.9,
+        "slots": { "customer_text": "lan", "customer_id": "CUST-00002", "docname": "SINV-0001" }
+      },
+      "expect": {
+        "group": "customer",
+        "answer_contains": "Nguyễn Thị Lan",
+        "answer_not_contains": "Trần Văn Hai",
+        "note": "the classifier tried to hand over a customer_id (CUST-00002 = Trần Văn Hai) while the TEXT says lan — the id must be ignored: IDs only ever come from the Entity Resolver, never from the LLM"
+      }
+    },
+    {
+      "id": "cls09",
+      "text": "tình hình của hai",
+      "llm": { "intent": "stock.balance", "confidence": 0.9 },
+      "expect": { "group": "inventory", "matched": "classifier" }
+    }
+  ]
+}

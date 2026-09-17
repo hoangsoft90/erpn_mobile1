@@ -37,7 +37,7 @@ import {
   canTransition,
   mapStoreStatus,
 } from "../src/execution-state.mjs";
-import { BusinessDedupLedger, annotateBusinessDedup, businessFingerprint, requiresDedupAck } from "../src/business-dedup.mjs";
+import { BusinessDedupLedger, annotateBusinessDedup, businessFingerprint, requiresDedupAck, DEDUP_BUCKET_MS } from "../src/business-dedup.mjs";
 import { buildPaymentProposal } from "../src/skills/payment-write.mjs";
 
 const LAN = { name: "CUST-00001", customer_name: "Nguyễn Thị Lan" };
@@ -193,7 +193,10 @@ test("P1 §10.5: same real intent in the window ⇒ warn + extra confirm (a diff
       entity: { id: "CUST-00001" },
       params: { amount_vnd: 5_000_000, invoice: "SINV-0001", outstanding_vnd: 5_000_000 },
     });
-    const now = Date.now();
+    // Pin `now` 1 minute INTO a bucket: the 15-minute window is part of the
+    // rule, so using the live clock made this test flake whenever it ran within
+    // 60s of a bucket boundary (fpA vs fpB landed in different buckets).
+    const now = Math.floor(Date.now() / DEDUP_BUCKET_MS) * DEDUP_BUCKET_MS + 60_000;
 
     // Same customer+amount+capability inside the bucket ⇒ identical fingerprint
     // even though these are two DIFFERENT proposals (different command_ids).

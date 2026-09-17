@@ -21,7 +21,7 @@ import * as sales from "./skills/sales.mjs";
 import * as payment from "./skills/payment.mjs";
 import * as inventory from "./skills/inventory.mjs";
 import * as paymentWrite from "./skills/payment-write.mjs";
-import { resolveCapability } from "./capability-contract.mjs";
+import { resolveCapability, getCapability, isForbidden } from "./capability-contract.mjs";
 
 /**
  * Routes need an mcp client + a knownIds set at CALL time, not at import time
@@ -90,5 +90,39 @@ export function routeIntent(text) {
     // instead of re-deriving policy locally.
     capability: hit.id,
     forbidden: hit.forbidden,
+  };
+}
+
+/**
+ * Route by an EXPLICIT capability id (P3 classifier path).
+ *
+ * The classifier produces a semantic intent that must already be a contract
+ * capability; this turns it into the SAME route shape the keyword router
+ * returns so the rest of the pipeline (skills, forbidden check, stub check,
+ * Safety Gateway) is byte-for-byte identical — the classifier only chooses
+ * WHICH group, never HOW a group behaves.
+ *
+ * @param {string} capabilityId a capability id from capabilities.json
+ * @returns {object|null} route shape, or null when the id is not in the contract
+ */
+export function routeByCapability(capabilityId) {
+  const cap = getCapability(capabilityId);
+  if (!cap) return null;
+  const factory = SKILL_FACTORIES[cap.route_group];
+  const forbidden = isForbidden(capabilityId);
+  // A NON-forbidden capability whose route_group has no skill factory cannot
+  // be executed. Fail closed to "unresolved" (the caller then answers
+  // UNKNOWN_INTENT) instead of handing the pipeline a route with an undefined
+  // `factory` — that would throw at call time and take the whole request down.
+  // (Today every runnable group has a factory; this guards a future contract
+  // entry from silently lacking its implementation. Forbidden capabilities keep
+  // their route so the pipeline can still refuse with FORBIDDEN_IN_AI_PATH.)
+  if (!forbidden && typeof factory !== "function") return null;
+  return {
+    group: cap.route_group,
+    factory,
+    matched: "classifier",
+    capability: capabilityId,
+    forbidden,
   };
 }

@@ -19,7 +19,9 @@
  */
 
 import { createMcpClient, MOCK_SERVER } from "./client.mjs";
-import { routeIntent } from "./router.mjs";
+import { routeIntent, routeByCapability } from "./router.mjs";
+// ── P3 (plan2_final §15): LLM classifier for sentences the keyword router misses ──
+import { classifyIntent, classifierConfig } from "./classifier.mjs";
 import { buildPaymentProposal } from "./skills/payment-write.mjs";
 // ── P2 (plan2_final §12 + §14): uncertainty taxonomy + session context ──
 import { SessionContext, CONTEXT_PROVENANCE } from "./session-context.mjs";
@@ -261,7 +263,38 @@ export async function answerQuestion(rawText, opts = {}) {
   try {
     await mcp.initialize();
     const knownIds = new Set();
-    const route = routeIntent(nlp.text);
+    let route = routeIntent(nlp.text);
+
+    // ── P3 (plan2_final §15): when the keyword router does not understand a
+    // sentence, ask the LLM classifier ONCE (bounded timeout) to name the
+    // contract intent, then route through the SAME skill/Safety path. The
+    // classifier only chooses WHICH group — confirm/authz/amount policy are
+    // unchanged, and IDs still come only from the Entity Resolver. If the LLM
+    // is disabled/down/slow/malformed, nothing changes: we fall through to the
+    // rule-only UNKNOWN_INTENT below (never a blind 500).
+    if (!route) {
+      const classified = await classifyIntent(nlp.text, { config: classifierConfig() });
+      if (classified.ok && classified.intent && !classified.low_confidence) {
+        const byCapability = routeByCapability(classified.intent);
+        if (byCapability) route = byCapability;
+      } else if (classified.ok) {
+        // The model answered but is not confident enough to act on a guess —
+        // ask the user again (P2 taxonomy copy), not a bare "I don't know".
+        return withUncertainty({
+          question: rawText,
+          normalized: nlp,
+          routed: false,
+          answer: null,
+          error_code: "LOW_CONFIDENCE",
+          reason: classified.intent
+            ? `phân loại chưa đủ chắc (intent=${classified.intent}, confidence=${classified.confidence}) — cần nói rõ hơn`
+            : "phân loại chưa xác định được ý định — cần nói rõ hơn",
+          needs_clarification: true,
+          classifier: { used: true, intent: classified.intent ?? null, confidence: classified.confidence },
+          proposal: null,
+        });
+      }
+    }
 
     if (!route) {
       return withUncertainty({
