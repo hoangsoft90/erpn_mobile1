@@ -152,6 +152,26 @@ class ChatTurn {
   /// Phase 6 proposal card source (null = no proposal this turn).
   final ActionProposal? proposal;
 
+  /// True while this turn carries an action proposal that has NO final outcome
+  /// yet: not refused, and still offering its confirm affordance.
+  ///
+  /// Safety rule (2026-09-16, B.2): the chat trimmer must NEVER drop such a
+  /// turn, no matter how old it is — losing the visible record of a pending
+  /// write intent because the chat scrolled long is exactly the kind of silent
+  /// data loss this project refuses. A refused card (`isRejected`) is terminal
+  /// and trimmable; a plain read turn has no proposal and is trimmable.
+  ///
+  /// Limitation: a card that WAS executed successfully but whose result only
+  /// lives in widget RAM (option (b), result42 — no schema change) still looks
+  /// pending here, so it too is kept. Keeping an extra turn is safe; dropping a
+  /// pending one is not, so the rule errs on the safe side.
+  bool get hasPendingProposal {
+    final p = proposal;
+    if (p == null) return false;
+    if (p.isRejected) return false;
+    return p.confirmable;
+  }
+
   Map<String, dynamic> toJson() => {
         'question': question,
         'answer': answer,

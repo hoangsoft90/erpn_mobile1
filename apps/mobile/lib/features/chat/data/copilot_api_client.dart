@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:dio/dio.dart';
 
+import '../../../core/settings/app_settings_service.dart';
 import 'chat_models.dart';
 
 /// Failures carry Vietnamese messages — the UI shows them verbatim.
@@ -31,23 +32,68 @@ class CopilotServerException extends CopilotException {
 ///   POST `/ask`    {text} -> {ok:true, result:{...}} | {ok:false, error}
 ///   GET  `/health` -> {ok:true, service, port}
 class CopilotApiClient {
-  CopilotApiClient({required this.dio}) {
+  CopilotApiClient({
+    required this.dio,
+    this.settings,
+    this.fallbackBaseUrl,
+  }) {
     // Server policy (2026-09-14): non-loopback binds require HTTP basic auth.
-    // The app sends credentials only when they were compiled in via dart-define
-    // — no credentials in code, no silent fallback to anonymous.
+    // The compiled-in credentials are the FALLBACK; a value saved in the
+    // Settings screen takes precedence (see [_applySettings]).
     final user = const String.fromEnvironment('COPILOT_AUTH_USER');
     final pass = const String.fromEnvironment('COPILOT_AUTH_PASSWORD');
     if (user.isNotEmpty && pass.isNotEmpty) {
-      dio.options.headers['authorization'] =
+      _compiledAuthHeader =
           'Basic ${base64Encode(utf8.encode('$user:$pass'))}';
+      dio.options.headers['authorization'] = _compiledAuthHeader;
     }
   }
 
   final Dio dio;
 
+  /// Live user settings (nullable so unit tests can construct the client
+  /// without one — behaviour then equals the pre-Settings app).
+  final AppSettingsService? settings;
+
+  /// The `--dart-define=COPILOT_BASE_URL` value, used when Settings holds no
+  /// URL. Null in tests, where [Dio.options.baseUrl] is the base instead.
+  final String? fallbackBaseUrl;
+
+  /// Auth header compiled in via `--dart-define` (null when none) — restored
+  /// whenever the Settings screen has no complete credentials saved.
+  String? _compiledAuthHeader;
+
+  /// Applies the CURRENT settings to the Dio options just before a request.
+  ///
+  /// Called on every [ask] so changing the URL/credentials in the Settings
+  /// screen takes effect immediately, with no app restart and no cached copy.
+  /// Precedence: saved settings > compiled-in dart-define > Dio defaults.
+  void _applySettings() {
+    final s = settings;
+    final savedBase = s?.gatewayBaseUrl ?? '';
+    if (savedBase.isNotEmpty) {
+      // Trim a trailing slash so '/ask' never becomes '//ask'.
+      dio.options.baseUrl = savedBase.replaceAll(RegExp(r'/+$'), '');
+    } else if (fallbackBaseUrl != null && fallbackBaseUrl!.isNotEmpty) {
+      dio.options.baseUrl = fallbackBaseUrl!;
+    }
+
+    final user = s?.gatewayAuthUser ?? '';
+    final pass = s?.gatewayAuthPassword ?? '';
+    final auth = (user.isNotEmpty && pass.isNotEmpty)
+        ? 'Basic ${base64Encode(utf8.encode('$user:$pass'))}'
+        : _compiledAuthHeader;
+    if (auth != null) {
+      dio.options.headers['authorization'] = auth;
+    } else {
+      dio.options.headers.remove('authorization');
+    }
+  }
+
   /// Throws [CopilotException] subclasses — the controller maps them to UI
   /// state; the UI must never see a raw DioError.
   Future<AskResult> ask(String text) async {
+    _applySettings();
     try {
       final res = await dio.post<Map<String, dynamic>>(
         '/ask',

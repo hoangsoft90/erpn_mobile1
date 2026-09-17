@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 import '../../../app/providers.dart';
+import '../data/chat_history_service.dart';
 import '../data/chat_models.dart';
 import '../data/copilot_api_client.dart';
 
@@ -122,15 +123,29 @@ class ChatController extends _$ChatController {
       );
     }).toList();
     if (!changed) return;
+    // Deliberately NO trimming here (review 2026-09-17). B.2 trims "after each
+    // appended turn", and a refusal is not an append. Worse: rejecting a card
+    // clears its hasPendingProposal, so running the cap here would drop the
+    // very card the user just tried to confirm (it is usually the oldest) —
+    // exactly when they need to read WHY it was refused. Proven by
+    // chat_history_trim_test (6 turns → 5 without this guard).
     state = AsyncData(current.copyWith(turns: turns));
     await ref.read(chatHistoryServiceProvider).save(turns);
   }
 
   Future<void> _append(ChatTurn turn) async {
     final current = state.value ?? const ChatState();
-    final turns = [...current.turns, turn];
+    // B.2 (2026-09-16): cap the history at the user's maxChatItems, dropping
+    // the OLDEST turns first — but never a turn with a pending proposal. The
+    // rule lives in ChatHistoryService.trimTurns so the in-memory list and the
+    // persisted list are trimmed identically.
+    final maxItems = ref.read(appSettingsServiceProvider).maxChatItems;
+    final turns =
+        ChatHistoryService.trimTurns([...current.turns, turn], maxItems);
     state = AsyncData(current.copyWith(turns: turns, isLoading: false));
-    await ref.read(chatHistoryServiceProvider).save(turns);
+    await ref
+        .read(chatHistoryServiceProvider)
+        .save(turns, maxItems: maxItems);
   }
 
   Future<void> _recordFailure(String question, String message) async {

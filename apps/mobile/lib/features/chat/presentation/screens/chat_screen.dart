@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../../../app/providers.dart';
 import '../../../../app/theme/app_theme.dart';
@@ -106,6 +107,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               icon: const Icon(Icons.delete_outline),
               onPressed: _confirmClear,
             ),
+          IconButton(
+            tooltip: 'Cài đặt',
+            icon: const Icon(Icons.settings_outlined),
+            onPressed: () => context.push('/settings'),
+          ),
         ],
       ),
       body: SafeArea(

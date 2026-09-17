@@ -79,6 +79,9 @@ void main() {
     final service = _DelayedHistoryService();
     final container = ProviderContainer(
       overrides: [
+        // Settings provider (history cap) needs prefs; null = storage
+        // unavailable ⇒ defaults (20).
+        sharedPreferencesProvider.overrideWithValue(null),
         chatHistoryServiceProvider.overrideWithValue(service),
         copilotApiClientProvider.overrideWithValue(
           CopilotApiClient(
@@ -209,7 +212,7 @@ class _DelayedHistoryService extends ChatHistoryService {
   }
 
   @override
-  Future<void> save(List<ChatTurn> turns) async {
+  Future<void> save(List<ChatTurn> turns, {int? maxItems}) async {
     savedTurns = turns;
   }
 }

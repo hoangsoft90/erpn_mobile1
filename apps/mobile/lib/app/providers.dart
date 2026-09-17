@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/constants/app_constants.dart';
+import '../core/settings/app_settings_service.dart';
 import '../features/chat/data/chat_history_service.dart';
 import '../features/chat/data/copilot_api_client.dart';
 
@@ -40,7 +41,13 @@ final dioProvider = Provider<Dio>((ref) {
 });
 
 final copilotApiClientProvider = Provider<CopilotApiClient>(
-  (ref) => CopilotApiClient(dio: ref.watch(dioProvider)),
+  (ref) => CopilotApiClient(
+    dio: ref.watch(dioProvider),
+    // Read on EVERY request (no cached-at-boot copy) so the Settings screen
+    // takes effect immediately — see CopilotApiClient.ask().
+    settings: ref.watch(appSettingsServiceProvider),
+    fallbackBaseUrl: ref.watch(appEnvironmentProvider).copilotBaseUrl,
+  ),
 );
 
 /// Overridden in main() after SharedPreferences.getInstance().
@@ -51,6 +58,13 @@ final sharedPreferencesProvider = Provider<SharedPreferences?>((ref) {
     'sharedPreferencesProvider must be overridden in main()',
   );
 });
+
+/// User-editable settings (gateway URL/auth, history cap). Backed by the same
+/// SharedPreferences instance as the chat history. Its getters are read LIVE by
+/// CopilotApiClient on every request, so a change applies with no restart.
+final appSettingsServiceProvider = Provider<AppSettingsService>(
+  (ref) => AppSettingsService(prefs: ref.watch(sharedPreferencesProvider)),
+);
 
 final chatHistoryServiceProvider = Provider<ChatHistoryService>(
   (ref) => ChatHistoryService(prefs: ref.watch(sharedPreferencesProvider)),
