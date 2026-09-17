@@ -84,6 +84,13 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final storedMax = await settings.saveMaxChatItems(
       int.parse(_maxItemsController.text.trim()),
     );
+    // Reactivity (review 2026-09-17, found via the chat footer): the service's
+    // getters read prefs live, but a plain Provider does NOT notify its
+    // watchers when only the underlying values change. Invalidate so every
+    // watcher (chat footer, API client provider) rebuilds with the saved
+    // values — this is what makes Save actually apply everywhere, not just in
+    // the next request.
+    ref.invalidate(appSettingsServiceProvider);
     if (!mounted) return;
     setState(() {
       _saving = false;

@@ -85,7 +85,17 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   Widget build(BuildContext context) {
     final chatAsync = ref.watch(chatControllerProvider);
     final chat = chatAsync.value ?? const ChatState();
-    final baseUrl = ref.watch(appEnvironmentProvider).copilotBaseUrl;
+    // The EFFECTIVE base URL: a value saved in Settings wins, otherwise the
+    // compiled-in --dart-define. Watched (not read once) so returning from the
+    // Settings screen re-renders this footer with the new URL (review
+    // 2026-09-17: it used to read only the static dart-define value, so a
+    // successfully saved URL never showed up here).
+    final baseUrl = ref
+            .watch(appSettingsServiceProvider)
+            .gatewayBaseUrl
+            .isNotEmpty
+        ? ref.watch(appSettingsServiceProvider).gatewayBaseUrl
+        : ref.watch(appEnvironmentProvider).copilotBaseUrl;
 
     ref.listen(chatControllerProvider, (prev, next) {
       final err = next.value?.lastError;
