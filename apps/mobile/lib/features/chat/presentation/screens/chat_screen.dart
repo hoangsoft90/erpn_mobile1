@@ -295,12 +295,16 @@ class _InputBarState extends ConsumerState<_InputBar> {
       // and _onSpeechResult ignores results that arrive while not listening.
       setState(() {
         _listening = true;
+        // A SOFT note, never an error. `localeVerified` reports only what the
+        // device's ON-DEVICE locale list contained; the online recognizer
+        // handles Vietnamese fine without it (bug P6: Gboard understood
+        // Vietnamese while this screen claimed the phone had no Vietnamese
+        // recognizer). The mic still works — so the note is an accuracy hint,
+        // not a refusal.
         _noticeIsError = false;
-        // Device without a Vietnamese recognizer still works — just less
-        // accurate, and the user is told to re-read before sending.
-        _notice = _speech.localeId == null
-            ? 'Máy không có bộ nhận dạng tiếng Việt — hãy đọc kỹ lại câu chữ trước khi gửi.'
-            : null;
+        _notice = _speech.localeVerified
+            ? null
+            : 'Máy không liệt kê tiếng Việt trong danh sách nhận dạng — vẫn thử nhận dạng tiếng Việt, nên đọc lại câu chữ trước khi gửi.';
       });
 
       await _speech.listen(onResult: _onSpeechResult, onStatus: _onSpeechStatus);
@@ -328,7 +332,10 @@ class _InputBarState extends ConsumerState<_InputBar> {
 
   String _deniedOrUnavailable(SpeechStatus status) => status == SpeechStatus.denied
       ? 'Chưa được cấp quyền micro. Mở Cài đặt của điện thoại để bật quyền ghi âm rồi thử lại.'
-      : 'Thiết bị này không có bộ nhận dạng giọng nói. Bạn nhập bằng bàn phím như bình thường.';
+      // Also used when the recognizer refuses the LANGUAGE (not just when the
+      // device has no recognizer at all), so the wording covers both and never
+      // tells the user their phone is incapable when it is not.
+      : 'Không dùng được nhận dạng giọng nói trên máy này. Bạn nhập bằng bàn phím như bình thường, hoặc thử lại nút micro.';
 
   void _onSpeechResult(String transcript, bool isFinal) {
     if (!mounted) return;

@@ -61,11 +61,16 @@ class _FakeSpeech implements SpeechService {
   _FakeSpeech({
     this.initResult = SpeechStatus.idle,
     this.locale = 'vi_VN',
+    this.localeIsVerified = true,
     this.throwOnListen = false,
   });
 
   SpeechStatus initResult;
   String? locale;
+
+  /// Mirrors [SpeechService.localeVerified]: `false` = the device's list had no
+  /// `vi` entry, which is NOT the same as "Vietnamese unsupported" (bug P6).
+  bool localeIsVerified;
   bool throwOnListen;
 
   /// Holds initialize() open so a second tap can land while the first mic
@@ -91,6 +96,9 @@ class _FakeSpeech implements SpeechService {
 
   @override
   String? get localeId => locale;
+
+  @override
+  bool get localeVerified => localeIsVerified;
 
   @override
   bool get isListening => _listening;
@@ -269,7 +277,8 @@ void main() {
     await tester.tap(find.byIcon(Icons.mic_none));
     await tester.pumpAndSettle();
 
-    expect(find.textContaining('không có bộ nhận dạng giọng nói'), findsOneWidget);
+    expect(find.textContaining('Không dùng được nhận dạng giọng nói'),
+        findsOneWidget);
     expect(rec.paths, isEmpty);
   });
 
@@ -291,20 +300,45 @@ void main() {
         reason: 'the button must leave the listening state');
   });
 
-  testWidgets('device with no Vietnamese locale → fallback note',
+  // Bug P6: the device's locale list has no `vi` entry (Android lists only the
+  // on-device recognizer) even though the online one understands Vietnamese
+  // perfectly — Gboard did, and the app still claimed Vietnamese was missing.
+  // The mic must WORK, with a soft accuracy hint instead of a refusal.
+  testWidgets('device with no Vietnamese in the locale list → hint, not refusal',
       (WidgetTester tester) async {
-    final speech = _FakeSpeech(locale: null);
+    final speech = _FakeSpeech(locale: 'vi_VN', localeIsVerified: false);
     final rec = _Recorder();
     await _pumpChat(tester, speech: speech, rec: rec);
 
     await tester.tap(find.byIcon(Icons.mic_none));
     await tester.pumpAndSettle();
 
-    expect(find.textContaining('không có bộ nhận dạng tiếng Việt'),
-        findsOneWidget);
-    // It still listens — just warned.
+    expect(find.textContaining('không liệt kê tiếng Việt'), findsOneWidget);
+    expect(find.textContaining('không có bộ nhận dạng tiếng Việt'), findsNothing,
+        reason: 'missing from the list ≠ unsupported — bug P6');
+    // It still listens — just hinted.
     expect(speech.listenCount, 1);
-    // …and the warning must NOT hide the "listening" feedback.
+    // …and the hint must NOT hide the "listening" feedback.
+    expect(find.textContaining('Đang nghe'), findsOneWidget);
+
+    // The heart of the bug: dictation still fills the field and still does not
+    // send anything.
+    speech.emit('chị Lan còn nợ bao nhiêu', isFinal: true);
+    await tester.pumpAndSettle();
+    expect(_fieldText(tester), 'chị Lan còn nợ bao nhiêu');
+    expect(rec.paths, isEmpty);
+  });
+
+  testWidgets('a verified Vietnamese locale shows no hint at all',
+      (WidgetTester tester) async {
+    final speech = _FakeSpeech();
+    final rec = _Recorder();
+    await _pumpChat(tester, speech: speech, rec: rec);
+
+    await tester.tap(find.byIcon(Icons.mic_none));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('không liệt kê tiếng Việt'), findsNothing);
     expect(find.textContaining('Đang nghe'), findsOneWidget);
   });
 
@@ -470,7 +504,8 @@ void main() {
     await tester.tap(find.byIcon(Icons.mic_none));
     await tester.pumpAndSettle();
 
-    expect(find.textContaining('không có bộ nhận dạng giọng nói'), findsOneWidget);
+    expect(find.textContaining('Không dùng được nhận dạng giọng nói'),
+        findsOneWidget);
     expect(find.byIcon(Icons.mic_none), findsOneWidget);
     expect(rec.paths, isEmpty);
   });

@@ -48,9 +48,18 @@ abstract class SpeechService {
   /// must surface that verbatim instead of failing silently.
   Future<SpeechStatus> initialize();
 
-  /// The Vietnamese locale actually in use, or null when the device only offers
-  /// non-Vietnamese locales (the UI shows a "may be inaccurate" note).
+  /// The locale the recognizer is ASKED for — always Vietnamese after a
+  /// successful [initialize], whether or not the device advertised it.
   String? get localeId;
+
+  /// Whether the device's own locale list actually contained Vietnamese.
+  ///
+  /// `false` does NOT mean Vietnamese is unsupported: Android's list reports
+  /// only the ON-DEVICE recognizer, and there is no API for the online one's
+  /// languages (plugin doc, `locales()`). Google's online recognizer handles
+  /// Vietnamese fine on a device whose list has no `vi` entry, so the UI may
+  /// only show a soft "check the wording" note — never a refusal.
+  bool get localeVerified;
 
   /// Whether a dictation session is currently open.
   bool get isListening;
@@ -78,9 +87,15 @@ class SystemSpeechService implements SpeechService {
 
   final SpeechToText _speech;
 
+  /// Asked for when the device's list has no Vietnamese entry. Android turns
+  /// the `_` into `-` before handing it to `EXTRA_LANGUAGE`, so `vi_VN` is a
+  /// valid BCP-47 tag (`vi-VN`).
+  static const String fallbackLocaleId = 'vi_VN';
+
   bool _available = false;
   bool _permissionDenied = false;
   String? _localeId;
+  bool _localeVerified = false;
   SpeechStatusCallback? _onStatus;
 
   /// Bumped on every listen/stop/cancel. A recognizer in teardown can still
@@ -91,6 +106,9 @@ class SystemSpeechService implements SpeechService {
 
   @override
   String? get localeId => _localeId;
+
+  @override
+  bool get localeVerified => _localeVerified;
 
   @override
   bool get isListening => _speech.isListening;
@@ -108,24 +126,31 @@ class SystemSpeechService implements SpeechService {
     if (!_available) {
       return _permissionDenied ? SpeechStatus.denied : SpeechStatus.unavailable;
     }
-    _localeId = await _pickVietnameseLocale();
+    await _pickVietnameseLocale();
     return SpeechStatus.idle;
   }
 
-  /// `vi_VN` when the device has one (the phase's preference); null otherwise,
-  /// in which case we let the OS use its default locale and the UI warns.
-  Future<String?> _pickVietnameseLocale() async {
+  /// Uses the device's own `vi*` entry when it has one. Otherwise still asks
+  /// for [fallbackLocaleId] instead of giving up: an empty (or Vietnamese-less)
+  /// `locales()` only describes the ON-DEVICE recognizer, and bugfix P6 showed
+  /// the online one recognizing Vietnamese perfectly while this list had no
+  /// `vi` entry — the old code then showed a bogus "no Vietnamese recognizer"
+  /// warning and let the OS pick an arbitrary locale.
+  Future<void> _pickVietnameseLocale() async {
+    _localeVerified = false;
     try {
       final locales = await _speech.locales();
       for (final locale in locales) {
         if (locale.localeId.toLowerCase().startsWith('vi')) {
-          return locale.localeId;
+          _localeId = locale.localeId;
+          _localeVerified = true;
+          return;
         }
       }
     } catch (_) {
-      // locales() is best-effort; the OS default is an acceptable fallback.
+      // locales() is best-effort; the fallback below is the normal path.
     }
-    return null;
+    _localeId = fallbackLocaleId;
   }
 
   @override
@@ -144,26 +169,51 @@ class SystemSpeechService implements SpeechService {
       }
     }
 
+    void forward(SpeechRecognitionResult result) {
+      if (session != _session) return; // session ended — stale result
+      onResult(result.recognizedWords, result.finalResult);
+    }
+
+    final requested = _localeId;
     try {
-      await _speech.listen(
-        onResult: (SpeechRecognitionResult result) {
-          if (session != _session) return; // session ended — stale result
-          onResult(result.recognizedWords, result.finalResult);
-        },
-        // A shop-counter utterance is short; a long open mic just burns battery.
-        listenOptions: SpeechListenOptions(
-          localeId: _localeId,
-          listenFor: const Duration(seconds: 30),
-          pauseFor: const Duration(seconds: 3),
-        ),
-      );
+      await _startListening(forward, requested);
+      onStatus(SpeechStatus.listening);
+      return;
+    } catch (_) {
+      // Forcing a locale the device never advertised can make the platform
+      // reject the session outright. That is NOT "no recognizer" — retry once
+      // with the device default before saying the mic is unusable.
+      if (requested == null || _localeVerified) {
+        _available = false;
+        onStatus(SpeechStatus.unavailable);
+        return;
+      }
+      _localeId = null; // the device default takes over from here
+    }
+
+    try {
+      await _startListening(forward, null);
       onStatus(SpeechStatus.listening);
     } catch (_) {
-      // A platform that throws on listen() is unusable, not fatal to the app.
+      // A platform that throws on listen() twice is unusable, not fatal.
       _available = false;
       onStatus(SpeechStatus.unavailable);
     }
   }
+
+  Future<void> _startListening(
+    SpeechResultListener onResult,
+    String? localeId,
+  ) =>
+      _speech.listen(
+        onResult: onResult,
+        // A shop-counter utterance is short; a long open mic just burns battery.
+        listenOptions: SpeechListenOptions(
+          localeId: localeId,
+          listenFor: const Duration(seconds: 30),
+          pauseFor: const Duration(seconds: 3),
+        ),
+      );
 
   @override
   Future<void> stop() async {
@@ -180,6 +230,17 @@ class SystemSpeechService implements SpeechService {
   }
 
   void _handleError(SpeechRecognitionError error) {
+    // Checked BEFORE the `permanent` flag below: a language refusal must not
+    // permanently disable the service. The online recognizer may still do
+    // Vietnamese, so stop forcing the locale and let the next tap use the
+    // device default — the reason is reported, but the mic stays usable.
+    if (error.errorMsg == 'error_language_not_supported' ||
+        error.errorMsg == 'error_language_unavailable') {
+      _localeId = null;
+      _localeVerified = false;
+      _onStatus?.call(SpeechStatus.unavailable);
+      return;
+    }
     if (error.permanent) _available = false;
     if (error.errorMsg == 'error_permission') {
       _permissionDenied = true;
