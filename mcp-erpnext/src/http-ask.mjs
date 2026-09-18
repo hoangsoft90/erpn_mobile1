@@ -37,7 +37,7 @@
 
 import http from "node:http";
 import { timingSafeEqual, createHash } from "node:crypto";
-import { answerQuestion, pickServerScript } from "./copilot-server.mjs";
+import { answerQuestion, answerQuestionLogged, pickServerScript } from "./copilot-server.mjs";
 import { IdempotencyStore, isValidCommandId } from "./idempotency.mjs";
 import { reconcilePaymentEntry } from "./skills/payment-write.mjs";
 import { createMcpClient } from "./client.mjs";
@@ -352,7 +352,7 @@ export function createAskServer({ port = 8788, host = "127.0.0.1", policy = null
         // cancel it, and an uncleared timer keeps the event loop alive for
         // the full 120s per request (broke node --test + clean shutdown).
         const result = await Promise.race([
-          answerQuestion(text, { pickedEntityId }),
+          answerQuestionLogged(text, { pickedEntityId }),
           new Promise((_, reject) => {
             deadlineTimer = setTimeout(
               () => reject(new Error("ask deadline exceeded (120s)")),

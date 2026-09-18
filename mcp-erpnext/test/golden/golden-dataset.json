@@ -59,6 +59,9 @@
     { "id": "r23", "bucket": "read", "text": "hóa đơn chưa thanh toán của Đại lý Hoàng Long", "expect": { "capability": "invoice.lookup" } },
     { "id": "r24", "bucket": "read", "text": "invoice của Công ty ABC", "expect": { "capability": "invoice.lookup" } },
 
+    { "id": "r24a", "bucket": "read", "text": "doanh số hôm nay thế nào", "expect": { "capability": "invoice.lookup" } },
+    { "id": "r24b", "bucket": "read", "text": "doanh số tháng này", "expect": { "capability": "invoice.lookup" } },
+
     { "id": "r25", "bucket": "read", "text": "tồn kho cám heo còn bao nhiêu", "expect": { "capability": "stock.balance" } },
     { "id": "r26", "bucket": "read", "text": "kho còn mấy bao cám gà", "expect": { "capability": "stock.balance" } },
     { "id": "r27", "bucket": "read", "text": "kiểm kho cám heo 25kg", "expect": { "capability": "stock.balance" } },

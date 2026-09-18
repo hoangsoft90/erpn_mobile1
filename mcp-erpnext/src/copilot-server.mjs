@@ -23,6 +23,8 @@ import { routeIntent, routeByCapability } from "./router.mjs";
 // ── P3 (plan2_final §15): LLM classifier for sentences the keyword router misses ──
 import { classifyIntent, classifierConfig } from "./classifier.mjs";
 import { buildPaymentProposal } from "./skills/payment-write.mjs";
+// ── P4 (plan2_final §12 + §19): structured learning log for refusals/signals ──
+import { logObservation } from "./learning-log.mjs";
 // ── P2 (plan2_final §12 + §14): uncertainty taxonomy + session context ──
 import { SessionContext, CONTEXT_PROVENANCE } from "./session-context.mjs";
 import { uncertaintyCopy, toUncertaintyCode, UNCERTAINTY_CODES } from "./uncertainty.mjs";
@@ -696,6 +698,21 @@ export async function answerQuestion(rawText, opts = {}) {
   }
 }
 
+/**
+ * P4 learning loop (plan2_final §12): log the outcome of every question as a
+ * structured observation BEFORE returning — refusals (UNKNOWN_INTENT /
+ * KNOWN_INTENT_UNIMPLEMENTED) are the product signal a human clusters and
+ * turns into contract-trigger updates. Best-effort by design: a broken log
+ * dir must never change the answer (learning-log.mjs never throws through).
+ * The MCP tool path (copilotAsk) and the HTTP path (/ask) BOTH call this
+ * wrapper — log once per question, on both transports.
+ */
+export async function answerQuestionLogged(rawText, opts = {}) {
+  const result = await answerQuestion(rawText, opts);
+  logObservation(result);
+  return result;
+}
+
 /** The one tool dsh sees. */
 async function copilotAsk(args) {
   const rawText = args?.text;
@@ -704,7 +721,8 @@ async function copilotAsk(args) {
   }
   // P1 §4.4: the candidate picker sends the chosen ERPNext id back through the
   // tool. It is re-validated against a fresh read server-side — never trusted.
-  const structured = await answerQuestion(rawText.trim(), {
+  // P4: same logged wrapper as /ask — dsh questions are learning signals too.
+  const structured = await answerQuestionLogged(rawText.trim(), {
     pickedEntityId: typeof args?.entity_id === "string" ? args.entity_id : null,
   });
   return {

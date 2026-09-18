@@ -64,3 +64,7 @@ idempotency-store/
 # P0 kill switch (plan2_final §24.3) — the flag file is OPERATOR state:
 # creating mcp-erpnext/control/read-only.flag must never appear as a diff.
 mcp-erpnext/control/
+
+# P4 learning loop (plan2_final §12): user questions + outcomes are runtime
+# data, never committed — cluster reports are produced from them on demand.
+learning-log/
