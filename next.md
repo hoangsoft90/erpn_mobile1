@@ -97,7 +97,14 @@ Lộ trình production trong `.plan/phases2/` (nguồn kiến trúc: `.plan/plan
 - **Commit đợt review vòng 3**: `21d77ff` (test E2E per-capability + `docs/kill-switch-runbook.md`) · `d6295ab` (bài học vòng 3)
 
 **Phases2 lõi đã ĐÓNG: P0 `b4acdb1` · P1 `ee93f13` · P2 `33ff725` · P3 `c38e4ea` · P4 `d7e9ba9` · P5 `6318eca` · P7 `3e6240a` · P10-slice `7cb2798`/`21d77ff`/`d6295ab` (tất cả đã push).**
-Bước kỹ thuật tiếp theo (khi user đủ điều kiện): **P8** (multi-user, cần credential) · **P9** (skill mới, cần acceptance trên ERPNext thật) — riêng **P10 full** (DR drill, dashboard, load test, rate-limit store phân tán) và **P6** (thiếu audio) vẫn hoãn.
+
+### F7 + F7-2 + Golden gaps (2026-09-18) ✅ ĐÃ COMMIT `3b41313` · `eb4ba34` · `c5db7cc` (đã push)
+
+- **F7 — policy (a) do user chọn**: refusal bảo trì (`SYSTEM_MAINTENANCE`/`CAPABILITY_DISABLED`) xảy ra **TRƯỚC khi thử ghi** ⇒ không phải một lần thử — `job-queue.mjs` thêm `isTemporaryRefusal()` + nhánh drain: job về lại RETRYING, attempts roll back về 0, backoff hẹn lại, JSONL ghi `TEMPORARY_REFUSAL`; tắt switch ⇒ tự chạy lại VERIFIED đúng 1 lần; lỗi ghi thật giữ nguyên FAILED-terminal. `result53.txt`
+- **F7-2 — submit switch**: setting **"Cho phép nộp phiếu thu thật"** (mặc định OFF, dialog xác nhận riêng) · cờ **frozen vào proposal snapshot lúc hỏi** (không đọc lại lúc execute) · ON ⇒ sau draft OK gọi `erpnext_doc_submit` (tool thật, read từ source 3.0.4) qua write gate mở rộng fail-closed; submit lỗi giữa chừng ⇒ **PARTIAL** ("đã tạo nháp, submit lỗi: …, cần submit tay trên ERPNext") — không FAILED · Flutter 80/80 (+11 test) · falsify 3 lớp độc lập
+- **Golden gaps k18/m15 sửa xong**: "một triệu hai" = 1.200.000 (shorthand có luật chặt chống va danh xưng); "Con Linh" resolve thành tên "Linh" — Golden runner **0 miss**, gate P9 mở · Python 62
+- Suite: **Python 62 · Node 250 · Flutter 80 · analyze 0** — bằng chứng `result53.txt` + `result54.txt`
+Bước kỹ thuật tiếp theo (khi user đủ điều kiện): **P8** (multi-user, cần credential) · **P9** (skill mới — **gate ĐÃ MỞ** sau khi Golden 0 miss, cần user ra lệnh) — riêng **P10 full** (DR drill, dashboard, load test, rate-limit store phân tán) và **P6** (thiếu audio) vẫn hoãn.
 ### F7 — ĐÃ GIẢI QUYẾT (user chọn policy (a), 2026-09-18)
 
 > **Luật mới: bảo trì/kill switch KHÔNG phải một lần thử.**
@@ -217,7 +224,7 @@ Python `src/vietnamese_nlp/`, stdlib thuần, chạy TRƯỚC LLM — cố đị
   - **F2 (UI nói ngược sự thật)** `ListView.builder` dispose card ngoài viewport ⇒ thẻ ĐÃ GHI bị dựng lại sạch,
     nút [Xác nhận] quay lại (probe P2: `success=1/button=0` → `success=0/button=1`) — user chọn **(b)
     `AutomaticKeepAliveClientMixin`** ⇒ **ĐÃ SỬA** (`wantKeepAlive` theo state cục bộ, không ghim mọi card).
-  - **✅ CẢ 3 FIX ĐÃ STAGE, CHỜ USER DUYỆT COMMIT** (`result41.txt` + `result42.txt`): 4 file Dart, 272+/8−;
+  - **✅ CẢ 3 FIX ĐÃ COMMIT `4546997` (đã push cùng đợt `c401b0f`)** (`result41.txt` + `result42.txt`): 4 file Dart, 272+/8−;
     Flutter **39/39** (+5 test hồi quy F1×2 · F3 · F2).
 - **Hạn chế của option (b)**: kết quả ghi nằm trong RAM ⇒ mất khi tắt app (option (a) mới persist — phải đổi schema).
   An toàn tiền KHÔNG phụ thuộc hiển thị: `command_id` được ghim trong history (`ChatTurn` round-trip test) nên lần bấm

@@ -1,0 +1,137 @@
+========================================================================
+RESULT 54 — F7-2 SUBMIT SWITCH + GOLDEN GAPS k18/m15 + COMMIT ĐỢT 2026-09-18
+Timestamp: 2026-09-18 (giờ shell)
+Commit đợt này: 3b41313 (F7, đã duyệt qua result53) · eb4ba34 (F7-2, đã duyệt
+trong chat) · c5db7cc (golden gaps, Python NLP repair-only).
+Quyết định user điều phối phiên: ① F7-2 submit switch (đã duyệt commit), ②
+cập nhật human.md (xoá mục xong, hoãn GitHub Settings), ③ audit p6/p8/p9/p10
+bằng file thật → chọn 1 phase không bị chặn.
+KHÔNG: submit/cancel/delete ERPNext thật (trừ mock), không Phase 4/6/8, không
+VPS design.
+========================================================================
+
+== 1. F7-2 — SUBMIT SWITCH (commit `eb4ba34`, 10 files +530/−29) ==
+Quyết định user (2026-09-18): thêm checkbox "Cho phép nộp phiếu thu thật"
+(mặc định OFF) — bật ON phải qua dialog xác nhận riêng.
+
+Thiết kế chốt:
+- Cờ được FROZEN vào proposal snapshot TẠI LÚC HỎI: client gửi `submit_now`
+  trong body /ask; server (copilot-server.mjs) đóng băng giá trị vào proposal.
+  Card hiển thị đúng những gì user thấy lúc hỏi — user đổi setting giữa chừng
+  không làm lệch giữa "lúc xem" và "lúc bấm".
+- Backend: khi setting=ON, sau khi tạo draft thành công gọi `erpnext_doc_submit`
+  — tool thật, ĐỌC TỪ SOURCE (bản đóng gói 3.0.4, dòng 53741):
+  `erpnext_doc_submit {doctype, name}` → `frappe.client.submit`. KHÔNG đoán tên.
+- Write gate (client.mjs) mở rộng fail-closed: chỉ cho `erpnext_doc_submit`
+  khi doctype = "Payment Entry" (mock in-test phải cấu hình giống hệt).
+- Submit lỗi giữa chừng ⇒ KHÔNG FAILED: trả PARTIAL kèm câu "đã tạo nháp,
+  submit lỗi: <lý do>, cần submit tay trên ERPNext" — draft đã ghi là thực tế,
+  không được bôi đen giao dịch.
+- F7 đã commit trước đó (3b41313): refusal bảo trì = không phải một lần thử.
+
+Thay đổi chính:
+- mcp-erpnext/src/mock-server.mjs: thêm tool `erpnext_doc_submit` (đổi
+  docstatus 0→1 sau khi verify bản ghi) + fault `MOCK_ERP_FAIL_SUBMIT`.
+- mcp-erpnext/src/client.mjs: write gate thêm nhánh submit (Payment Entry).
+- mcp-erpnext/src/skills/payment-write.mjs: builder nhận `opts.submit_now`
+  (snapshot) + executor submit sau draft, phân loại PARTIAL.
+- mcp-erpnext/src/copilot-server.mjs: nhận submitNow từ /ask, truyền builder.
+- mcp-erpnext/src/http-ask.mjs: đọc `submitNow` từ body.
+- Flutter: app_constants (khóa + mặc định false) · app_settings_service
+  (allowSubmitPayment) · copilot_api_client (gửi cờ ở /ask + /execute) ·
+  proposal_card (banner intent + kết quả submit) · settings_screen (checkbox
+  + dialog xác nhận) · chat_controller (đọc setting mỗi lần send).
+
+Lỗi tự bắt trong lúc code (đã sửa ngay):
+- assertReadOnly("erpnext_doc_submit") ném — submit là write verb, guard đúng
+  nhưng lệnh gọi thừa ⇒ bỏ.
+- str_replace 2 bước làm lệch khối ambNote + mất dòng dedup_ack ⇒ dựng lại
+  nguyên khối, verify bằng đọc lại file.
+- 1 test tự viết SAI kỳ vọng: tưởng executor chặn tamper submit_now — thật ra
+  executor TUÂN THỦ snapshot theo thiết kế đã duyệt (client là bên khai báo,
+  server đóng băng lúc /ask). Sửa test khẳng định đúng hợp đồng.
+
+Test (file payment-write 22 → 25):
+- OFF (mặc định) ⇒ chỉ draft, docstatus = 0.
+- ON ⇒ draft + submit, docstatus = 1, đúng 1 lệnh submit.
+- Submit lỗi (MOCK_ERP_FAIL_SUBMIT) ⇒ outcome PARTIAL, draft vẫn tồn tại,
+  message nêu rõ cần submit tay.
+- Wiring /ask: proposal.params.submit_now == giá trị gửi lúc hỏi.
+- client gate: submit trên doctype khác ⇒ bị từ chối fail-closed.
+
+== 2. FLUTTER + FALSIFY ==
+Falsify 3 lớp độc lập (bản sao /tmp, gốc byte-identical sau khôi phục):
+- A: gỡ submit-sau-draft ⇒ 2 test OFF đỏ đúng assertion.
+- B: gỡ phân loại PARTIAL ⇒ test submit-lỗi đỏ.
+- C: gỡ frozen-at-ask (đọc setting lúc execute) ⇒ wiring test đỏ
+  (`false !== true` — đúng assertion cờ đóng băng).
+Lưu ý môi trường falsify: bản sao /tmp phải đủ nlp_service/ + capabilities.json
+ở đúng vị trí — thiếu thì test chết sớm vì nguyên nhân không liên quan guard.
+
+Suite cuối (chạy thật):
+- Python : PYTHONPATH=src python3 -m unittest discover -s tests  → 62/62 OK
+- Node   : cd mcp-erpnext && env -u ERPNEXT_URL -u ERPNEXT_API_KEY \
+           -u ERPNEXT_API_SECRET node --test                  → 250/250 pass
+- Flutter: cd apps/mobile && flutter test                       → 80/80
+- analyze: flutter analyze                                      → 0 issues
+
+== 3. GOLDEN GAPS k18/m15 (commit `c5db7cc`, vùng Python NLP — Phase 1) ==
+Baseline Golden (result44/P0): 6/6 bucket ĐẠT ngưỡng nhưng còn 3 miss thật:
+k18 (kinship "Con Linh") · m15 (money "một triệu hai") · k36 ("Bác sĩ Nam",
+tự pass sau các fix liên quan — p0-result.md đã ghi k36 pass).
+
+Fix m15 — "một triệu hai" = 1.200.000 (src/vietnamese_nlp/money.py):
+- Luật: chữ số đơn lẻ ≠ 0 ngay sau big scale (triệu/tỷ) = hàng trăm của scale
+  đó (2 ≡ 200, 5 ≡ 500).
+- Chống va chạm (tự bắt qua nhiều vòng probe — 4 lỗi của chính fix đầu):
+  (a) chỉ áp sau BIG scale (triệu/tỷ), không áp sau nghìn/củ — "320 nghìn
+  một bao" giữ 320.000;
+  (b) "năm" bare = year/tên người ⇒ KHÔNG merge ("10 triệu năm" vẫn refused),
+  chỉ merge khi theo sau là "trăm" ("2 triệu 5 trăm");
+  (c) "ONES trăm" cuối cụm = shorthand 100 của scale — nhưng "ONES trăm
+  nghìn" = cụm đầy đủ của scale kế, không double-count;
+  (d) dừng cụm ở token phi số ("bao", tên...).
+- Kỳ vọng test sửa theo ngôn ngữ thật, không theo suy đoán: "2 triệu 5 nghìn"
+  = 2.005.000 (đọc literal hợp lệ), "2 triệu 5 bao" chứa "2 triệu" = 2.000.000.
+
+Fix k18 — "Con Linh" (src/vietnamese_nlp/kinship.py):
+- Nguyên nhân: money.py FILLERS chứa "linh"; kinship dùng FILLERS làm tập
+  không-phải-tên ⇒ "Linh" bị nuốt.
+- Fix: "con" đứng SAU tên riêng ("Linh con") không strip; "Con Linh" strip
+  "Con" giữ "Linh". Test hồi quy +1.
+
+Kết quả: Golden runner 0 miss (k18/m15/k36 đều qua) · test hồi quy +2 ·
+Python 60 → 62. **Gate P9 mở** (điều kiện P0–P3 acceptance + Golden targets
+đã đạt — p0-result.md:74-76, p1-result.md:39).
+
+== 4. HUMAN.MD (mục 2 lệnh user) ==
+- Đã xoá 3 mục xong: test APK tại điểm bán · bật tunnel · diễn tập kill-switch.
+- "Dán 3 giá trị GitHub Settings" chuyển xuống mục 3 (HOÃN theo quyết định
+  user) — không còn là việc treo.
+- Còn lại: quyết bật "Cho phép nộp phiếu thu thật" (F7-2) · thu 150 câu audio
+  (chặn P6) · treo: endpoint/VPS, Zen, Gemini flaky, saga §7.
+
+== 5. AUDIT p6/p8/p9/p10 (mục 3 lệnh user — đọc file thật) ==
+| Phase | Trạng thái thật | Bằng chứng |
+|---|---|---|
+| P6 Voice | CHẶN bởi audio human | p6-voice-stt.md "Depends on: Human: thu audio" + human.md mục 2 |
+| P8 RBAC | CHẶN bởi credential/user thật | p10-result.md:82 (gap tự đánh giá) |
+| P9 Skills | Gate "P0–P3 acceptance + Golden targets" CHƯA đạt (k18/m15 đỏ) | p0-result.md:74-76 · p1-result.md:39 |
+| P10 full | Còn lại = human/infra (DR drill, load test, dashboard) | p10-result.md Giới hạn |
+
+Việc không bị chặn rõ ràng nhất = sửa 3 gap Golden (k18/m15/k36) — đúng vùng
+Phase 1 (money.py/kinship.py); các chỉ đạo trước chỉ cấm sửa "trong cùng PR
+phase khác", giờ phases đã đóng ⇒ sửa xong mở gate P9. Đã làm (mục 3).
+
+== 6. COMMITS (đã push change/flutter-chat-mvp) ==
+3b41313 fix(f7): maintenance refusals park the queued job — no attempt burned, auto-retry after the switch lifts
+eb4ba34 feat(f7-2): optional submit-after-create behind an explicit app setting, frozen into the proposal snapshot
+c5db7cc fix(nlp): golden gaps k18/m15 — "một triệu hai" = 1.200.000; "Con Linh" resolves as a name
+Secret scan CLEAN mọi đợt. Working tree sau 3 commit: chỉ còn docs đồng bộ.
+
+== 7. CÒN LẠI / VIỆC CHỈ USER ==
+- F7-2: quyết bật/để tắt setting "Cho phép nộp phiếu thu thật" (human.md mục 1).
+- Thu 150 câu audio → mở P6.
+- P8 cần credential thật; P9 gate đã mở nhưng CHỜ LỆNH user; P10 full = infra.
+- Saga §7 (phase-09) vẫn chờ duyệt riêng.
+- KHÔNG PE thật mới; PE chỉ nháp trừ khi user bật switch + tự xác nhận.
