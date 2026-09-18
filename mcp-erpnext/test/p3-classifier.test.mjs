@@ -29,6 +29,7 @@ import {
   allowedIntents,
   SLOT_KEYS,
   CLASSIFIER_DEFAULTS,
+  classifierConfig,
 } from "../src/classifier.mjs";
 import { getCapability, isForbidden, listCapabilities } from "../src/capability-contract.mjs";
 import { routeByCapability } from "../src/router.mjs";
@@ -333,4 +334,30 @@ test("E2E — a write intent from the classifier still yields a HIGH proposal (c
     mock.server.close();
     nlp.child.kill();
   }
+});
+
+test("classifierConfig — a garbage env number degrades to the SAFE default (never NaN)", () => {
+  // Probed on Node 24: setTimeout(abort, NaN) fires at ~1ms, and
+  // `confidence < NaN` is always false (low-confidence gate silently OFF).
+  // A misconfigured env must fall back to defaults, not disable safety.
+  const bad = classifierConfig({
+    COPILOT_CLASSIFIER_TIMEOUT_MS: "garbage",
+    COPILOT_CLASSIFIER_MIN_CONFIDENCE: "",
+  });
+  assert.equal(bad.timeoutMs, CLASSIFIER_DEFAULTS.timeoutMs);
+  assert.equal(bad.minConfidence, CLASSIFIER_DEFAULTS.minConfidence);
+  // Zero/negative would ALSO disable the gates (timeout 0 = abort at t=0,
+  // minConfidence <= 0 = gate off) — positive-only is the one rule.
+  const zeroNeg = classifierConfig({
+    COPILOT_CLASSIFIER_TIMEOUT_MS: "0",
+    COPILOT_CLASSIFIER_MIN_CONFIDENCE: "-5",
+  });
+  assert.equal(zeroNeg.timeoutMs, CLASSIFIER_DEFAULTS.timeoutMs);
+  assert.equal(zeroNeg.minConfidence, CLASSIFIER_DEFAULTS.minConfidence);
+  const good = classifierConfig({
+    COPILOT_CLASSIFIER_TIMEOUT_MS: "1500",
+    COPILOT_CLASSIFIER_MIN_CONFIDENCE: "0.7",
+  });
+  assert.equal(good.timeoutMs, 1500);
+  assert.equal(good.minConfidence, 0.7);
 });

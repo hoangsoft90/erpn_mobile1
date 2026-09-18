@@ -59,14 +59,32 @@ export const CLASSIFIER_DEFAULTS = Object.freeze({
 
 const MAX_KNOWN_INTENTS_IN_PROMPT = 40;
 
+/**
+ * Env numbers must be FINITE AND POSITIVE or the default is used. Three
+ * concrete fail-opens this guard closes (all probed on Node 24):
+ *  - `Number('garbage')` is NaN → `setTimeout(abort, NaN)` degrades to a 1ms
+ *    timer (classifier aborts at t≈0, misleading TimeoutNaNWarning);
+ *  - `Number('')` is 0 → minConfidence 0 means the low-confidence gate is
+ *    silently OFF (and timeoutMs 0 means abort at t=0);
+ *  - a negative value passes neither check either (negative minConfidence =
+ *    gate off; negative timeout ≈ 1ms).
+ * One rule: non-positive-or-non-finite ⇒ SAFE default. The gate cannot be
+ * turned off via a broken env var — disabling the classifier is done
+ * explicitly with COPILOT_CLASSIFIER=off.
+ */
+function finiteNumber(value, fallback) {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
 /** Resolve classifier config from env (off switch included). */
 export function classifierConfig(env = process.env) {
   return {
     enabled: String(env.COPILOT_CLASSIFIER ?? "on").toLowerCase() !== "off",
     url: env.COPILOT_CLASSIFIER_URL ?? CLASSIFIER_DEFAULTS.url,
     model: env.COPILOT_CLASSIFIER_MODEL ?? CLASSIFIER_DEFAULTS.model,
-    timeoutMs: Number(env.COPILOT_CLASSIFIER_TIMEOUT_MS ?? CLASSIFIER_DEFAULTS.timeoutMs),
-    minConfidence: Number(env.COPILOT_CLASSIFIER_MIN_CONFIDENCE ?? CLASSIFIER_DEFAULTS.minConfidence),
+    timeoutMs: finiteNumber(env.COPILOT_CLASSIFIER_TIMEOUT_MS ?? CLASSIFIER_DEFAULTS.timeoutMs, CLASSIFIER_DEFAULTS.timeoutMs),
+    minConfidence: finiteNumber(env.COPILOT_CLASSIFIER_MIN_CONFIDENCE ?? CLASSIFIER_DEFAULTS.minConfidence, CLASSIFIER_DEFAULTS.minConfidence),
     apiKeyEnv: env.COPILOT_CLASSIFIER_API_KEY_ENV ?? null,
   };
 }

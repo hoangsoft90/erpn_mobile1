@@ -142,6 +142,11 @@
   `Number(null)===0`, `Number(true)===1` nên `confidence:null` được coi là 0 (hợp lệ) thay vì
   bị từ chối. → Luôn type-check `typeof x === "number"` TRƯỚC khi so khoảng; test có ca
   `null`/`true`/`"0.9"`. Bằng chứng: `result47.txt` §6, bài học vào `SKILL.md`.
+- **Env-number guard dùng truthy `n ? n : fallback` vẫn là fail-open (review P3):** `Number('')=0`,
+  `Number('0')=0`, số âm đều TRUTHY ⇒ timeoutMs 0 (abort t≈0), minConfidence ≤0 (gate low-confidence
+  TẮT lặng lẽ) lọt hết. → Luật chốt: `Number.isFinite(n) && n > 0 ? n : fallback` — một luật duy
+  nhất, không truthy; test pin cả garbage/''/0/âm. Falsify chỉ hợp lệ khi bản sao /tmp dùng ĐÚNG
+  bản test MỚI NHẤT (lần falsify đầu FAIL vì copy test cũ, test cũ không có case 0/âm).
 - **Falsify guard nhiều lớp mà chỉ gỡ 1 lớp ⇒ test vẫn xanh (lớp kia che).** Luật "classifier
   không lộ ERP id" có 2 lớp (regex `ID_LIKE` + allowlist `SLOT_KEYS`); thêm `customer_id` vào
   allowlist vẫn PASS vì regex chặn trước — phải gỡ CẢ 2 mới đỏ. → Trước khi falsify: liệt kê
