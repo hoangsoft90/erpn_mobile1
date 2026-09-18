@@ -227,3 +227,25 @@
   từng dòng "KỸ THUẬT XONG/CHỜ DUYỆT" với `git log --oneline`.
 - **`handoff_*.md` là ngoại lệ:** đó là **ảnh chụp** của phiên, giữ nguyên trạng thái lúc viết —
   không phải tài liệu sống, không cần (và không nên) sửa marker trong đó.
+
+## Phiên P8 (2026-09-18) — phân quyền: 2 nguồn danh tính, nhánh chết, và phép đo thay cho phỏng đoán
+
+- **Một khái niệm "ai" duy nhất.** P8 thêm `principal.user_id` trong khi log/rate-limit vẫn dùng
+  `userId` suy từ credential. Hai nguồn trùng nhau trong production nên không test nào đỏ, nhưng
+  chúng TÁCH RỜI được ⇒ audit có thể ghi người khác với người được authorize. Fix: `userId` nay suy
+  TỪ principal. Luật: khi thêm identity, quy mọi chỗ đang suy "ai" (credential/header/IP) về một
+  nguồn; test phải cố tình tách rời 2 nguồn và assert log ghi đúng nguồn phân quyền.
+- **Nhánh chết: test "trông như đã cover".** Gỡ nguyên nhánh allow-list company mà 14/14 vẫn xanh —
+  case duy nhất về company bị chặn bởi nhánh *mismatch* đứng trước. Chỉ khi thêm principal KHÔNG có
+  company pinned (chỉ có `companies: [...]`) thì falsify mới đỏ. Luật: luật có ≥2 nhánh trả cùng
+  refusal ⇒ mỗi nhánh cần một test đi vào ĐÚNG nhánh đó; falsify từng nhánh, đếm pass/fail —
+  fail không đổi = nhánh chưa từng được chạy.
+- **Mã refusal mới phải đối chiếu bảng copy UI.** `COMPANY_SCOPE_REQUIRED` chỉ tồn tại trong 2 file
+  server; `uncertainty.mjs` không biết ⇒ user nhận refusal không có chữ nào. Luật: grep mã mới toàn
+  repo; test liệt kê mọi mã lớp mình phát ra và assert map được + `uncertaintyCopy().message` không rỗng.
+- **"Đo thật" = một lần chạy suite, ghi con số.** Miễn trừ company cho single-tenant ban đầu là
+  ước lượng "đỡ vỡ 29 test"; chạy thật `if (false)` ⇒ **267 → 234 (33 đỏ)**. Con số thật là tài sản
+  thiết kế, ghi vào `p8-result.md`; ước lượng thì không phải.
+- **Đóng phase phân quyền phải duyệt từ danh sách ROUTE, không từ call site.** `runExecute` có đúng
+  2 call site là chưa đủ — `/jobs` và `/execute/cancel` không đụng tới nó nhưng vẫn lộ/đổi dữ liệu
+  của người khác. Mỗi route tự hỏi "route này lộ gì / đổi gì".

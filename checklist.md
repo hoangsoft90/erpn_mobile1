@@ -1,7 +1,7 @@
 # checklist.md — ERPNext Vietnamese Voice Copilot (erpn_mobile1)
 
 Danh sách kiểm tra nhanh: **đã làm / chưa làm / cần hỏi lại**.
-Bằng chứng chi tiết: `result*.txt` (mới nhất = result51) + `.plan/phases/*-result.md`.
+Bằng chứng chi tiết: `result*.txt` (mới nhất = result54) + `.plan/phases2/*-result.md`.
 Trạng thái roadmap chi tiết nằm ở `next.md` — file này KHÔNG nhân bản, chỉ tóm tắt.
 
 ---
@@ -277,7 +277,7 @@ Trạng thái roadmap chi tiết nằm ở `next.md` — file này KHÔNG nhân 
 
 ## Note
 
-- **P1 đang chờ duyệt commit** — danh sách file: `mcp-erpnext/src/{entity-resolution,execution-state,business-dedup,action-proposal,proposal-freshness,safety-gateway,copilot-server,http-ask}.mjs` + `capabilities.json` + tests mới/sửa + Flutter (chat_models/proposal_card/chat_bubble/entity_picker/copilot_api_client/chat_controller) + `result45.txt`. KHÔNG stage `.env`/store/`.plan`.
+- **Phases2 P0–P8 ĐÃ ĐÓNG (đều đã commit + push)** — suite tham chiếu: Python 62 · Node 267 · Flutter 101 · analyze 0. Bước kỹ thuật tiếp = P9 (chờ lệnh user); P10 full + saga §7 chờ duyệt riêng.
 - Đừng báo "xong" bằng lời — mọi claim cần lệnh + output thật (`erpn-verify-first` skill).
 - **Vùng tiền/số/phân quyền: AI KHÔNG tự ký duyệt, KHÔNG tự commit** — chờ user review.
 - **Gate pháp lý Phase 5: ĐÃ KÝ 2026-09-15 (không scrub)** — quyết định lưu ở `SIGNOFF-phase5-pii.md`; các gate ký duyệt TƯƠNG TỰ về sau vẫn chờ user.
