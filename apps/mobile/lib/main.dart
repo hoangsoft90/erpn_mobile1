@@ -30,7 +30,7 @@ class ErpnCopilotApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp.router(
-      title: 'ERPNext Copilot',
+      title: 'Nghiệp Vụ AI',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light(),
       routerConfig: appRouter,

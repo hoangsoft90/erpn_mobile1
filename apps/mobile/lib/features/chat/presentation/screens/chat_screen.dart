@@ -110,7 +110,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('ERPNext Copilot'),
+        title: const Text('Nghiệp Vụ AI'),
         actions: [
           if (chat.turns.isNotEmpty)
             IconButton(
