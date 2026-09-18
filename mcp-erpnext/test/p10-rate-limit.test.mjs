@@ -406,6 +406,73 @@ test("E2E: READ questions never spend the write budget, a WRITE question does (r
   }
 });
 
+test("per-capability limit fires on the REAL /execute wiring (the F1 blast radius)", async () => {
+  // Why this test exists: the first version of this slice mapped the proposal
+  // action to a capability id through a branch that does not exist, so the
+  // contract's `payment.create 20/hour` was silently never enforced — and every
+  // HTTP test passed `perCapability: {}`, so nothing caught it. The unit test
+  // covers the limiter; THIS one covers the wiring (action -> capability ->
+  // bucket), which is the part that actually failed.
+  const dir = mkdtempSync(join(tmpdir(), "p10-cap-"));
+  const logDir = join(dir, "logs");
+  const stateFile = join(dir, "mock-erp.json");
+  process.env.MOCK_ERP_STATE = stateFile;
+  process.env.LEARNING_LOG_DIR = logDir;
+  let server = null;
+  let now = Date.now();
+  try {
+    const { createAskServer } = await import("../src/http-ask.mjs");
+    const { IdempotencyStore } = await import("../src/idempotency.mjs");
+    const store = new IdempotencyStore(dir);
+    const limiter = new RateLimiter({
+      rules: {
+        // The USER budget is generous: only the capability rule can refuse.
+        perUser: { read: { limit: 99, windowMs: 60_000 }, write_proposal: { limit: 99, windowMs: 60_000 }, write_execute: { limit: 99, windowMs: 60_000 } },
+        perCapability: { "payment.create": { limit: 1, windowMs: 60_000 } },
+      },
+      clock: () => now,
+    });
+    server = createAskServer({ port: 0, host: "127.0.0.1", idemStore: store, limiter });
+    const base = `http://127.0.0.1:${await listen(server)}`;
+    const post = (body) =>
+      fetch(`${base}/execute`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+
+    const first = await post({ command_id: randomUUID(), proposal: PROPOSAL });
+    assert.equal(first.status, 200, JSON.stringify(await first.json()));
+
+    const blockedCommand = randomUUID();
+    const second = await post({ command_id: blockedCommand, proposal: PROPOSAL });
+    const body = await second.json();
+    assert.equal(second.status, 429, "the capability budget, not the user budget, must refuse");
+    assert.equal(body.code, "RATE_LIMITED");
+    assert.equal(store.status(blockedCommand), null, "still no command_id burned on the capability path");
+    assert.equal(
+      writeExecEntries(stateFile).filter((p) => p.reference_no === blockedCommand).length,
+      0,
+      "nothing written",
+    );
+
+    // The refusal names the capability scope, so an operator can tell WHICH
+    // budget bit (per-user vs per-capability) from the trail alone.
+    const lines = readFileSync(join(logDir, "observations.jsonl"), "utf8")
+      .split("\n").filter((l) => l.trim() !== "").map((l) => JSON.parse(l));
+    const refusal = lines.find((l) => l.outcome === "rate_limited");
+    assert.ok(refusal, "the refusal is logged");
+    assert.equal(refusal.scope, "per_capability");
+    assert.equal(refusal.capability, "payment.create");
+
+    // A different action (or a reopened window) is not blocked by that rule.
+    now += 60_000;
+    const third = await post({ command_id: randomUUID(), proposal: PROPOSAL });
+    assert.equal(third.status, 200, "new window, new capability budget");
+  } finally {
+    delete process.env.MOCK_ERP_STATE;
+    delete process.env.LEARNING_LOG_DIR;
+    server?.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // ------------------------------------------------------------- observability --
 
 test("correlation: /execute + a throttled attempt each append ONE line with command_id/action_id/outcome", async () => {

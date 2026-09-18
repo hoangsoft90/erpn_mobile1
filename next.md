@@ -83,7 +83,7 @@ Lộ trình production trong `.plan/phases2/` (nguồn kiến trúc: `.plan/plan
 - Review tìm 5 finding, falsify 4 guard; TTS ⏭ skip có lý do (việc client, không cần cho exit criteria)
 - Suite: **Node 228** · `result50.txt` + `.plan/phases2/p7-result.md`
 
-### P10 SLICE — Rate limit + Correlation trail ⏳ KỸ THUẬT XONG — CHỜ DUYỆT COMMIT (policy tiền)
+### P10 SLICE — Rate limit + Correlation trail ✅ ĐÃ COMMIT `7cb2798` (đã push)
 
 - **Rate limit thật** (trước đây chỉ khai trong contract, chưa ai enforce): per user (read 30/phút · write_proposal 10/phút · write_execute 5/phút) + per capability (`payment.create` 20/giờ); vượt ⇒ 429 + `Retry-After` + câu tiếng Việt
 - **Vượt hạn mức KHÔNG đốt `command_id`**: charge TRƯỚC Safety Gateway (đo thật: `store.status(cid) = null`, 0 chứng từ; sau cửa sổ mở lại ghi đúng 1 lần)
@@ -91,7 +91,8 @@ Lộ trình production trong `.plan/phases2/` (nguồn kiến trúc: `.plan/plan
 - **Correlation §17** trên `/ask` + `/execute` + job runner qua `logEvent()` (`request_id/user_id/command_id/action_id/erp_document_id/capability/risk/latency_ms`)
 - **3 lỗi thật của chính code vừa viết đã sửa**: viết lại `capabilityForAction` với nhánh không tồn tại (limit `payment.create` tắt lặng lẽ) · `export {x} from` không tạo binding (mọi `/ask` 500) · meter theo “có proposal” thay vì theo loại
 - Suite: Python 60 · **Node 240** · Flutter 69 · analyze 0 · falsify 4 guard — `result51.txt` + `.plan/phases2/p10-result.md`
-- **Gap giành cho P10 full**: restore drill · kill-switch runbook · dashboard/log query · load test · APK device (human) · compliance note · rate-limit store phân tán (hiện in-process, reset khi restart)
+- **Gap giành cho P10 full**: restore drill · **chạy thử runbook** (đã viết `docs/kill-switch-runbook.md`, chưa diễn tập trên gateway thật) · dashboard/log query · load test · APK device (human) · compliance note · rate-limit store phân tán (hiện in-process, reset khi restart)
+- **Review vòng 3 (2026-09-18, sau commit)**: **F5** đính chính claim "in-app polling" ở P7 (client KHÔNG poll `/jobs` — gap UX, không phải gap an toàn tiền) · **F6** bịt lỗ hổng bằng chứng: thêm test E2E cho đường per-capability (chính chỗ lỗi F1 từng hỏng im lặng) + falsify bằng cách tái tạo lỗi F1 · **F7 MỞ — cần user quyết policy**: job đang QUEUED gặp kill switch ⇒ `drain()` đánh **FAILED ngay sau 1 lần** (verdict `SYSTEM_MAINTENANCE` không có `retry_same_command_id`) dù chưa từng thử ghi; an toàn tiền không bị ảnh hưởng (store không có record, bấm lại đúng `command_id` sau bảo trì là chạy đúng 1 lần). Bằng chứng probe trong `docs/kill-switch-runbook.md` §4
 
 **Bước kỹ thuật tiếp theo = duyệt commit P10 slice → P8 (multi-user, cần credential) / P9 (skill mới, cần acceptance thật) khi user đủ điều kiện.** KHÔNG mở P6 (thiếu audio), không lùi về phase-04/08/10–15 cũ.
 
