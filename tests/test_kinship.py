@@ -95,6 +95,20 @@ class TestSafety(unittest.TestCase):
         self.assertEqual(result.titles, ("Anh",))
         self.assertEqual(result.text, "Nam trả 10 triệu")
 
+    def test_linh_after_a_title_is_a_name(self) -> None:
+        # F7-2 session (Golden k18): "linh" is in money.py's FILLERS, but after
+        # a title it is a common given name. The title is the evidence.
+        cleaned, titles = strip_kinship("Con Linh còn nợ bao nhiêu")
+        self.assertEqual(cleaned, "Linh còn nợ bao nhiêu")
+        self.assertEqual(titles, ("Con",))
+
+    def test_linh_without_a_title_is_not_stripped_from_fillers(self) -> None:
+        # No title before "linh" ⇒ the stripper never fires and the filler
+        # behaviour of the money layer is untouched.
+        cleaned, titles = strip_kinship("linh tinh")
+        self.assertEqual(cleaned, "linh tinh")
+        self.assertEqual(titles, ())
+
 
 if __name__ == "__main__":
     unittest.main()

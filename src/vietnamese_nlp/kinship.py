@@ -90,6 +90,14 @@ def _looks_like_name(word: str) -> bool:
         # "anh chị Nam" -> both titles are removed
         return True
     if low in _NOT_A_NAME:
+        # F7-2 session (Golden k18): "linh" is in money.py's FILLERS ("linh
+        # tinh"), but Linh is ALSO one of the most common Vietnamese given
+        # names. When a title points at it ("Con Linh còn nợ…"), the title
+        # itself is the evidence that a NAME follows — treat it as one. A bare
+        # "linh tinh" without a title never reaches this branch (the stripper
+        # only fires after a title), so the filler behaviour is untouched.
+        if low == "linh":
+            return True
         return False
     return low not in NON_NAME_WORDS
 

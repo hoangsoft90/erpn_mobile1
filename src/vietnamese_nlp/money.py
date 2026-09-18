@@ -397,6 +397,49 @@ def find_amounts(text: str) -> tuple[MoneyMatch, ...]:
                     break
                 nxt = toks[j + 1] if j + 1 < n else None
                 if seen_big and current is None:
+                    # F7-2 session (Golden m15): ONE 1-digit bare number after a
+                    # completed TRIỆU/TỶ-scale group is the spoken shorthand for
+                    # the HUNDREDS of that scale — "một triệu hai" = 1.200.000,
+                    # "2 triệu 5 trăm" = 2.500.000. Guards:
+                    #   • big scales only (hundreds-of-thousands are a unit
+                    #     people actually say; "320 nghìn một bao" keeps the
+                    #     old literal path);
+                    #   • unambiguous scale words only ("3 củ 5" stays
+                    #     refused — "củ" is also a noun);
+                    #   • the tail must END the amount (None) or be "trăm" —
+                    #     a noun tail ("2 triệu 5 bao") or a smaller scale
+                    #     ("2 triệu 5 nghìn") keeps the old literal path;
+                    #   • "trăm" is consumed ONLY when it ends the amount —
+                    #     "5 trăm nghìn" is a complete section for the NEXT
+                    #     scale and must flow through the old path.
+                    nxt_is_hundreds = (
+                        nxt is not None
+                        and nxt.kind == "word"
+                        and nxt.text.lower() in HUNDREDS
+                    )
+                    after_hundreds_is_scale = (
+                        nxt_is_hundreds
+                        and j + 2 < n
+                        and toks[j + 2].kind == "word"
+                        and toks[j + 2].text.lower() in _SCALE_WORDS
+                    )
+                    tail_consumable = nxt is None or (nxt_is_hundreds and not after_hundreds_is_scale)
+                    if (
+                        re.fullmatch(r"\d", t.text)
+                        and t.value is not None
+                        and t.value > 0
+                        and last_scale is not None
+                        and last_scale >= 1_000_000
+                        and not ambiguous_scales
+                        and not ambiguous_tail
+                        and tail_consumable
+                    ):
+                        section += t.value * (last_scale / 10)
+                        has_nonzero = True
+                        has_number = True
+                        end = nxt.end if nxt_is_hundreds else t.end
+                        j += 2 if nxt_is_hundreds else 1
+                        continue
                     # A bare number after a completed big-scale group is only
                     # merged when it introduces its own scale
                     # ("10 triệu 500 nghìn"); otherwise it is either a new
@@ -456,9 +499,50 @@ def find_amounts(text: str) -> tuple[MoneyMatch, ...]:
                 w = t.text.lower()
                 if w in ONES:
                     if seen_big and current is None:
-                        # same rule as for digits: "320 nghìn một bao" keeps
-                        # 320.000, while "2 triệu năm" is ambiguous and refused
+                        # F7-2 session (Golden m15): ONE non-zero ONES word right
+                        # after a completed TRIỆU/TỶ-scale group is the spoken
+                        # shorthand for the HUNDREDS of that scale — "một triệu
+                        # hai" = 1.200.000. Same guards as the digit branch,
+                        # plus the name collision: a BARE "năm" stays refused
+                        # ("10 triệu năm" reads "…triệu, Năm" — Năm is a
+                        # person) unless "trăm" disambiguates it ("một triệu
+                        # năm trăm" = 1.500.000).
                         nxt = toks[j + 1] if j + 1 < n else None
+                        nxt_is_hundreds = (
+                            nxt is not None
+                            and nxt.kind == "word"
+                            and nxt.text.lower() in HUNDREDS
+                        )
+                        after_hundreds_is_scale = (
+                            nxt_is_hundreds
+                            and j + 2 < n
+                            and toks[j + 2].kind == "word"
+                            and toks[j + 2].text.lower() in _SCALE_WORDS
+                        )
+                        tail_consumable = nxt is None or (nxt_is_hundreds and not after_hundreds_is_scale)
+                        if (
+                            w in {"một", "hai", "ba", "bốn", "sáu", "bảy", "tám", "chín"}
+                            and last_scale is not None
+                            and last_scale >= 1_000_000
+                            and not ambiguous_scales
+                            and tail_consumable
+                        ):
+                            section += Decimal(ONES[w]) * (last_scale / 10)
+                            has_nonzero = True
+                            has_number = True
+                            end = nxt.end if nxt_is_hundreds else t.end
+                            j += 2 if nxt_is_hundreds else 1
+                            continue
+                        if w == "năm" and nxt_is_hundreds and not after_hundreds_is_scale:
+                            section += Decimal(ONES[w]) * (last_scale / 10)
+                            has_nonzero = True
+                            has_number = True
+                            end = nxt.end
+                            j += 2
+                            continue
+                        # same rule as for digits: "320 nghìn một bao" keeps
+                        # 320.000, while "2 triệu năm" (pre-shorthand reading)
+                        # was ambiguous and refused
                         if not (
                             nxt is not None
                             and nxt.kind == "word"

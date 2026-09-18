@@ -28,6 +28,18 @@ REQUIRED_FORMS: list[tuple[str, int]] = [
     ("0.5 triệu", 500_000),
     ("10 triệu 500 nghìn", 10_500_000),
     ("2 triệu rưỡi", 2_500_000),
+    # F7-2 session: Vietnamese shorthand "một triệu hai" = 1.200.000 (Golden m15).
+    # The dropped part is the HUNDREDS digit (1x100.000), never a smaller unit —
+    # "hai" alone can only mean 200.000, which a speaker would SAY ("hai trăm").
+    ("một triệu hai", 1_200_000),
+    ("hai triệu ba", 2_300_000),
+    ("một triệu năm trăm", 1_500_000),
+    # noun tail: the "5" is NOT merged (2.500.000 would be a guess) — the
+    # literal "2 triệu" stands alone
+    ("2 triệu 5 bao", 2_000_000),
+    # literal reading stays literal: "năm nghìn" is its own section, NOT the
+    # shorthand hundreds digit (that needs a bare "5" with nothing after)
+    ("2 triệu 5 nghìn", 2_005_000),
 ]
 
 #: utterances that must yield NO amount (guessing money is worse than asking)
@@ -48,9 +60,13 @@ MUST_NOT_PARSE: list[str] = [
     "không có gì",
     "không triệu",  # must not become 1.000.000
     "không đồng",
-    "2 triệu 500",  # ambiguous trailing bare number
+    # F7-2 regression guards for the m15 shorthand: an AMBIGUOUS tail stays
+    # refused, and the merge never crosses scale boundaries.
+    "2 triệu 500",  # 500 what? — the hundreds-digit rule needs 1 digit
+    "2 triệu 50",  # ambiguous on two axes
+    "10 triệu năm",  # keep refusing: bare "năm" reads as the NAME Năm
+    "một triệu năm",  # same name collision — only "năm trăm" disambiguates
     "3 củ 5",
-    "10 triệu năm",
     # shape guards (see money.py docstring) — look numeric, are never money
     "gọi anh Nam 0912345678",
     "anh Nam ở nhà 1234",
