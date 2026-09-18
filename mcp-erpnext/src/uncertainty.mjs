@@ -20,6 +20,7 @@ export const UNCERTAINTY_CODES = Object.freeze({
   ENTITY_PICK_REQUIRED: "ENTITY_PICK_REQUIRED",
   LOW_CONFIDENCE: "LOW_CONFIDENCE",
   AUTHORIZATION_DENIED: "AUTHORIZATION_DENIED",
+  DSH_WRITE_BLOCKED: "DSH_WRITE_BLOCKED",
   BUSINESS_VALIDATION_FAILED: "BUSINESS_VALIDATION_FAILED",
   NLP_UNAVAILABLE: "NLP_UNAVAILABLE",
   ERP_UNAVAILABLE: "ERP_UNAVAILABLE",
@@ -42,6 +43,8 @@ const COPY = Object.freeze({
     "Mình chưa chắc đã hiểu đúng — hãy nói lại rõ hơn.",
   [UNCERTAINTY_CODES.AUTHORIZATION_DENIED]:
     "Tài khoản hiện không có quyền cho thao tác này.",
+  [UNCERTAINTY_CODES.DSH_WRITE_BLOCKED]:
+    "Chế độ Phân tích bằng AI chỉ ĐỌC — ghi phiếu thu phải qua mục chat chính và cần bạn bấm Xác nhận.",
   [UNCERTAINTY_CODES.BUSINESS_VALIDATION_FAILED]:
     "Dữ liệu không cho phép thao tác này (chứng từ đã tất toán hoặc số tiền không hợp lệ).",
   [UNCERTAINTY_CODES.NLP_UNAVAILABLE]:

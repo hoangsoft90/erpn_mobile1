@@ -25,6 +25,8 @@ import { classifyIntent, classifierConfig } from "./classifier.mjs";
 import { buildPaymentProposal } from "./skills/payment-write.mjs";
 // ── P4 (plan2_final §12 + §19): structured learning log for refusals/signals ──
 import { logObservation } from "./learning-log.mjs";
+// ── P5 (plan2_final §2 D2/D3/D8): dsh explicit opt-in gate — READ only ──
+import { isDshContext, blockedInDshContext, dshWriteBlockedAnswer } from "./dsh-optin.mjs";
 // ── P2 (plan2_final §12 + §14): uncertainty taxonomy + session context ──
 import { SessionContext, CONTEXT_PROVENANCE } from "./session-context.mjs";
 import { uncertaintyCopy, toUncertaintyCode, UNCERTAINTY_CODES } from "./uncertainty.mjs";
@@ -345,6 +347,14 @@ export async function answerQuestion(rawText, opts = {}) {
           proposal: null,
         });
       }
+    }
+    // ── P5 (plan2_final §2 D8): when THIS process was spawned by dsh (explicit
+    // opt-in "Phân tích bằng AI"), it may drive READ capabilities only. A
+    // question that would produce an executable (WRITE) proposal is refused
+    // BEFORE any skill/ERPNext touch — fail closed, no partial work. The /ask
+    // HTTP path never sets COPILOT_DSH_CONTEXT, so the main app is unchanged.
+    if (isDshContext(opts.env) && blockedInDshContext(route)) {
+      return withUncertainty(dshWriteBlockedAnswer(rawText));
     }
     const skills = route.factory(mcp, knownIds);
 
@@ -724,6 +734,7 @@ async function copilotAsk(args) {
   // P4: same logged wrapper as /ask — dsh questions are learning signals too.
   const structured = await answerQuestionLogged(rawText.trim(), {
     pickedEntityId: typeof args?.entity_id === "string" ? args.entity_id : null,
+    env: process.env, // P5: dsh-context detection follows the process env
   });
   return {
     content: [{ type: "text", text: JSON.stringify(structured, null, 2) }],

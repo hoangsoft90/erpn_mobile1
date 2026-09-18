@@ -37,6 +37,7 @@ export const LEARNING_OUTCOMES = Object.freeze([
   "unknown_intent",
   "known_intent_unimplemented",
   "forbidden",
+  "dsh_write_blocked",
   "low_confidence",
   "entity_problem",
   "nlp_unavailable",
@@ -68,6 +69,7 @@ export function outcomeFor(result) {
     case "UNKNOWN_INTENT": return "unknown_intent";
     case "KNOWN_INTENT_UNIMPLEMENTED": return "known_intent_unimplemented";
     case "FORBIDDEN_IN_AI_PATH": return "forbidden";
+    case "DSH_WRITE_BLOCKED": return "dsh_write_blocked";
     case "LOW_CONFIDENCE": return "low_confidence";
     case "NLP_UNAVAILABLE": return "nlp_unavailable";
     case "AMBIGUOUS_ENTITY":

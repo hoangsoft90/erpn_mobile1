@@ -67,6 +67,7 @@
 - [2026-09-14] Xong + commit **119edd4**: fix result9 — accuracy thật 27.8%→100% (5 nhóm lỗi) + CI codegen step; redact secret khỏi result9.txt trước commit
 - [2026-09-14] Xong + commit **590b1b2**: Phase 3 Flutter chat MVP (64 files) — UI-checkpoint user duyệt; Node 36/36, Flutter 13/13; 4 bug thật (quan trọng nhất: ChatBubble không render answer)
 - [2026-09-14] Xong + commit **0ac8e61**: Phase 2 thật — env-switch mock/real, resolver chống trùng tên, dsh smoke (mock LLM), `result6.txt`
+- [2026-09-17] Review P3 tìm + fix 1 fail-open env-number trong classifier (commit 451cd8f)
 - [2026-09-17] Device smoke test qua adb (Pixel 3a): 0 crash, Settings OK, footer fix f28869a xác nhận trên máy thật; E2E từ phone vào real ERPNext — "Lan" không có trong real catalog (75 khách test) ⇒ refuse đúng thiết kế; ground truth mới: P1F-ACCEPT T9 = 1.000.000đ
 - [2026-09-14] Xong + commit **33f9dc0**: Phase 1 NLP pipeline (root commit 55 files)
 
@@ -82,3 +83,4 @@
 2. Người thật: thu audio 150 câu theo `docs/audio-collection-script.md` → mở khóa Phase 4 (STT)
 3. P4 (Learning loop) theo `.plan/phases2/` — P3 đã commit `c38e4ea`, không còn gap chặn
 - (Đã xong trước đó: sign-off Phase 5 ký 2026-09-15 · rotate key ERPNext)
+- [2026-09-18] P4 learning loop commit d7e9ba9 (JSONL log + cluster + workflow + vòng thử "doanh số")

@@ -40,6 +40,13 @@ test("outcomeFor maps the taxonomy — §12 signals stay distinct", () => {
   }
 });
 
+test("outcomeFor — DSH_WRITE_BLOCKED is its own signal, not 'error'", () => {
+  // Review round 2 (P5): an INTENTIONAL policy block must not drown in the
+  // system-error bucket of the cluster report.
+  assert.equal(outcomeFor({ error_code: "DSH_WRITE_BLOCKED" }), "dsh_write_blocked");
+  assert.ok(LEARNING_OUTCOMES.includes("dsh_write_blocked"));
+});
+
 test("logObservation appends valid JSONL, truncates, and is best-effort", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "learn-"));
   try {

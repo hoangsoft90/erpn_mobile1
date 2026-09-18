@@ -28,6 +28,12 @@
         cwd: !!js process.cwd()
         env:
           NLP_SERVICE_PORT: '8787'
+          # P5 (plan2_final §2 D8): marks this child as the EXPLICIT opt-in
+          # "Phân tích bằng AI" context. In this mode copilot_ask may drive
+          # READ capabilities only — WRITE questions are refused with
+          # DSH_WRITE_BLOCKED before any ERPNext touch (src/dsh-optin.mjs).
+          # The /ask HTTP server NEVER sets this variable.
+          COPILOT_DSH_CONTEXT: '1'
           # Pass-through by NAME only — values live in the operator environment
           # (.env, gitignored). With all three set, the copilot targets the REAL
           # pinned server; with none, it stays on the mock (target.ts contract).
