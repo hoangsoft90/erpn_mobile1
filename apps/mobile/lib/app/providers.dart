@@ -6,6 +6,7 @@ import '../core/constants/app_constants.dart';
 import '../core/settings/app_settings_service.dart';
 import '../features/chat/data/chat_history_service.dart';
 import '../features/chat/data/copilot_api_client.dart';
+import '../features/chat/data/speech_service.dart';
 
 /// Environment injected at bootstrap (dart-define overrides the default).
 class AppEnvironment {
@@ -68,4 +69,11 @@ final appSettingsServiceProvider = Provider<AppSettingsService>(
 
 final chatHistoryServiceProvider = Provider<ChatHistoryService>(
   (ref) => ChatHistoryService(prefs: ref.watch(sharedPreferencesProvider)),
+);
+
+/// P6: platform STT for voice DICTATION into the input field. Overridden with a
+/// fake in tests (CI has no microphone) — see
+/// `features/chat/data/speech_service.dart` for the contract.
+final speechServiceProvider = Provider<SpeechService>(
+  (ref) => SystemSpeechService(),
 );

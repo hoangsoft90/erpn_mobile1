@@ -24,7 +24,7 @@ Lộ trình production trong `.plan/phases2/` (nguồn kiến trúc: `.plan/plan
 - **Vòng tự review sau P0 (2026-09-17) — 3 lỗi THẬT trong chính đợt refactor, đã sửa + falsify**: lỗi cấu hình ERPNext từng **giết cả process** (client được tạo NGOÀI `try` ⇒ unhandled rejection), từng **treo vĩnh viễn khoá ý định `(customer|invoice)`** (lỗi config để lại PENDING không `reference_no`), và **rò rỉ process con** khi `initialize()` fail. Kèm gia cố: `params.amount_vnd` thiếu ⇒ **TỪ CHỐI** (không để tầng dưới tự clamp tiền); test tĩnh no-bypass quét thêm `scripts/`. Bằng chứng: `result44.txt` §3–§9.
 - Suite: Python 60 · **Node 156** · Flutter 63 · analyze 0
 
-**Bước kỹ thuật tiếp theo = P1 → P2** (đã xong, xem 2 mục bên dưới) — **KHÔNG** nhảy P9 (skill mới) hay P5 (DSH trên `/ask`). Voice (P6) cần audio thật; không mở lại Phase 4/8/10–15 cũ.
+**Bước kỹ thuật tiếp theo = P1 → P2** (đã xong, xem 2 mục bên dưới) — **KHÔNG** nhảy P9 (skill mới) hay P5 (DSH trên `/ask`). Voice (**P6**, `speech_to_text` OS STT) **đã bỏ gate audio** 2026-09-18 — xem mục P6 bên dưới; không mở lại Phase 4/8/10–15 cũ.
 
 ### P1 (phases2) — Entity Execution Resilience ✅ ĐÃ COMMIT `ee93f13` (đã push 2026-09-17)
 
@@ -104,7 +104,20 @@ Lộ trình production trong `.plan/phases2/` (nguồn kiến trúc: `.plan/plan
 - **F7-2 — submit switch**: setting **"Cho phép nộp phiếu thu thật"** (mặc định OFF, dialog xác nhận riêng) · cờ **frozen vào proposal snapshot lúc hỏi** (không đọc lại lúc execute) · ON ⇒ sau draft OK gọi `erpnext_doc_submit` (tool thật, read từ source 3.0.4) qua write gate mở rộng fail-closed; submit lỗi giữa chừng ⇒ **PARTIAL** ("đã tạo nháp, submit lỗi: …, cần submit tay trên ERPNext") — không FAILED · Flutter 80/80 (+11 test) · falsify 3 lớp độc lập
 - **Golden gaps k18/m15 sửa xong**: "một triệu hai" = 1.200.000 (shorthand có luật chặt chống va danh xưng); "Con Linh" resolve thành tên "Linh" — Golden runner **0 miss**, gate P9 mở · Python 62
 - Suite: **Python 62 · Node 250 · Flutter 80 · analyze 0** — bằng chứng `result53.txt` + `result54.txt`
-Bước kỹ thuật tiếp theo (khi user đủ điều kiện): **P8** (multi-user, cần credential) · **P9** (skill mới — **gate ĐÃ MỞ** sau khi Golden 0 miss, cần user ra lệnh) — riêng **P10 full** (DR drill, dashboard, load test, rate-limit store phân tán) và **P6** (thiếu audio) vẫn hoãn.
+
+### P6 (phases2) — Voice / STT (`speech_to_text`) 🟡 KỸ THUẬT XONG — CHỜ DUYỆT COMMIT (đụng mobile client)
+
+- **Gate 150 câu audio đã BỎ** (user, 2026-09-18): P6 dùng **STT của OS** (`speech_to_text` 7.5.0), không tự host model, không corpus riêng
+- Luồng đúng luật `plan2_final` §20: 🎙 mic → STT → **text vào CHÍNH ô nhập editable** → user nhìn/sửa → **Gửi** → `POST /ask`; STT **không bao giờ tự gửi**, không có đường tới `/execute`
+- `lib/features/chat/data/speech_service.dart`: interface mỏng `SpeechService` (mockable — CI không cần mic) + `SystemSpeechService`; `SpeechStatus` tách `denied` vs `unavailable` để thông báo đúng việc user cần làm
+- Quyền: `RECORD_AUDIO` + `<queries>` `android.speech.RecognitionService` (Android 11+ package visibility). **Repo không có target iOS** ⇒ keys `Info.plist` ghi lại trong `p6-result.md` khi thêm iOS sau
+- Locale ưu tiên `vi_VN`; máy không có tiếng Việt ⇒ vẫn nghe được + cảnh báo "đọc lại trước khi gửi"; dictation giữa lúc đang gõ không xoá chữ đã viết; partial result **thay** không nối; `dispose()` đóng mic
+- **21 test**: `test/voice_input_test.dart` (15, mock STT) + `test/speech_service_test.dart` (6, chạy trên **subclass của plugin thật**) + **falsify 8 guard** (auto-send → 3 đỏ; nuốt im lặng khi bị từ chối quyền → 2 đỏ; bỏ qua `unavailable` → 2 đỏ; mic mở sau lưng request → 1 đỏ; **kết quả muộn ghi đè ô nhập → 2 đỏ; double-tap mở 2 phiên → 1 đỏ; cảnh báo che "Đang nghe…" → 1 đỏ; bỏ session token → 3 đỏ**) — khôi phục `diff clean`
+- **Self-review sau khi viết tìm 4 lỗi THẬT đã sửa** (xem `p6-result.md` §"Vòng self-review"): kết quả STT đến muộn viết lại câu cũ vào ô vừa gửi (nặng nhất — plugin ghi rõ `stop()` LUÔN bắn thêm 1 kết quả) · `_notice`/`_listening` viết thành `else if` che mất phản hồi "Đang nghe…" · double-tap mở 2 phiên · `cancel()` hứa "không có text sau đó" mà không ai thực thi
+- Suite: Python 62 · Node 250 · **Flutter 101** (80→101) · analyze 0 — `.plan/phases2/p6-result.md`
+- **Gap (có lý do)**: APK CI phải build lại để xác nhận plugin native (agent không có Android SDK) · smoke máy thật có mic = việc người thật (checklist trong `p6-result.md`)
+
+Bước kỹ thuật tiếp theo (khi user đủ điều kiện): **P8** (multi-user, cần credential) · **P9** (skill mới — **gate ĐÃ MỞ** sau khi Golden 0 miss, cần user ra lệnh) — riêng **P10 full** (DR drill, dashboard, load test, rate-limit store phân tán) vẫn hoãn.
 ### F7 — ĐÃ GIẢI QUYẾT (user chọn policy (a), 2026-09-18)
 
 > **Luật mới: bảo trì/kill switch KHÔNG phải một lần thử.**
@@ -118,7 +131,7 @@ Bước kỹ thuật tiếp theo (khi user đủ điều kiện): **P8** (multi-
 - Test: 3 case mới (giữ trạng thái + không tiêu attempt qua nhiều lần bảo trì · tắt switch → VERIFIED
   đúng 1 lần · lỗi thật vẫn FAILED). **Falsify**: gỡ nhánh tạm thời → 2 test ĐỎ đúng assertion
   (`expected RETRYING / actual FAILED`) — khôi phục byte-identical, 19/19 xanh. Bằng chứng `result53.txt`.
-KHÔNG mở P6 (thiếu audio), không lùi về phase-04/08/10–15 cũ.
+KHÔNG lùi về phase-04/08/10–15 cũ.
 
 ### Phase 0 — Foundation & Verification ✅ (`result1.txt`)
 

@@ -1,4 +1,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- P6 (plan2_final §20): voice is an input modality only. The microphone
+         is needed to DICTATE into the editable text field; the app never
+         executes anything from a voice command. Requested at runtime by
+         speech_to_text on first use. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO"/>
     <application
         android:label="Nghiệp Vụ AI"
         android:name="${applicationName}"
@@ -40,6 +45,11 @@
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
+        </intent>
+        <!-- Android 11+ package visibility: without this the OS recognizer is
+             invisible and speech_to_text.initialize() reports "unavailable". -->
+        <intent>
+            <action android:name="android.speech.RecognitionService"/>
         </intent>
     </queries>
 </manifest>
