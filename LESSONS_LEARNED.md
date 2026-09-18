@@ -202,3 +202,15 @@
   env ở ĐẦU file test, trước mọi import.
 - **Meter theo loại, không theo sự hiện diện của field.** Mọi route ĐỌC cũng trả proposal
   ⇒ nếu charge theo `proposal != null` thì câu hỏi đọc tiêu ngân sách ghi.
+
+## Review vòng 3 P10 (2026-09-18) — claim vs bằng chứng, và lỗ hổng đúng chỗ vừa hỏng
+
+- **Claim UI phải grep phía client.** "✅ in-app polling" trong `p7-result.md` dựa trên endpoint
+  server; `apps/mobile/lib` không có một dòng nào gọi `/jobs`. Endpoint + log stderr không chứng
+  minh được hành vi người dùng thấy.
+- **Đường wiring từng hỏng im lặng phải có test với config KHÁC RỖNG.** Mọi test HTTP đều truyền
+  `perCapability: {}` ⇒ fix của F1 chưa từng được chạy E2E cho tới khi thêm test dùng rule thật.
+- **Đừng để "tạm thời" thành "thất bại".** Probe thật: job QUEUED gặp kill switch ⇒ `FAILED` sau
+  1 lần, terminal, dù chưa từng thử ghi (verdict `SYSTEM_MAINTENANCE` thiếu `retry_same_command_id`).
+  Phải test TƯƠNG TÁC 2 feature (kill switch × queue), không chỉ từng feature riêng.
+
