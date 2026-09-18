@@ -1,7 +1,7 @@
 # checklist.md — ERPNext Vietnamese Voice Copilot (erpn_mobile1)
 
 Danh sách kiểm tra nhanh: **đã làm / chưa làm / cần hỏi lại**.
-Bằng chứng chi tiết: `result*.txt` (mới nhất = result31) + `.plan/phases/*-result.md`.
+Bằng chứng chi tiết: `result*.txt` (mới nhất = result51) + `.plan/phases/*-result.md`.
 Trạng thái roadmap chi tiết nằm ở `next.md` — file này KHÔNG nhân bản, chỉ tóm tắt.
 
 ---
@@ -27,7 +27,11 @@ Trạng thái roadmap chi tiết nằm ở `next.md` — file này KHÔNG nhân 
 - [x] **P2 ĐÃ COMMIT `33ff725` (đã push)** — 15 file +717/−35; secret scan CLEAN; suite Python 60 · Node 181 · Flutter 69 · analyze 0
 - [x] **P3 (phases2) — LLM Classifier + Regression gate KỸ THUẬT XONG**: classifier semantic-only qua LLM Router (không agent loop/DSH) · không bao giờ trả ERP id (regex + allowlist 2 lớp) · intent ∈ contract (forbidden không offerable) · routeByCapability → cùng Safety path · LLM down → rule-only, low confidence → LOW_CONFIDENCE · golden classifier regression 9 case mock LLM (CI gate) · falsify F1/F3/F4 trên /tmp · fix 1 test flaky có sẵn (bucket P1) · **Node 195 · Flutter 69 · Python 60 · analyze 0** · `.plan/phases2/p3-result.md` · `result47.txt`
 - [x] **P3 ĐÃ COMMIT `c38e4ea` (đã push)** — 13 file +1025/−7; secret scan staged diff CLEAN; suite Python 60 · Node 196 · Flutter 69 · analyze 0
-- [ ] (P10) rate limit (mới khai trong contract, chưa code)
+- [x] **P4 (phases2) — Learning loop KỸ THUẬT XONG + ĐÃ COMMIT `d7e9ba9` (đã push)**: `learning-log.mjs` JSONL never-throw (dir repo-local, không /tmp) · `scripts/learning-cluster.mjs` READ-ONLY + `npm run learning:cluster` · workflow người duyệt (`docs/learning-loop-workflow.md`) · **vòng thử thật**: cluster phát hiện "doanh số" chưa route → thêm trigger vào contract (+1 keyword) + golden +2 case → 7/7; review vòng 2 bắt 2 lỗi (copilotAsk/dsh chưa qua wrapper log; claim "E2E 1 dòng" CHƯA có test ⇒ viết test E2E thật) · **Node 204**
+- [x] **P5 (phases2) — DSH explicit opt-in READ KỸ THUẬT XONG + ĐÃ COMMIT `6318eca` (đã push)**: `dsh-optin.mjs` — dsh chỉ chạy khi spawn với `COPILOT_DSH_CONTEXT=1`, `/ask` KHÔNG có đường nào spawn dsh (test tĩnh quét `src/`) · trong context dsh: mọi WRITE bị `DSH_WRITE_BLOCKED` TRƯỚC skill factory (proposal null) · `docs/dsh-optin.md`; review vòng 2 fix 2 lỗi (`DSH_WRITE_BLOCKED` thiếu trong taxonomy P2 ⇒ refusal không có copy TV; bị xếp nhầm bucket `error` trong cluster) · **Node 212**
+- [x] **P7 (phases2) — Background job queue KỸ THUẬT XONG + ĐÃ COMMIT `3e6240a` (đã push)**: `job-queue.mjs` (JSONL repo-local, enqueue chỉ khi verdict `retry_same_command_id`, bounded retry, crash-recovery RUNNING→RETRYING, `release()` cho cancel, `completed()` cho report) · **`startJobRunner()` nối vào `main()`** (F-A: trước đó job enqueue mà KHÔNG ai drain) · `/jobs` trả pending + completed · **5 finding review + 4 falsify** · TTS ⏭ skip có lý do (việc client) · **Node 228**
+- [x] **P10 SLICE (phases2) — RATE LIMIT + CORRELATION KỸ THUẬT XONG — ⏳ CHỜ DUYỆT COMMIT (policy tiền)**: `rate-limit.mjs` enforce luật ĐÃ KHAI trong contract từ P0 (read 30/phút · write_proposal 10/phút · write_execute 5/phút · `payment.create` 20/giờ) — vượt ⇒ **429 + Retry-After + câu TV**; **throttle TRƯỚC Safety Gateway ⇒ KHÔNG đốt `command_id`** (đo thật: `store.status(cid) = null`, 0 PE, sau cửa sổ mở lại ghi đúng 1 lần) · `proposalBucketFor()`: câu ĐỌC không tiêu ngân sách ghi (mọi route đọc CŨNG trả proposal) · `COPILOT_RATE_LIMIT=off` là opt-out duy nhất; config hỏng ⇒ fallback default THẬT + cảnh báo · correlation §17 (`request_id/user_id/command_id/action_id/erp_document_id/latency_ms`) trên `/ask` + `/execute` + job runner qua `logEvent()` · **3 lỗi thật của chính code đã sửa**: viết lại `capabilityForAction` (nhánh không tồn tại ⇒ limit `payment.create` tắt lặng lẽ), `export {x} from` không tạo binding (⇒ mọi `/ask` 500), meter theo "có proposal" thay vì theo loại contract · **12 test mới · Node 240 · falsify 4 guard** · bằng chứng `result51.txt` + `.plan/phases2/p10-result.md` (**slice**, không phải P10 full: DR drill/dashboard/load test/kill-switch runbook chưa làm)
+- [ ] (P10 full) còn lại: backup/restore drill · kill-switch runbook · load/smoke + APK device (human) · compliance note · rate-limit store phân tán (hiện in-process, reset khi restart)
 
 ---
 

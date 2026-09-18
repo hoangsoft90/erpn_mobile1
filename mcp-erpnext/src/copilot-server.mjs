@@ -719,7 +719,9 @@ export async function answerQuestion(rawText, opts = {}) {
  */
 export async function answerQuestionLogged(rawText, opts = {}) {
   const result = await answerQuestion(rawText, opts);
-  logObservation(result);
+  // P10 §17: one place adds the correlation columns for every /ask caller
+  // (HTTP wrapper and the dsh tool) — no caller has to remember.
+  logObservation(result, { correlation: opts.correlation });
   return result;
 }
 

@@ -19,6 +19,18 @@
  *                   internal failure    -> 500 {ok:false,error} (no stack)
  *   POST /execute        -> Safety Gateway (confirm + execute one WRITE)
  *   POST /execute/cancel -> release a zombie PENDING command (reconcile-verified)
+ *   GET  /jobs           -> pending + recent terminal jobs (P7)
+ *
+ * P10 slice (plan2_final §17, §24.3):
+ *   - Rate limiting per user (read/write_proposal/write_execute) and per
+ *     capability, enforced from the contract's operational_controls. A
+ *     throttled /execute is refused BEFORE the Safety Gateway, so the caller's
+ *     command_id is never burned. `COPILOT_RATE_LIMIT=off` disables it;
+ *     cancel is never throttled (it releases locks, it does not write).
+ *   - Every /ask, /execute and job-runner event appends ONE correlation line
+ *     (request_id / user_id / command_id / action_id / outcome / latency) to
+ *     the learning log (§17: enough to investigate a duplicate, a timeout, or
+ *     a wrong entity after the fact).
  *
  * Bind + auth policy (user decision 2026-09-14 — REAL customer debt data
  * must never be exposed to the public internet without auth):
@@ -36,8 +48,12 @@
  */
 
 import http from "node:http";
-import { timingSafeEqual, createHash } from "node:crypto";
+import { timingSafeEqual, createHash, randomUUID } from "node:crypto";
 import { answerQuestion, answerQuestionLogged, pickServerScript } from "./copilot-server.mjs";
+import { logEvent, writeOutcomeFor } from "./learning-log.mjs";
+import { RateLimiter, rateLimitMessage, proposalBucketFor } from "./rate-limit.mjs";
+// The action → capability mapping lives with the contract (single source).
+import { capabilityForAction } from "./capability-contract.mjs";
 import { IdempotencyStore, isValidCommandId } from "./idempotency.mjs";
 import { reconcilePaymentEntry } from "./skills/payment-write.mjs";
 import { createMcpClient } from "./client.mjs";
@@ -117,9 +133,10 @@ function basicAuthOk(req, policy) {
   return timingSafeEqual(givenUser, wantUser) && timingSafeEqual(givenPass, wantPass);
 }
 
-function sendJson(res, status, payload) {
+function sendJson(res, status, payload, extraHeaders = null) {
   const body = JSON.stringify(payload);
   res.writeHead(status, {
+    ...(extraHeaders ?? {}),
     "Content-Type": "application/json; charset=utf-8",
     "Content-Length": Buffer.byteLength(body),
     // The future Flutter-web build and the phone app on the LAN both call this;
@@ -130,6 +147,26 @@ function sendJson(res, status, payload) {
     "Access-Control-Allow-Headers": "Content-Type",
   });
   res.end(body);
+}
+
+/**
+ * P10 slice: the uniform refusal for a throttled request. 429 + Retry-After +
+ * the SAME friendly sentence the user would get from the pipeline — never a
+ * bare status code. The caller has already logged the event.
+ */
+function sendRateLimited(res, verdict, { write = false } = {}) {
+  const retryAfterMs = Math.max(0, verdict?.retryAfterMs ?? 0);
+  sendJson(
+    res,
+    429,
+    {
+      ok: false,
+      code: "RATE_LIMITED",
+      error: rateLimitMessage(verdict, { write }),
+      retry_after_ms: retryAfterMs,
+    },
+    { "Retry-After": String(Math.max(1, Math.ceil(retryAfterMs / 1000))) },
+  );
 }
 
 function readBody(req) {
@@ -150,10 +187,23 @@ function readBody(req) {
   });
 }
 
-export function createAskServer({ port = 8788, host = "127.0.0.1", policy = null, idemStore = null, jobs = null } = {}) {
+export function createAskServer({
+  port = 8788,
+  host = "127.0.0.1",
+  policy = null,
+  idemStore = null,
+  jobs = null,
+  limiter = null,
+} = {}) {
   const bindPolicy = policy ?? resolveBindPolicy({ host });
   const store = idemStore ?? new IdempotencyStore();
   const jobQueue = jobs ?? new JobQueue();
+  // P10 slice: rate limiting is ON by default (COPILOT_RATE_LIMIT=off is the
+  // operator's explicit opt-out). Tests inject `limiter` to control the clock
+  // or to exercise the unlimited path.
+  const rateLimiter = limiter ?? new RateLimiter();
+  /** Identity for the per-user bucket: the authenticated user, else loopback. */
+  const userId = bindPolicy.user ?? "local";
   const server = http.createServer(async (req, res) => {
     // Non-loopback: every route (including /health) requires basic auth.
     if (!bindPolicy.loopback && !basicAuthOk(req, bindPolicy)) {
@@ -304,6 +354,35 @@ export function createAskServer({ port = 8788, host = "127.0.0.1", policy = null
         sendJson(res, 400, { ok: false, error: `invalid request body: ${err.message}` });
         return;
       }
+      // P10 slice (plan2_final §24.3): throttle BEFORE the Safety Gateway. That
+      // ordering is the point — runExecute would begin an idempotency record for
+      // this command_id, so rate limiting afterwards would burn the caller's
+      // command_id for a request we never even attempted. A throttled execute
+      // must leave the store untouched.
+      const execStartedAt = Date.now();
+      const commandId = body?.command_id ?? null;
+      const capabilityId = capabilityForAction(body?.proposal?.action);
+      const userVerdict = rateLimiter.chargeUser("write_execute", userId);
+      const capVerdict = userVerdict.ok
+        ? rateLimiter.chargeCapability(capabilityId, userId)
+        : { ok: true, skipped: true };
+      if (!userVerdict.ok || !capVerdict.ok) {
+        const verdict = userVerdict.ok ? capVerdict : userVerdict;
+        logEvent({
+          phase: "execute",
+          outcome: "rate_limited",
+          error_code: "RATE_LIMITED",
+          request_id: randomUUID(),
+          user_id: userId,
+          command_id: commandId,
+          action_id: body?.proposal?.action_id ?? null,
+          capability: capabilityId,
+          scope: userVerdict.ok ? "per_capability" : "per_user",
+          latency_ms: Date.now() - execStartedAt,
+        });
+        sendRateLimited(res, verdict, { write: true });
+        return;
+      }
       // Last-resort guard: the gateway returns verdicts rather than throwing,
       // but ANY unexpected throw inside an async handler becomes an unhandled
       // rejection and kills the whole gateway (Node ≥15). Refuse loudly instead
@@ -325,9 +404,33 @@ export function createAskServer({ port = 8788, host = "127.0.0.1", policy = null
           error: `lỗi không mong đợi trong Safety Gateway: ${err?.message ?? err}`,
           command_id: body?.command_id ?? null,
         });
+        logEvent({
+          phase: "execute",
+          outcome: "error",
+          error_code: "EXECUTE_UNEXPECTED_ERROR",
+          request_id: randomUUID(),
+          user_id: userId,
+          command_id: commandId,
+          latency_ms: Date.now() - execStartedAt,
+        });
         return;
       }
       sendJson(res, verdict.status, verdict.body);
+      // P10 slice §17: one correlation line per WRITE attempt — the record an
+      // operator needs to investigate a duplicate / timeout / wrong entity.
+      logEvent({
+        phase: "execute",
+        outcome: writeOutcomeFor(verdict),
+        error_code: verdict.body?.code ?? null,
+        request_id: randomUUID(),
+        user_id: userId,
+        command_id: commandId,
+        action_id: body?.proposal?.action_id ?? null,
+        capability: capabilityId,
+        risk: body?.proposal?.risk?.level ?? body?.proposal?.risk ?? null,
+        erp_document_id: verdict.body?.erpnext_doc ?? null,
+        latency_ms: Date.now() - execStartedAt,
+      });
       // ── P7: a RETRYABLE refusal (ERP unreachable / write unverified) is the
       // moment the confirmed intent can be parked for automatic retry. The
       // verdict body itself says retry_same_command_id — anything else is NOT
@@ -391,6 +494,26 @@ export function createAskServer({ port = 8788, host = "127.0.0.1", policy = null
         sendJson(res, 400, { ok: false, error: "missing required field: text" });
         return;
       }
+      // P10 slice (§24.3): the per-user READ bucket is charged before any
+      // pipeline work — the expensive part (NLP + ERPNext reads) is exactly
+      // what a burst would exhaust.
+      const askStartedAt = Date.now();
+      const requestId = randomUUID();
+      const readVerdict = rateLimiter.chargeUser("read", userId);
+      if (!readVerdict.ok) {
+        logEvent({
+          phase: "ask",
+          outcome: "rate_limited",
+          error_code: "RATE_LIMITED",
+          request_id: requestId,
+          user_id: userId,
+          text: text.slice(0, 200),
+          scope: "read",
+          latency_ms: Date.now() - askStartedAt,
+        });
+        sendRateLimited(res, readVerdict);
+        return;
+      }
       let deadlineTimer;
       try {
         // Server-side deadline: a slow/hung pipeline (ERPNext via tunnel can
@@ -402,7 +525,12 @@ export function createAskServer({ port = 8788, host = "127.0.0.1", policy = null
         // cancel it, and an uncleared timer keeps the event loop alive for
         // the full 120s per request (broke node --test + clean shutdown).
         const result = await Promise.race([
-          answerQuestionLogged(text, { pickedEntityId }),
+          answerQuestionLogged(text, {
+            pickedEntityId,
+            // P10 §17: correlation columns for this question's log line
+            // (command_id / action_id / risk come from the proposal).
+            correlation: { request_id: requestId, user_id: userId, latency_ms: Date.now() - askStartedAt },
+          }),
           new Promise((_, reject) => {
             deadlineTimer = setTimeout(
               () => reject(new Error("ask deadline exceeded (120s)")),
@@ -410,6 +538,30 @@ export function createAskServer({ port = 8788, host = "127.0.0.1", policy = null
             );
           }),
         ]);
+        // A WRITE proposal is the entry point to the write path, so it is
+        // metered too. Refusing HERE (before the card reaches the user) is what
+        // keeps a throttled client from ever obtaining a command_id to
+        // execute. NB: READ routes return a proposal object as well —
+        // proposalBucketFor() keeps answering a question from spending the
+        // user's write budget.
+        const metered = proposalBucketFor(result?.proposal);
+        if (metered) {
+          const proposalVerdict = rateLimiter.chargeUser(metered, userId);
+          if (!proposalVerdict.ok) {
+            logEvent({
+              phase: "ask",
+              outcome: "rate_limited",
+              error_code: "RATE_LIMITED",
+              request_id: requestId,
+              user_id: userId,
+              text: text.slice(0, 200),
+              scope: "write_proposal",
+              latency_ms: Date.now() - askStartedAt,
+            });
+            sendRateLimited(res, proposalVerdict, { write: true });
+            return;
+          }
+        }
         sendJson(res, 200, { ok: true, result });
       } catch (err) {
         // message only — never a stack trace, never env contents
@@ -433,7 +585,7 @@ export function createAskServer({ port = 8788, host = "127.0.0.1", policy = null
  * bugs become retryable verdicts), but the loop itself must survive anyway:
  * a failed tick is logged, not fatal.
  */
-export function startJobRunner({ jobQueue, execute = runExecute }) {
+export function startJobRunner({ jobQueue, execute = runExecute, clock = Date.now } = {}) {
   if (!jobQueue.config.enabled) return null; // JOB_QUEUE=off: no queue, no runner
   // env-number law (451cd8f): finite AND positive or the default — a NaN
   // interval would degrade setInterval to 1ms and hammer the gateway.
@@ -447,6 +599,22 @@ export function startJobRunner({ jobQueue, execute = runExecute }) {
       .then((outcomes) => {
         for (const o of outcomes) {
           process.stderr.write(`[jobs] ${o.command_id} → ${o.state}${o.error ? ` (${o.error})` : ""}\n`);
+          // P10 slice §17: a retried WRITE is part of the money trail — it gets
+          // the same correlation line as the original /execute attempt.
+          const job = jobQueue.status(o.command_id);
+          logEvent({
+            phase: "job",
+            outcome: jobOutcomeFor(o.state),
+            error_code: o.error ? "JOB_RETRY_ERROR" : null,
+            request_id: randomUUID(),
+            user_id: "job-runner",
+            command_id: o.command_id,
+            action_id: job?.proposal?.action_id ?? null,
+            erp_document_id: job?.proposal?.result?.erpnext_doc ?? null,
+            job_state: o.state,
+            attempts: job?.attempts ?? null,
+            at_ms: clock(),
+          });
         }
       })
       .catch((err) => process.stderr.write(`[jobs] drain failed: ${err?.message ?? err}\n`))
@@ -456,6 +624,16 @@ export function startJobRunner({ jobQueue, execute = runExecute }) {
   timer.unref?.(); // the HTTP server owns the process lifetime, not the runner
   tick(); // crash-recovery: RETRYING jobs loaded from disk are due immediately
   return timer;
+}
+
+/** Job state → the same WRITE vocabulary the /execute path uses. */
+function jobOutcomeFor(state) {
+  switch (state) {
+    case "VERIFIED": return "write_verified";
+    case "FAILED": return "write_refused";
+    case "CANCELLED": return "write_refused";
+    default: return "write_retryable";
+  }
 }
 
 export async function main(argv = process.argv.slice(2)) {

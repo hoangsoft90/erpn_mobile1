@@ -1,0 +1,201 @@
+========================================================================
+RESULT 51 — P7 COMMIT + P10 SLICE (RATE LIMIT + CORRELATION) + SELF-REVIEW
+Timestamp: 2026-09-18 (giờ shell)
+Nguồn sự thật: file root. .plan/phases2/ = roadmap (p10-result.md = slice này).
+KHÔNG chạm ERPNext thật · KHÔNG submit/cancel/delete PE · KHÔNG mở P6/P8/P9.
+Mọi claim dưới đây = lệnh + output thật, không diễn giải bằng lời.
+========================================================================
+
+== 1. PHẦN A — COMMIT P7 (user duyệt trong prompt) ==
+
+$ git status --short | head -40
+M  .gitignore
+M  LESSONS_LEARNED.md
+M  mcp-erpnext/src/http-ask.mjs
+A  mcp-erpnext/src/job-queue.mjs
+A  mcp-erpnext/test/p7-job-queue.test.mjs
+A  result50.txt
+M  working.md
+?? .gemini/
+?? .opencode/
+?? initp
+
+$ git diff --cached --stat    (trước commit)
+ .gitignore                             |   4 +
+ LESSONS_LEARNED.md                     |  13 ++
+ mcp-erpnext/src/http-ask.mjs           |  91 +++++++++-
+ mcp-erpnext/src/job-queue.mjs          | 272 +++++++++++++++++++++++++++++
+ mcp-erpnext/test/p7-job-queue.test.mjs | 306 +++++++++++++++++++++++++++++++++
+ result50.txt                           | 135 +++++++++++++++
+ working.md                             |   2 +
+ 7 files changed, 821 insertions(+), 2 deletions(-)
+
+Secret scan staged (grep api_key|secret|password|token|ghp_|sk- sau khi loại tên biến hợp lệ):
+  → 0 hit. Forbidden paths (.env | idempotency-store | job-queue/ | learning-log/):
+  → 0 hit (rỗng).
+
+$ git commit -m "feat(p7): job queue runner for ERP-down confirmed writes, no double payment"
+[change/flutter-chat-mvp 3e6240a] feat(p7): job queue runner for ERP-down confirmed writes, no double payment
+ 7 files changed, 821 insertions(+), 2 deletions(-)
+ create mode 100644 mcp-erpnext/src/job-queue.mjs
+ create mode 100644 mcp-erpnext/test/p7-job-queue.test.mjs
+ create mode 100644 result50.txt
+
+$ git push origin change/flutter-chat-mvp
+To https://github.com/hoangsoft90/erpn_mobile1.git
+   6318eca..3e6240a  change/flutter-chat-mvp -> change/flutter-chat-mvp
+
+⇒ P7 = `3e6240a` ĐÃ PUSH.
+
+== 2. PHẦN B — AUDIT TRƯỚC KHI CODE P10 (luật P1) ==
+
+Kết quả audit (đọc code thật, không đoán):
+- Rate limit: contract `capabilities.json > operational_controls.rate_limit` ĐÃ KHAI từ P0
+  (read 30/minute · write_proposal 10/minute · write_execute 5/minute · payment.create 20/hour)
+  nhưng grep `rateLimit|RATE_LIMIT|rate.limit` trong `src/` = **không có code nào enforce**.
+- Kill switch: ĐÃ có (`kill-switch.mjs`) và ĐÃ nối vào Safety Gateway ⇒ không làm lại.
+- Correlation: `custom_ai_action_id` + `action_id` ĐÃ có trong proposal + PE + reconcile (P0 §10.4);
+  learning-log mới có `text/outcome/group/...` — THIẾU cột §17 ⇒ chỉ bổ sung, không viết mới.
+⇒ Việc thật của slice = (a) enforce rate limit, (b) thêm cột §17 + log cho /execute + job runner.
+
+== 3. CODE ==
+
+Mới:  mcp-erpnext/src/rate-limit.mjs
+Mới:  mcp-erpnext/test/p10-rate-limit.test.mjs
+Sửa:  mcp-erpnext/src/http-ask.mjs          (+183/−5)
+Sửa:  mcp-erpnext/src/learning-log.mjs      (+93/−13)
+Sửa:  mcp-erpnext/src/copilot-server.mjs    (+3/−1)
+Sửa:  LESSONS_LEARNED.md                    (+14)
+KHÔNG sửa: mcp-erpnext/capabilities.json (numstat 0 — luật contract đã đủ, tránh reformat).
+
+$ git diff --numstat
+14      0       LESSONS_LEARNED.md
+3       1       mcp-erpnext/src/copilot-server.mjs
+183     5       mcp-erpnext/src/http-ask.mjs
+93      13      mcp-erpnext/src/learning-log.mjs
+$ git ls-files --others --exclude-standard | grep -vE '^\.(gemini|opencode)/|^initp'
+mcp-erpnext/src/rate-limit.mjs
+mcp-erpnext/test/p10-rate-limit.test.mjs
+
+== 4. SELF-REVIEW — 3 LỖI THẬT CỦA CHÍNH CODE VỪA VIẾT ==
+
+Lần chạy test đầu (TRƯỚC fix):
+
+$ node --test test/p10-rate-limit.test.mjs
+✖ RateLimiter: window, refusal with retry-after, and per-identity isolation
+  AssertionError: true !== false            (test tôi viết sai kỳ vọng — bucket MỚI thì charge đầu phải ok)
+✖ capabilityForAction maps the proposal action to the contract's capability id
+  AssertionError: null !== 'payment.create'   ← LỖI THẬT #1
+✖ correlation: /execute + a throttled attempt each append ONE line …
+  AssertionError: null !== 'payment.create'   ← cùng gốc
+ℹ tests 9 · pass 6 · fail 3
+
+F1 (capabilityForAction): bản tôi tự viết tra `operationalControls().capabilities` — nhánh KHÔNG
+tồn tại ⇒ null cho mọi action ⇒ limit `payment.create 20/hour` TẮT LẶNG LẼ.
+`capability-contract.mjs` đã có sẵn hàm đúng (map theo `proposal_action`).
+$ grep -n "^export function" src/capability-contract.mjs
+226:export function capabilityForAction(action) {
+⇒ Fix: xoá bản sao + import bản thật.
+
+F2 (binding): sau khi thay bằng `export { capabilityForAction } from "..."`,
+$ node --test test/p10-rate-limit.test.mjs
+✖ proposalBucketFor: a READ proposal never spends the write budget
+  ReferenceError: capabilityForAction is not defined
+      at proposalBucketFor (src/rate-limit.mjs:207:14)
+⇒ `export { x } from` KHÔNG tạo binding cục bộ; lời gọi nằm trong `try` của `/ask`
+  ⇒ nếu không có test này, MỌI câu hỏi sẽ trả 500.
+⇒ Fix: `import { capabilityForAction, getCapability } from "./capability-contract.mjs"; export { capabilityForAction };`
+
+F3 (meter sai loại): code đầu charge `if (result.proposal != null)` — mà MỌI route ĐỌC cũng trả
+proposal:
+$ sed -n '689,691p' src/copilot-server.mjs
+    const proposal = buildProposal({
+      action: "read_balance",
+      risk: "READ",
+⇒ câu hỏi ĐỌC sẽ tiêu ngân sách GHI.
+⇒ Fix: `proposalBucketFor()` — chỉ tính khi contract nói capability là WRITE, hoặc risk HIGH/CRITICAL.
+
+F4 (harness, tự bắt): test E2E trả 200 nhưng `proposal` undefined.
+  Nguyên nhân thật: `src/copilot-server.mjs:104  const NLP_PORT = process.env.NLP_SERVICE_PORT || "8787"`
+  là const CẤP MODULE; http-ask đã bị import cache bởi test trước đó trong cùng file ⇒ port set
+  trong thân test VÔ HIỆU ⇒ pipeline rơi NLP_UNAVAILABLE.
+⇒ Fix: pin `NLP_PORT = 8791` ở ĐẦU file test, TRƯỚC mọi import + spawn service đúng port đó
+  + assert `nlpPort === NLP_PORT`.
+
+== 5. SUITE (sau fix) — lệnh + output thật ==
+
+$ cd mcp-erpnext && node --test test/p10-rate-limit.test.mjs        (chạy 2 lần, không flake)
+✔ parseRateSpec: reads the contract's spec strings, rejects anything else
+✔ rateLimitRules: a garbled contract entry falls back to a REAL default and says so
+✔ RateLimiter: window, refusal with retry-after, and per-identity isolation
+✔ capabilityForAction maps the proposal action to the contract's capability id
+✔ proposalBucketFor: a READ proposal never spends the write budget
+✔ rate limiting is ON by default (opt-out only via COPILOT_RATE_LIMIT=off)
+✔ writeOutcomeFor + rateLimitMessage: one vocabulary, friendly copy
+✔ MONEY: a throttled /execute never burns the command_id — the same command writes exactly once after the window
+✔ /execute/cancel is NOT throttled — a burst must not freeze lock release
+✔ /ask: the read bucket refuses with the friendly 429 before any work
+✔ E2E: READ questions never spend the write budget, a WRITE question does (real pipeline)
+✔ correlation: /execute + a throttled attempt each append ONE line with command_id/action_id/outcome
+ℹ tests 12 · pass 12 · fail 0
+
+$ env -u ERPNEXT_URL -u ERPNEXT_API_KEY -u ERPNEXT_API_SECRET node --test      (mcp-erpnext)
+ℹ tests 240 · pass 240 · fail 0                (228 → 240, +12)
+
+$ PYTHONPATH=src python3 -m unittest discover -s tests                          (repo root)
+Ran 60 tests in 0.389s
+OK
+
+$ cd apps/mobile && flutter test && flutter analyze
+00:12 +69: All tests passed!
+Analyzing mobile...
+No issues found! (ran in 5.0s)
+
+== 6. FALSIFY 4 GUARD AN TOÀN (script trên bản sao, restore kiểm chứng) ==
+
+$ node /tmp/falsify-p10.mjs
+F1 throttle ordering (charge before gateway)
+  after-guard-removal: pass=10 fail=2 | expected failing test "MONEY" → FAILED (falsify OK)
+  failures: MONEY: a throttled /execute never burns the command_id … | correlation: /execute …
+F2 READ proposals do not spend the write budget
+  after-guard-removal: pass=10 fail=2 | expected failing test "E2E" → FAILED (falsify OK)
+  failures: proposalBucketFor: a READ proposal never spends the write budget | E2E: READ questions …
+F3 rate limiting ON by default
+  after-guard-removal: pass=6 fail=6 | expected failing test "ON by default" → FAILED (falsify OK)
+F4 parseRateSpec rejects garbage
+  after-guard-removal: pass=11 fail=1 | expected failing test "parseRateSpec" → FAILED (falsify OK)
+restore check src/rate-limit.mjs: IDENTICAL
+restore check src/http-ask.mjs: IDENTICAL
+restore check test/p10-rate-limit.test.mjs: IDENTICAL
+
+== 7. HÀNH VI THẬT (trích từ test, không phải mô tả) ==
+
+- Vượt hạn mức ghi:
+    refused.status = 429 · code = RATE_LIMITED · retry_after_ms > 0 · header `Retry-After` ≥ 1
+    error = "Bạn đã gửi quá nhiều yêu cầu ghi trong thời gian ngắn. Vui lòng thử lại sau khoảng N giây —
+             chưa có giao dịch nào được ghi."
+    store.status(command_id) = null          ← CHƯA tiêu command_id
+    số Payment Entry có reference_no đó = 0  ← CHƯA ghi gì
+  sau khi cửa sổ mở lại: 200, đúng 1 write, paid_amount = 2.500.000
+- Câu đọc: /ask "chị Lan còn nợ bao nhiêu" ×2 → 200, 200 (proposal.action = read_balance KHÔNG tiêu
+  ngân sách ghi); câu ghi "thu tiền cho Nguyễn Thị Lan 50000" → 200 (proposal HIGH), câu ghi thứ 2 → 429.
+- Correlation: 3 lần /execute ⇒ 3 dòng `phase:"execute"` (write_verified · write_verified · rate_limited),
+  dòng đầu có command_id, action_id="act_p10_test", capability="payment.create", user_id="local",
+  request_id (non-empty), latency_ms (number).
+
+== 8. BÀI HỌC ĐÃ LƯU ==
+
+- `.agents/skills/erpn-verify-first/SKILL.md` (+4 hàng, tổng 351 dòng): viết lại helper contract đã có
+  ⇒ cổng tắt lặng lẽ · `export {x} from` không tạo binding · env cấp module + module cache trong test ·
+  meter theo loại chứ không theo "có field".
+- `LESSONS_LEARNED.md` (+1 mục "Vòng P10 slice"): 4 bài học trên, bản tóm tắt.
+
+== 9. CÒN LẠI / CHỜ USER ==
+
+- ⏳ CHỜ DUYỆT COMMIT đợt P10 slice (6 file: 2 mới + 3 sửa + LESSONS_LEARNED + result51.txt).
+  Message đề xuất: `feat(p10): rate limit per user/capability + correlation trail (slice)`
+- Việc người thật (không phải agent): SUBMIT phiếu thu thật · rotate key ERPNext · GitHub Settings ·
+  audio 150 câu · APK device test · review ai-rules.md · ép app icon.
+- KHÔNG làm trong đợt này: P6 (thiếu audio) · P8 (thiếu credential) · P9 (cần acceptance thật) ·
+  P10 full (DR drill, dashboard, load test).
+========================================================================

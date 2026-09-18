@@ -61,7 +61,39 @@ Lộ trình production trong `.plan/phases2/` (nguồn kiến trúc: `.plan/plan
 - Falsify 3 luật trên /tmp (F4 forbidden-offerable, F1 id-leak, F3 low-confidence) đều đỏ đúng chỗ; fix thêm 1 **test flaky có sẵn** (bucket 15-phút của P1 dedup)
 - Suite: Python 60 · **Node 195** (181→195) · **Flutter 69** · analyze 0 — `.plan/phases2/p3-result.md` · `result47.txt`
 
-**Bước kỹ thuật tiếp theo = P4** (Learning loop: log/cluster unknown + human approval) — P3 đã commit `c38e4ea`, không còn gap chặn; KHÔNG tự nhảy sang P5/P9/Voice.
+### P4 (phases2) — Learning loop (human-approved) ✅ ĐÃ COMMIT `d7e9ba9` (đã push)
+
+- **Signal log** `src/learning-log.mjs`: mỗi câu hỏi/câu trả lời → 1 dòng JSONL (`outcome` taxonomy, không secrets, text cap 500, UTC); never-throw (log hỏng không được làm hỏng câu trả lời); dir repo-local `learning-log/` (gitignored, KHÔNG /tmp — bài học result31)
+- **Cluster report** `npm run learning:cluster` — READ-ONLY, nhóm UNKNOWN/UNIMPLEMENTED/LOW_CONFIDENCE theo tần suất + ví dụ nguyên văn, có gợi ý trigger để người sửa contract
+- **Vòng thử thật**: log 9 câu → cluster chỉ ra `"doanh số …"` chưa route (5 biến thể) → người thêm trigger vào contract + golden +2 case → golden 7/7. Đây là đường DUY NHẤT để contract tiến hoá (không auto-write)
+- Review vòng 2 bắt 2 lỗi: `copilotAsk` (đường dsh) chưa qua wrapper log; và claim “E2E 1 call = 1 dòng” chưa có test ⇒ viết test E2E thật (spawn NLP + copilot con)
+- Suite: Python 60 · **Node 204** · Flutter 69 · analyze 0 — `result48.txt`
+
+### P5 (phases2) — DSH explicit opt-in READ ✅ ĐÃ COMMIT `6318eca` (đã push)
+
+- `src/dsh-optin.mjs`: dsh CHỈ chạy khi được spawn với `COPILOT_DSH_CONTEXT=1`; **`/ask` không có đường nào spawn dsh** (test tĩnh quét toàn bộ `src/`)
+- Trong context dsh: mọi WRITE bị `DSH_WRITE_BLOCKED` TRƯỚC skill factory (`proposal: null`), READ vẫn trả lời bình thường; cả hai vẫn vào learning log
+- `docs/dsh-optin.md` (2 chế độ + lệnh smoke); review vòng 2 fix 2 lỗi (`DSH_WRITE_BLOCKED` thiếu trong taxonomy P2; bị xếp nhầm bucket `error`)
+- Suite: **Node 212** · `result49.txt`
+
+### P7 (phases2) — Background job queue ✅ ĐÃ COMMIT `3e6240a` (đã push)
+
+- `src/job-queue.mjs`: WRITE đã confirm mà ERP tạm down (verdict `retry_same_command_id`) → QUEUED; replay qua ĐÚNG `runExecute` (không có write path thứ hai); bounded retry; crash-recovery `RUNNING → RETRYING`; `release()` khi cancel; `completed()` cho report
+- **`startJobRunner()` nối vào `main()`** — trước đó job được enqueue mà không ai drain (exit criteria P7 chỉ đúng khi chạy trong test); `GET /jobs` trả `pending` + `completed`
+- Review tìm 5 finding, falsify 4 guard; TTS ⏭ skip có lý do (việc client, không cần cho exit criteria)
+- Suite: **Node 228** · `result50.txt` + `.plan/phases2/p7-result.md`
+
+### P10 SLICE — Rate limit + Correlation trail ⏳ KỸ THUẬT XONG — CHỜ DUYỆT COMMIT (policy tiền)
+
+- **Rate limit thật** (trước đây chỉ khai trong contract, chưa ai enforce): per user (read 30/phút · write_proposal 10/phút · write_execute 5/phút) + per capability (`payment.create` 20/giờ); vượt ⇒ 429 + `Retry-After` + câu tiếng Việt
+- **Vượt hạn mức KHÔNG đốt `command_id`**: charge TRƯỚC Safety Gateway (đo thật: `store.status(cid) = null`, 0 chứng từ; sau cửa sổ mở lại ghi đúng 1 lần)
+- **Câu ĐỌC không tiêu ngân sách ghi** (`proposalBucketFor()` theo loại contract, vì mọi route ĐỌC cũng trả proposal)
+- **Correlation §17** trên `/ask` + `/execute` + job runner qua `logEvent()` (`request_id/user_id/command_id/action_id/erp_document_id/capability/risk/latency_ms`)
+- **3 lỗi thật của chính code vừa viết đã sửa**: viết lại `capabilityForAction` với nhánh không tồn tại (limit `payment.create` tắt lặng lẽ) · `export {x} from` không tạo binding (mọi `/ask` 500) · meter theo “có proposal” thay vì theo loại
+- Suite: Python 60 · **Node 240** · Flutter 69 · analyze 0 · falsify 4 guard — `result51.txt` + `.plan/phases2/p10-result.md`
+- **Gap giành cho P10 full**: restore drill · kill-switch runbook · dashboard/log query · load test · APK device (human) · compliance note · rate-limit store phân tán (hiện in-process, reset khi restart)
+
+**Bước kỹ thuật tiếp theo = duyệt commit P10 slice → P8 (multi-user, cần credential) / P9 (skill mới, cần acceptance thật) khi user đủ điều kiện.** KHÔNG mở P6 (thiếu audio), không lùi về phase-04/08/10–15 cũ.
 
 ### Phase 0 — Foundation & Verification ✅ (`result1.txt`)
 

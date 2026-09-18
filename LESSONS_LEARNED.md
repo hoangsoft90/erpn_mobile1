@@ -188,3 +188,17 @@
 4. Secret scan trên mọi file sẽ commit; `.env` không bao giờ vào git.
 5. Sau mỗi phiên: cập nhật resultNN + checklist + next + working + handoff (+ skill
    nếu có bài học mới).
+
+## Vòng P10 slice (2026-09-18) — review bắt 3 lỗi thật của chính code vừa viết
+
+- **Đừng viết lại thứ contract đã có.** `capabilityForAction()` đã tồn tại trong
+  `capability-contract.mjs`; bản sao trong `rate-limit.mjs` đọc một nhánh không tồn tại
+  ⇒ luôn `null` ⇒ limit `payment.create 20/hour` **tắt lặng lẽ**. Test pin vào entry THẬT.
+- **`export { x } from` không tạo binding cục bộ.** `proposalBucketFor()` gọi nó ⇒
+  `ReferenceError` nằm trong `try` của `/ask` ⇒ mọi câu hỏi trả 500. Phải `import` rồi
+  `export`, và test phải đi qua WIRING chứ không chỉ hàm thuần.
+- **Env đọc ở cấp module là hằng số theo module cache.** `NLP_PORT` đóng băng lúc import;
+  test set port trong thân test ⇒ pipeline descend thành NLP_UNAVAILABLE mà vẫn 200. Pin
+  env ở ĐẦU file test, trước mọi import.
+- **Meter theo loại, không theo sự hiện diện của field.** Mọi route ĐỌC cũng trả proposal
+  ⇒ nếu charge theo `proposal != null` thì câu hỏi đọc tiêu ngân sách ghi.
