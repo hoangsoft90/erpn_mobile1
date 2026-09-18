@@ -1,0 +1,130 @@
+========================================================================
+RESULT 52 — P10 SLICE: REVIEW VÒNG 3 (F5/F6/F7) + KILL-SWITCH RUNBOOK + ĐỒNG BỘ DOCS
+Timestamp phiên docs: 2026-09-18 05:31 UTC (shell) — cùng ngày với commit `21d77ff`/`d6295ab`
+Phạm vi: KHÔNG đổi logic tiền trong phiên này. Chỉ: (1) ghi lại kết quả vòng review 3,
+(2) xác nhận suite thật, (3) đồng bộ docs root + openspec. KHÔNG chạm ERPNext thật.
+Nguyên tắc: mỗi claim kèm lệnh + output nguyên văn; không claim vượt bằng chứng.
+========================================================================
+
+== 1. HEAD / COMMITS (git log thật) ==
+
+$ git log --oneline -6
+d6295ab docs: lessons from P10 review round 3 (client-side claims, empty-config tests, temporary refusals)
+21d77ff test(p10): cover the per-capability wiring end-to-end; docs: kill-switch runbook
+7cb2798 feat(p10-slice): enforce rate limits before gateway; correlation IDs on ask/execute/jobs
+3e6240a feat(p7): job queue runner for ERP-down confirmed writes, no double payment
+6318eca feat(p5): dsh explicit opt-in read-only — COPILOT_DSH_CONTEXT gate blocks writes ...
+d7e9ba9 feat(p4): human-approved learning loop — JSONL signal log (never-throw), ...
+
+$ git status --short | grep -vE '^\?\? \.(gemini|opencode|agents)|initp'
+(không có output — working tree sạch, branch change/flutter-chat-mvp đồng bộ origin)
+
+== 2. BA ĐIỀU THẬT CỦA VÒNG REVIEW 3 ==
+
+F5 — claim "✅ in-app polling" trong `p7-result.md` KHÔNG có client phía sau:
+  $ grep -rn "jobs" apps/mobile/lib --include=*.dart | wc -l
+  0
+  ⇒ Hàng deliverable 2 của P7 dựa trên endpoint server (`GET /jobs`) + dòng stderr, KHÔNG phải
+  hành vi người dùng thấy. Đã ĐÍNH CHÍNH claim (deliverable 2 → "một phần") + ghi gap UX.
+  Đây là gap UX, KHÔNG phải gap an toàn tiền: server vẫn queue + tự retry, replay đúng command_id.
+
+F6 — lỗ hổng bằng chứng đúng chỗ vừa hỏng (đã bịt + falsify):
+  Mọi test HTTP của P10 đều truyền `perCapability: {}` ⇒ đường wiring
+  `proposal.action → capabilityId → chargeCapability` (chính đường đã hỏng im lặng ở F1, khiến
+  limit `payment.create 20/giờ` TẮT) chưa từng được chạy ở tầng E2E.
+  Đã thêm test dùng rule THẬT (429 từ ngân sách capability; `store.status(cid) = null`;
+  0 chứng từ; log `scope:"per_capability"` + `capability:"payment.create"`; cửa sổ mới cho qua).
+  FALSIFY: tái tạo đúng lỗi F1 (`capabilityId = null`) ⇒ test mới + correlation test FAIL;
+  khôi phục ⇒ xanh (falsify + restore check chạy trong phiên tạo commit `21d77ff`).
+
+F7 — MỞ, chờ user quyết policy (vùng tiền, KHÔNG tự sửa):
+  Probe thật trên JobQueue (verdict đúng shape kill switch: 503 {code:"SYSTEM_MAINTENANCE"},
+  KHÔNG có `retry_same_command_id`):
+    outcome sau 1 lần drain khi bảo trì:
+      [{"command_id":"cmd-f7","state":"FAILED","error":"hệ thống đang ở chế độ CHỈ ĐỌC..."}]
+    state: FAILED | attempts: 1 | terminal (không retry nữa)? true
+  ⇒ Lệnh đang QUEUED gặp kill switch bị đánh FAILED NGAY SAU 1 LẦN và ngừng retry, dù CHƯA từng
+  thử ghi. An toàn tiền KHÔNG bị ảnh hưởng (store không có record; hết bảo trì bấm lại đúng
+  command_id ⇒ chạy đúng 1 lần). Vấn đề là NHÃN trạng thái báo sai bản chất.
+  Hai phương án: (a) coi maintenance là "không phải một lần thử" ⇒ giữ job chờ, không tiêu lượt;
+  (b) giữ fail-fast nhưng đổi trạng thái thành `BLOCKED_MAINTENANCE`.
+  Ghi vào `docs/kill-switch-runbook.md` §4 + faq.md §6.10 + next.md (chờ user quyết).
+
+== 3. `docs/kill-switch-runbook.md` (file MỚI trong commit `21d77ff`) ==
+
+- 2 lớp storage: flag file (hiệu lực NGAY) vs env (phải restart) — bảng bật/tắt
+- disable theo capability
+- bảng kỳ vọng từng đường: `/health` ok · `/ask` ok · `/execute` 503 SYSTEM_MAINTENANCE ·
+  `/execute/cancel` VẪN chạy · `command_id` KHÔNG bị tiêu
+- lệnh curl xác minh + dòng audit stderr
+- §4: tương tác với job queue = F7 (bằng chứng probe ở §2)
+
+== 4. SUITE — CHẠY THẬT LẠI TRONG PHIÊN NÀY (output nguyên văn) ==
+
+$ PYTHONPATH=src python3 -m unittest discover -s tests | tail -4
+    Ran 60 tests in 0.377s
+    OK
+
+$ cd mcp-erpnext && env -u ERPNEXT_URL -u ERPNEXT_API_KEY -u ERPNEXT_API_SECRET \
+    -u ASK_USER -u ASK_PASSWORD node --test | tail -12
+    ✔ MANDATORY: a customer named with an injection cannot trigger a WRITE (1.51871ms)
+    ℹ tests 241
+    ℹ suites 0
+    ℹ pass 241
+    ℹ fail 0
+    ℹ cancelled 0
+    ℹ skipped 0
+    ℹ todo 0
+    ℹ duration_ms 31017.090262
+
+$ cd apps/mobile && flutter test | tail -3
+    00:13 +69: All tests passed!
+
+$ flutter analyze | tail -2
+    Analyzing mobile...
+    No issues found! (ran in 4.8s)
+
+⇒ Python 60/60 · Node 241/241 · Flutter 69/69 · analyze 0 — KHÔNG regress so với các đợt trước
+  (P7: 228 → P10: 240 → vòng 3: 241).
+
+== 5. ĐỒNG BỘ DOCS TRONG PHIÊN NÀY (thay đổi thật, chưa commit) ==
+
+- `checklist.md`: mục P10 slice ghi đủ 3 hash (`7cb2798`/`21d77ff`/`d6295ab`) + mục result43
+  bỏ marker "CHỜ DUYỆT COMMIT" (đã commit `c401b0f`/`f28869a`).
+- `next.md`: hạ marker P1 (đã `ee93f13`) + result43 (đã `c401b0f`); bổ sung khối
+  "Phases2 lõi đã ĐÓNG" liệt kê 8 hash; bước tiếp theo đổi thành P8/P9 khi đủ điều kiện;
+  thêm ô ⚠️ chờ user quyết F7.
+- `features.md`: P3 hết marker "CHỜ DUYỆT" (đã `c38e4ea`); thêm 4 bullet P4/P5/P7/P10-slice có hash;
+  "Trạng thái tổng" cập nhật (suite cuối + 4 nhóm còn chặn + F7).
+- `openspec/changes/flutter-chat-mvp/tasks.md` §6: 6.8 (P1) đổi thành ĐÃ COMMIT `ee93f13`;
+  thêm 6.9→6.14 (P2/P3/P4/P5/P7/P10-slice) + 6.15 (chờ quyết F7) + 6.16 (P6/P8/P9/P10 full).
+- `faq.md`: §6.2 nêu rõ HAI nguồn 429 khác nhau + thêm §6.8 (giới hạn gateway + "không đốt
+  command_id"), §6.9 (ERP sập giữa lúc xác nhận ⇒ xếp hàng, bấm lại an toàn, app chưa poll /jobs),
+  §6.10 (bảo trì 503 — cái gì vẫn chạy, và cảnh báo F7).
+- `result52.txt` (file này) + `handoff_20260918-0531.md` (mới).
+- Bài học vòng 3 (3 bài) đã có trong `.agents/skills/erpn-verify-first/SKILL.md` (hàng 352–354)
+  + `LESSONS_LEARNED.md` (commit `d6295ab`). Phiên này THÊM 1 hàng vào skill: marker trạng thái
+  mục nát ở section/phase MÌNH KHÔNG ĐỤNG — phải quét theo hash + theo tên phase, không chỉ
+  quét 4 file trong danh sách.
+
+== 6. PHÁT HIỆN TỪ CHÍNH ĐỢT ĐỒNG BỘ NÀY (lỗi quy trình, không phải lỗi code) ==
+
+$ grep -rn "CHỜ DUYỆT COMMIT" *.md     # TRƯỚC khi sửa
+checklist.md:198  (result43 — đã commit c401b0f)
+features.md:117   (P3 — đã commit c38e4ea)
+next.md:29        (P1 — đã commit ee93f13)
+next.md:210       (result43 — đã commit c401b0f)
+⇒ 4 marker cũ nằm ĐÚNG trong 4 file mà checklist "quét marker sau commit" đã liệt kê sẵn —
+  nghĩa là luật đã có trong skill nhưng KHÔNG được chạy. Nguyên nhân sâu: các phiên chỉ cập nhật
+  SECTION MỚI NHẤT, còn marker của phase cũ nằm ở section khác không ai chạm.
+  Đã bổ sung 1 hàng vào skill (quét hash + quét tên phase) và sửa hết 4 marker trong phiên này.
+
+== 7. CÒN LẠI ==
+
+- ⚠️ **Chờ user quyết F7** (a/b) — sau đó mới sửa (vùng tiền).
+- Việc CHỈ người thật: diễn tập runbook kill-switch trên gateway thật · SUBMIT phiếu thu thật ·
+  rotate key ERPNext · dán 3 giá trị GitHub Settings · thu 150 câu audio (mở P6) · test APK trên
+  thiết bị thật · review `ai-rules.md` · duyệt app icon.
+- KHÔNG làm: P4→(auto-prod), P6 (thiếu audio), P8 (thiếu credential), P9 (cần acceptance thật),
+  P10 full (DR drill/dashboard/load test/rate-limit store phân tán), saga/REVERSAL.
+========================================================================

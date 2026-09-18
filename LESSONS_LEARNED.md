@@ -214,3 +214,16 @@
   1 lần, terminal, dù chưa từng thử ghi (verdict `SYSTEM_MAINTENANCE` thiếu `retry_same_command_id`).
   Phải test TƯƠNG TÁC 2 feature (kill switch × queue), không chỉ từng feature riêng.
 
+## Đồng bộ docs sau commit (2026-09-18) — marker trạng thái mục nát ở section MÌNH KHÔNG ĐỤNG
+
+- **Luật "quét marker sau commit" đã có trong skill nhưng KHÔNG được chạy** ⇒ vẫn còn 4 marker
+  "CHỜ DUYỆT COMMIT" trong tài liệu sống, tất cả đều thuộc **phase/đợt cũ**:
+  `next.md` P1 (đã `ee93f13`), `features.md` P3 (đã `c38e4ea`), `checklist.md` + `next.md` result43
+  (đã `c401b0f`/`f28869a`).
+- **Vì sao lọt:** mỗi phiên chỉ cập nhật **section mới nhất** mình vừa làm; marker của phase cũ nằm ở
+  section khác nên không bị chạm tới. Sửa phase mới KHÔNG tự làm sạch phase cũ.
+- **Cách bịt:** ngoài `grep` marker, phải quét thêm (1) theo **hash của chính phiên vừa commit**
+  (`grep -rn "<hash>" *.md`) và (2) theo **tên phase** (`grep -rn "^### P[0-9]" next.md`) đối chiếu
+  từng dòng "KỸ THUẬT XONG/CHỜ DUYỆT" với `git log --oneline`.
+- **`handoff_*.md` là ngoại lệ:** đó là **ảnh chụp** của phiên, giữ nguyên trạng thái lúc viết —
+  không phải tài liệu sống, không cần (và không nên) sửa marker trong đó.

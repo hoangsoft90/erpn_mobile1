@@ -287,6 +287,58 @@ mạng — **không phải** công nợ trong ERPNext sai.
 LLM miễn phí (Gemini) có giới hạn theo phút/ngày. Gặp lỗi này **thử lại sau ~60 giây**;
 không phải số liệu sai. Khi dev hằng ngày hiện đã trỏ sang LLM tự host (không giới hạn).
 
+> ⚠️ **Có HAI nguồn "429" khác nhau — đừng lẫn:** (1) **429 của nhà cung cấp LLM** (hết quota
+> miễn phí) và (2) **429 của chính gateway app** (bạn hỏi/bấm quá nhanh — xem §6.8).
+> Cả hai đều là "chờ rồi thử lại", không phải dữ liệu sai.
+
+### 6.8 ⏱️ "429 — bạn thao tác quá nhanh": gateway có giới hạn thật (từ 2026-09-18)
+
+Trước đây luật giới hạn chỉ nằm trong tài liệu, **chưa ai chặn**; từ đợt P10 gateway enforce thật:
+
+| Loại việc | Giới hạn |
+|---|---|
+| Câu hỏi ĐỌC (công nợ, tồn kho…) | 30 / phút |
+| Tạo đề xuất GHI (thẻ [Xác nhận] hiện ra) | 10 / phút |
+| Bấm [Xác nhận] (thực sự ghi) | 5 / phút |
+| Riêng ghi phiếu thu (`payment.create`) | 20 / giờ |
+
+**Hiểu đúng:**
+- Vượt hạn mức → app trả **429 kèm câu tiếng Việt** + header `Retry-After`. Chờ rồi thử lại.
+- ❗ **Bị 429 KHÔNG "đốt" lệnh của bạn**: gateway chặn TRƯỚC khi ghi, nên `command_id` vẫn nguyên
+  (đã đo thật: store không có bản ghi, 0 phiếu thu nào được tạo). Mở lại cửa sổ rồi bấm lại ⇒ vẫn
+  đúng **1 phiếu**, không ghi 2 lần.
+- Câu hỏi ĐỌC **không** tiêu mất ngân sách ghi (2 sổ riêng).
+- Hủy lệnh (`/execute/cancel`) **không bao giờ** bị giới hạn — cần hủy là hủy được ngay.
+- Nếu bạn cố tình tắt giới hạn khi test: `COPILOT_RATE_LIMIT=off`. Config bị viết hỏng thì hệ thống
+  **tự quay về hạn mức mặc định** (không tắt cổng lặng lẽ).
+
+### 6.9 📥 "ERP sập giữa lúc tôi vừa xác nhận" — lệnh được xếp hàng, không ghi 2 lần
+
+Nếu gateway kịp **nhận lệnh nhưng chưa kịp ghi** (ERPNext tạm không tới được), gateway **xếp lệnh
+vào hàng đợi** và tự thử lại sau, thay vì trả "thành công" giả:
+
+- Lệnh chỉ xếp hàng khi lỗi xảy ra **TRƯỚC khi ghi** — nếu đã ghi được thì không xếp hàng, không ghi lại.
+- Mọi lần thử lại đi qua **đúng đường ghi cũ** + idempotency ⇒ dù bạn bấm lại hay hệ thống tự thử lại,
+  **kết quả vẫn là 1 phiếu duy nhất**.
+- Trạng thái lệnh xem được ở `GET /jobs` (đang chờ / đã xong / thất bại).
+- ⚠️ **Thiếu ở app (đã ghi nhận, chưa làm):** app **chưa** tự poll `/jobs` — gặp lỗi bạn sẽ thấy
+  thông báo lỗi và phải **tự bấm lại** nút [Xác nhận]. Bấm lại là **an toàn** (replay cùng lệnh,
+  không ghi phiếu thứ hai).
+
+### 6.10 🛠️ "Hệ thống đang bảo trì" (503 `SYSTEM_MAINTENANCE`) — app làm gì?
+
+Chủ dự án có thể bật **kill switch** để chặn mọi thao tác GHI (ví dụ đang sửa dữ liệu ERPNext).
+**Hiểu đúng:**
+
+- Câu hỏi ĐỌC vẫn trả lời bình thường; **chỉ đường GHI bị chặn**: bấm [Xác nhận] ⇒ 503 kèm câu báo bảo trì.
+- ❗ **Lệnh bị chặn KHÔNG tiêu `command_id`** — hết bảo trì bấm lại là chạy (đúng 1 phiếu).
+- **Hủy lệnh vẫn chạy** trong lúc bảo trì (để dọn lệnh đang treo).
+- Chi tiết vận hành: `docs/kill-switch-runbook.md`.
+- ⚠️ **Điểm đang chờ quyết định (F7, chưa sửa):** nếu một lệnh đang **trong hàng đợi** mà gặp bảo trì,
+  hiện tại nó bị đánh dấu **thất bại sau 1 lần thử** (dù chưa hề thử ghi) và **ngừng thử lại** —
+  an toàn tiền không bị ảnh hưởng (chưa có gì được ghi), nhưng nhãn "thất bại" là **chưa đúng bản chất**.
+  Cách xử lý tạm: hết bảo trì bấm lại nút [Xác nhận] trên đúng thẻ đó.
+
 ### 6.3 Dữ liệu demo lẫn trong site — đừng nhầm là khách thật
 
 Site demo có các khách do quá trình kiểm thử tạo ra, ví dụ: `Khách smoke 2026-09-15-p1b-wf1-2`,
