@@ -96,9 +96,9 @@ Lộ trình production trong `.plan/phases2/` (nguồn kiến trúc: `.plan/plan
 
 - **Commit đợt review vòng 3**: `21d77ff` (test E2E per-capability + `docs/kill-switch-runbook.md`) · `d6295ab` (bài học vòng 3)
 
-**Phases2 đã ĐÓNG: P0 `b4acdb1` · P1 `ee93f13` · P2 `33ff725` · P3 `c38e4ea` · P4 `d7e9ba9` · P5 `6318eca` · P6 `9b54d35` · P7 `3e6240a` · P10-slice `7cb2798`/`21d77ff`/`d6295ab` (tất cả đã push).**
+**Phases2 đã ĐÓNG: P0 `b4acdb1` · P1 `ee93f13` · P2 `33ff725` · P3 `c38e4ea` · P4 `d7e9ba9` · P5 `6318eca` · P6 `9b54d35` · P7 `3e6240a` · P8 `90401f0` · P10-slice `7cb2798`/`21d77ff`/`d6295ab` (tất cả đã push).**
 
-### P8 (phases2) — Multi-user / RBAC / company scope 🟡 KỸ THUẬT XONG — CHỜ DUYỆT COMMIT (đụng auth + vùng tiền)
+### P8 (phases2) — Multi-user / RBAC / company scope ✅ ĐÃ COMMIT `90401f0` (đã push)
 
 - **`src/authorization.mjs` (mới)** — boundary phân quyền server-side, đọc từ `capabilities.json` (không hardcode capability nào trong logic): `resolvePrincipal` · `checkPermissions` · `resolveCompanyScope` · `authorize` · `describeAuthorization`
 - **2 chế độ**: `multi_user` (`COPILOT_USERS` JSON, tường minh) và `single_tenant` (mặc định — giữ hành vi cũ để **không chặn lệnh ghi khi nâng cấp**; đo thật: bỏ miễn trừ này làm đỏ **33 test**). Company: server-first (principal → `COPILOT_COMPANY` → request); multi-user thiếu company ⇒ `COMPANY_SCOPE_REQUIRED` (map về copy P2 `AUTHORIZATION_DENIED` để user luôn có chữ)
@@ -126,7 +126,7 @@ Lộ trình production trong `.plan/phases2/` (nguồn kiến trúc: `.plan/plan
 - Suite: Python 62 · Node 250 · **Flutter 101** (80→101) · analyze 0 — `.plan/phases2/p6-result.md`
 - **Gap (có lý do)**: APK CI phải build lại để xác nhận plugin native (agent không có Android SDK) · smoke máy thật có mic = việc người thật (checklist trong `p6-result.md`)
 
-Bước kỹ thuật tiếp theo: **P8 CHỜ DUYỆT COMMIT** (xem mục trên) · **P9** (skill mới — **gate ĐÃ MỞ** sau khi Golden 0 miss, cần user ra lệnh) — riêng **P10 full** (DR drill, dashboard, load test, rate-limit store phân tán) vẫn hoãn.
+Bước kỹ thuật tiếp theo: **P9** (skill mới — **gate ĐÃ MỞ** sau khi Golden 0 miss, cần user ra lệnh) — riêng **P10 full** (DR drill, dashboard, load test, rate-limit store phân tán) vẫn hoãn.
 ### F7 — ĐÃ GIẢI QUYẾT (user chọn policy (a), 2026-09-18)
 
 > **Luật mới: bảo trì/kill switch KHÔNG phải một lần thử.**
