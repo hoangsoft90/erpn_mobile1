@@ -34,6 +34,23 @@ import { appendFileSync, readFileSync, existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 
+/**
+ * F7 (user decision 2026-09-18, policy (a)): a maintenance/capability refusal
+ * is a TEMPORARY refusal that happens BEFORE any write attempt — the gateway
+ * checked the kill switch and said "not now". It must NOT consume the retry
+ * budget or become FAILED: the job simply waits, and the next drain picks it
+ * up once the switch is off (no manual re-tap of the command_id needed).
+ * Any OTHER non-retryable verdict keeps the old FAILED-terminal behaviour.
+ */
+export const TEMPORARY_REFUSAL_CODES = Object.freeze([
+  "SYSTEM_MAINTENANCE",   // kill switch: global read-only
+  "CAPABILITY_DISABLED",  // operator disabled this one capability
+]);
+
+export function isTemporaryRefusal(verdict) {
+  return TEMPORARY_REFUSAL_CODES.includes(verdict?.body?.code);
+}
+
 export const JOB_STATES = Object.freeze({
   QUEUED: "QUEUED",       // enqueued from a retryable 503, waiting for the runner
   RUNNING: "RUNNING",     // drained once, awaiting a verdict
@@ -201,6 +218,28 @@ export class JobQueue {
 
       const retryable =
         verdict.status === 503 && verdict.body?.retry_same_command_id === true;
+
+      // F7 policy (a): maintenance/capability refusals are refusals BEFORE the
+      // attempt, so the attempt counter must not advance for them. Roll the
+      // counter back (the ATTEMPT event above stays in the JSONL as evidence
+      // that a drain looked at the job) and wait past the usual backoff. The
+      // job stays non-terminal; the next drain retries it once the switch is
+      // off — no human re-tap of the command_id.
+      if (isTemporaryRefusal(verdict)) {
+        job.attempts -= 1;
+        this._transition(job, JOB_STATES.RETRYING);
+        job.last_error = verdict.body?.error ?? `HTTP ${verdict.status}`;
+        job.next_attempt_at = this.now() + this.config.delayMs;
+        this._persistEvent(job, "TEMPORARY_REFUSAL");
+        outcomes.push({
+          command_id: job.command_id,
+          state: JOB_STATES.RETRYING,
+          error: job.last_error,
+          code: verdict.body?.code ?? null,
+        });
+        continue;
+      }
+
       if (retryable && job.attempts < this.config.maxAttempts) {
         this._transition(job, JOB_STATES.RETRYING);
         job.last_error = verdict.body?.error ?? `HTTP ${verdict.status}`;

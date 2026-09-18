@@ -9,13 +9,9 @@
 
 ## 1. Quyết định chặn việc kỹ thuật (agent KHÔNG tự quyết)
 
-- [ ] **F7 — chính sách khi lệnh đang xếp hàng mà gặp bảo trì.** Hiện tại: job QUEUED gặp kill switch
-      bị đánh `FAILED` ngay sau 1 lần và ngừng thử lại, dù **chưa từng thử ghi**. An toàn tiền không
-      bị ảnh hưởng (chưa ghi gì; bấm lại đúng `command_id` sau bảo trì là chạy đúng 1 phiếu), nhưng
-      nhãn "thất bại" là **báo sai bản chất**. Chọn 1:
-      **(a)** coi bảo trì là "không phải một lần thử" ⇒ job ở lại hàng chờ, không tiêu lượt thử;
-      **(b)** giữ fail-fast nhưng đổi trạng thái thành `BLOCKED_MAINTENANCE`.
-      → Bằng chứng probe + phân tích: `docs/kill-switch-runbook.md` §4 · `result52.txt` §2.
+- [x] **F7 — ĐÃ QUYẾT (2026-09-18): chọn (a) — bảo trì KHÔNG phải một lần thử.** Job gặp kill switch
+      ở lại hàng chờ (`RETRYING`), không tiêu lượt thử, không FAILED; tắt bảo trì thì runner tự nhặt
+      lại ở lần drain kế tiếp. Đã code + test + falsify (`result53.txt`) — **chờ duyệt commit**.
 - [ ] **SUBMIT phiếu thu thật hay không.** Hiện luồng ghi chỉ tạo phiếu **NHÁP** (`docstatus 0`) —
       công nợ **không** giảm cho tới khi người thật submit trên UI ERPNext. Quyết định này thuộc
       chủ dự án, agent không tự bật.

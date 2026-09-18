@@ -92,13 +92,25 @@ Lộ trình production trong `.plan/phases2/` (nguồn kiến trúc: `.plan/plan
 - **3 lỗi thật của chính code vừa viết đã sửa**: viết lại `capabilityForAction` với nhánh không tồn tại (limit `payment.create` tắt lặng lẽ) · `export {x} from` không tạo binding (mọi `/ask` 500) · meter theo “có proposal” thay vì theo loại
 - Suite: Python 60 · **Node 240** · Flutter 69 · analyze 0 · falsify 4 guard — `result51.txt` + `.plan/phases2/p10-result.md`
 - **Gap giành cho P10 full**: restore drill · **chạy thử runbook** (đã viết `docs/kill-switch-runbook.md`, chưa diễn tập trên gateway thật) · dashboard/log query · load test · APK device (human) · compliance note · rate-limit store phân tán (hiện in-process, reset khi restart)
-- **Review vòng 3 (2026-09-18, sau commit)**: **F5** đính chính claim "in-app polling" ở P7 (client KHÔNG poll `/jobs` — gap UX, không phải gap an toàn tiền) · **F6** bịt lỗ hổng bằng chứng: thêm test E2E cho đường per-capability (chính chỗ lỗi F1 từng hỏng im lặng) + falsify bằng cách tái tạo lỗi F1 · **F7 MỞ — cần user quyết policy**: job đang QUEUED gặp kill switch ⇒ `drain()` đánh **FAILED ngay sau 1 lần** (verdict `SYSTEM_MAINTENANCE` không có `retry_same_command_id`) dù chưa từng thử ghi; an toàn tiền không bị ảnh hưởng (store không có record, bấm lại đúng `command_id` sau bảo trì là chạy đúng 1 lần). Bằng chứng probe trong `docs/kill-switch-runbook.md` §4
+- **Review vòng 3 (2026-09-18, sau commit)**: **F5** đính chính claim "in-app polling" ở P7 (client KHÔNG poll `/jobs` — gap UX, không phải gap an toàn tiền) · **F6** bịt lỗ hổng bằng chứng: thêm test E2E cho đường per-capability (chính chỗ lỗi F1 từng hỏng im lặng) + falsify bằng cách tái tạo lỗi F1 · **F7 → ĐÃ GIẢI QUYẾT (xem dưới)**
 
 - **Commit đợt review vòng 3**: `21d77ff` (test E2E per-capability + `docs/kill-switch-runbook.md`) · `d6295ab` (bài học vòng 3)
 
 **Phases2 lõi đã ĐÓNG: P0 `b4acdb1` · P1 `ee93f13` · P2 `33ff725` · P3 `c38e4ea` · P4 `d7e9ba9` · P5 `6318eca` · P7 `3e6240a` · P10-slice `7cb2798`/`21d77ff`/`d6295ab` (tất cả đã push).**
 Bước kỹ thuật tiếp theo (khi user đủ điều kiện): **P8** (multi-user, cần credential) · **P9** (skill mới, cần acceptance trên ERPNext thật) — riêng **P10 full** (DR drill, dashboard, load test, rate-limit store phân tán) và **P6** (thiếu audio) vẫn hoãn.
-⚠️ **Đang chờ user quyết 1 việc policy (F7)**: job QUEUED gặp kill switch ⇒ hiện bị đánh `FAILED` sau 1 lần dù chưa từng thử ghi — chọn (a) giữ job chờ, coi bảo trì là "không phải một lần thử" hoặc (b) giữ fail-fast nhưng đổi trạng thái thành `BLOCKED_MAINTENANCE`. Bằng chứng: `docs/kill-switch-runbook.md` §4.
+### F7 — ĐÃ GIẢI QUYẾT (user chọn policy (a), 2026-09-18)
+
+> **Luật mới: bảo trì/kill switch KHÔNG phải một lần thử.**
+- `job-queue.mjs` thêm `isTemporaryRefusal()` (`SYSTEM_MAINTENANCE` · `CAPABILITY_DISABLED`): drain gặp
+  refusal tạm thời ⇒ job về lại **RETRYING**, **roll back bộ đếm attempt** (chưa hề thử ghi thì không
+  tính là thử), **không FAILED**, hẹn `next_attempt_at` theo backoff hiện có, JSONL ghi sự kiện
+  `TEMPORARY_REFUSAL`.
+- Tắt bảo trì xong ⇒ **lần drain kế tiếp tự nhặt lệnh lên** (polling có sẵn của runner) — không cần
+  bấm lại `command_id`; chạy đúng 1 lần ⇒ VERIFIED (attempt đầu tiên THẬT mới được tính).
+- Hành vi lỗi GHI THẬT không đổi: non-retryable (vd `PROPOSAL_STALE`) vẫn FAILED-terminal.
+- Test: 3 case mới (giữ trạng thái + không tiêu attempt qua nhiều lần bảo trì · tắt switch → VERIFIED
+  đúng 1 lần · lỗi thật vẫn FAILED). **Falsify**: gỡ nhánh tạm thời → 2 test ĐỎ đúng assertion
+  (`expected RETRYING / actual FAILED`) — khôi phục byte-identical, 19/19 xanh. Bằng chứng `result53.txt`.
 KHÔNG mở P6 (thiếu audio), không lùi về phase-04/08/10–15 cũ.
 
 ### Phase 0 — Foundation & Verification ✅ (`result1.txt`)

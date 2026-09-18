@@ -73,10 +73,16 @@ hiểu sai, và ý định đã xác nhận bị dừng retry bởi một tình 
 bị ảnh hưởng: chưa có gì được ghi, store không có record, nên người dùng bấm lại ĐÚNG `command_id`
 sau bảo trì là chạy đúng 1 lần.
 
-Cách xử lý tạm khi vận hành: bật bảo trì thì **ghi lại giờ**, tắt xong nhắc người dùng mở lại đúng
-card và bấm [Xác nhận] (không tạo đề xuất mới). Chờ quyết định policy để sửa hẳn (2 phương án:
-(a) coi `SYSTEM_MAINTENANCE`/`CAPABILITY_DISABLED` là **không phải một lần thử** — giữ job chờ, không
-tiêu lượt; (b) giữ fail-fast nhưng đặt trạng thái riêng `BLOCKED_MAINTENANCE` để report đúng).
+**✅ ĐÃ GIẢI QUYẾT — policy (a), chủ dự án chọn 2026-09-18: bảo trì KHÔNG phải một lần thử.**
+- Lệnh trong hàng gặp kill switch ⇒ ở lại **RETRYING**, **không tiêu lượt thử**, **không FAILED**
+  (refusal của kill switch xảy ra TRƯỚC khi thử ghi — bước 4 của gateway, trước freshness/idempotency).
+- Tắt bảo trì xong, **lần drain kế tiếp tự nhặt lệnh lên chạy** (polling có sẵn của runner) —
+  **không cần bấm lại `command_id` thủ công**. Verdict đúng 1 lần VERIFIED (test `result53.txt`).
+- Hành vi GHI THẬT LỖI không đổi: verdict non-retryable (vd `PROPOSAL_STALE`) vẫn FAILED-terminal.
+- Mã thuộc nhóm refusal tạm thời: `SYSTEM_MAINTENANCE` · `CAPABILITY_DISABLED`
+  (`isTemporaryRefusal()` trong `job-queue.mjs`; JSONL ghi sự kiện `TEMPORARY_REFUSAL`).
+- Cách vận hành giờ đây: bật bảo trì ⇒ **ghi lại giờ**; tắt xong ⇒ không phải làm gì thêm —
+  runner tự chạy lại. Chỉ cần kiểm `/jobs` để xác nhận lệnh chuyển VERIFIED/FAILED đúng nghĩa.
 
 ## 5. Không thuộc phạm vi runbook này
 

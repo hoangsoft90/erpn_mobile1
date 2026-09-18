@@ -334,10 +334,10 @@ Chủ dự án có thể bật **kill switch** để chặn mọi thao tác GHI 
 - ❗ **Lệnh bị chặn KHÔNG tiêu `command_id`** — hết bảo trì bấm lại là chạy (đúng 1 phiếu).
 - **Hủy lệnh vẫn chạy** trong lúc bảo trì (để dọn lệnh đang treo).
 - Chi tiết vận hành: `docs/kill-switch-runbook.md`.
-- ⚠️ **Điểm đang chờ quyết định (F7, chưa sửa):** nếu một lệnh đang **trong hàng đợi** mà gặp bảo trì,
-  hiện tại nó bị đánh dấu **thất bại sau 1 lần thử** (dù chưa hề thử ghi) và **ngừng thử lại** —
-  an toàn tiền không bị ảnh hưởng (chưa có gì được ghi), nhưng nhãn "thất bại" là **chưa đúng bản chất**.
-  Cách xử lý tạm: hết bảo trì bấm lại nút [Xác nhận] trên đúng thẻ đó.
+- ✅ **Lệnh đang chờ trong hàng gặp bảo trì thì sao? (đã sửa theo quyết định của chủ dự án, 2026-09-18):**
+  nó **ở lại hàng chờ** — không bị đánh "thất bại", không mất lượt thử — vì bảo trì chặn **TRƯỚC** khi
+  thử ghi (chưa hề thử thì không tính là thử). Tắt bảo trì xong, hệ thống **tự chạy lại** lệnh đó ở
+  lần dò kế tiếp: **không cần bấm lại nút [Xác nhận]**. Kết quả vẫn đúng **1 phiếu duy nhất**.
 
 ### 6.3 Dữ liệu demo lẫn trong site — đừng nhầm là khách thật
 

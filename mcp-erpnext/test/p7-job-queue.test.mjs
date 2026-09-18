@@ -293,6 +293,78 @@ test("F-A startJobRunner — JOB_QUEUE=off returns null (no runner, no timer)", 
   assert.equal(timer, null);
 });
 
+test("F7 policy (a) — kill-switch refusal does NOT burn the attempt and does NOT go FAILED", async () => {
+  const cfg = tmpCfg();
+  const q = new JobQueue({ config: cfg });
+  q.enqueue({ command_id: "cmd-f7", proposal: PROPOSAL });
+
+  let calls = 0;
+  const maintenance = () => {
+    calls += 1;
+    return { status: 503, body: { ok: false, code: "SYSTEM_MAINTENANCE", error: "hệ thống đang ở chế độ CHỈ ĐỌC — mọi lệnh ghi mới bị từ chối" } };
+  };
+
+  const o1 = await q.drain({ runExecute: maintenance });
+  assert.equal(o1[0].state, JOB_STATES.RETRYING, "temporary refusal parks the job, never FAILED");
+  assert.equal(o1[0].code, "SYSTEM_MAINTENANCE");
+  assert.equal(q.status("cmd-f7").attempts, 0, "refusal happens BEFORE the write attempt — no budget burned");
+  assert.equal(calls, 1);
+
+  // Backoff has not elapsed: the second drain must not even call the gateway.
+  assert.equal((await q.drain({ runExecute: maintenance })).length, 0);
+  assert.equal(calls, 1);
+
+  // Many maintenance drains later: still parked, still zero budget burned.
+  q.now = () => Date.now() + cfg.delayMs;
+  await q.drain({ runExecute: maintenance });
+  q.now = () => Date.now() + 2 * cfg.delayMs;
+  await q.drain({ runExecute: maintenance });
+  assert.equal(q.status("cmd-f7").state, JOB_STATES.RETRYING, "still waiting, not terminal");
+  assert.equal(q.status("cmd-f7").attempts, 0, "maintenance never consumes the retry budget");
+
+  // CAPABILITY_DISABLED is the same class of refusal (operator-disabled capability).
+  const disabled = () => ({ status: 503, body: { ok: false, code: "CAPABILITY_DISABLED", error: "capability đang bị tắt" } });
+  q.now = () => Date.now() + 3 * cfg.delayMs;
+  const o3 = await q.drain({ runExecute: disabled });
+  assert.equal(o3[0].state, JOB_STATES.RETRYING);
+  assert.equal(o3[0].code, "CAPABILITY_DISABLED");
+  assert.equal(q.status("cmd-f7").attempts, 0);
+});
+
+test("F7 policy (a) — switch off → the NEXT drain runs it, exactly once, VERIFIED", async () => {
+  const cfg = tmpCfg();
+  const q = new JobQueue({ config: cfg });
+  q.enqueue({ command_id: "cmd-f7b", proposal: PROPOSAL });
+
+  const maintenance = () => ({ status: 503, body: { ok: false, code: "SYSTEM_MAINTENANCE", error: "CHỈ ĐỌC" } });
+  await q.drain({ runExecute: maintenance });
+  assert.equal(q.status("cmd-f7b").state, JOB_STATES.RETRYING);
+
+  // Maintenance over: no manual re-tap — the next drain picks the job up.
+  let calls = 0;
+  const gateway = async () => {
+    calls += 1;
+    return { status: 200, body: { ok: true, erpnext_doc: "ACC-PAY-2026-00042" } };
+  };
+  q.now = () => Date.now() + cfg.delayMs;
+  const done = await q.drain({ runExecute: gateway });
+  assert.equal(done[0].state, JOB_STATES.VERIFIED);
+  assert.equal(q.status("cmd-f7b").attempts, 1, "the FIRST real attempt is the one that counts");
+  assert.equal(calls, 1, "exactly one write through the Safety Gateway");
+  assert.equal((await q.drain({ runExecute: gateway })).length, 0, "terminal — no second run");
+});
+
+test("F7 policy (a) — a REAL write failure is still FAILED-terminal (behaviour unchanged)", async () => {
+  const cfg = tmpCfg();
+  const q = new JobQueue({ config: cfg });
+  q.enqueue({ command_id: "cmd-real-fail", proposal: PROPOSAL });
+
+  const runExecute = async () => ({ status: 409, body: { ok: false, code: "PROPOSAL_STALE", error: "số dư đã đổi" } });
+  const outcomes = await q.drain({ runExecute });
+  assert.equal(outcomes[0].state, JOB_STATES.FAILED, "non-retryable write verdict keeps the old terminal behaviour");
+  assert.equal(q.status("cmd-real-fail").attempts, 1, "a real attempt stays counted");
+});
+
 test("F-A wiring — cancel releases the job; /jobs reports completed; main() runs the runner on the REAL gateway", () => {
   const src = readFileSync(path.join(HERE, "..", "src", "http-ask.mjs"), "utf8");
   const cancelBlock = src.slice(src.indexOf('path === "/execute/cancel"'), src.indexOf('path === "/execute"'));
