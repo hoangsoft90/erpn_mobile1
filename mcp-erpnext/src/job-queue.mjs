@@ -45,6 +45,12 @@ import { randomUUID } from "node:crypto";
 export const TEMPORARY_REFUSAL_CODES = Object.freeze([
   "SYSTEM_MAINTENANCE",   // kill switch: global read-only
   "CAPABILITY_DISABLED",  // operator disabled this one capability
+  // P8: an authorization refusal happens BEFORE the write is attempted, so it
+  // is not a failed attempt on a human-confirmed intent. The operator may grant
+  // the permission (or pin the company) and the job then completes on its own;
+  // marking it FAILED would silently drop money the user already confirmed.
+  "AUTHORIZATION_DENIED",
+  "COMPANY_SCOPE_REQUIRED",
 ]);
 
 export function isTemporaryRefusal(verdict) {
@@ -135,7 +141,7 @@ export class JobQueue {
    * MUST pass the original command_id + proposal verbatim.
    * @returns {{ok: true, job: object} | {ok: false, reason: string}}
    */
-  enqueue({ command_id, proposal, dedup_ack = false, reason }) {
+  enqueue({ command_id, proposal, dedup_ack = false, reason, user_id = null, company = null }) {
     if (!this.config.enabled) return { ok: false, reason: "JOB_QUEUE_DISABLED" };
     if (!command_id || !proposal) return { ok: false, reason: "MISSING_COMMAND_OR_PROPOSAL" };
     if (this.jobs.has(command_id)) {
@@ -149,6 +155,14 @@ export class JobQueue {
       command_id,
       proposal, // verbatim — replayed through the gateway, never re-built
       dedup_ack: dedup_ack === true,
+      // P8: WHO asked. The runner replays minutes later, in a different tick,
+      // with no request context — without this the replay would resolve the
+      // default principal, so the write would be authorized and audited as the
+      // wrong account. Only the IDENTITY is stored: permissions are re-resolved
+      // from config at drain time, because authorization must reflect the
+      // policy in force when the write actually happens.
+      user_id: user_id ?? null,
+      company: company ?? null,
       reason: reason ?? null,
       state: JOB_STATES.QUEUED,
       attempts: 0,
@@ -200,6 +214,10 @@ export class JobQueue {
           command_id: job.command_id,
           proposal: job.proposal,
           dedup_ack: job.dedup_ack,
+          // P8: carry the original actor back into the gateway. It re-resolves
+          // the principal (and therefore the CURRENT permissions) from this id.
+          user_id: job.user_id ?? null,
+          company: job.company ?? null,
         });
       } catch (err) {
         // runExecute is supposed to return verdicts, not throw. A throw here

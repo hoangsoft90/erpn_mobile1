@@ -38,6 +38,7 @@ import {
   getCapability,
 } from "./capability-contract.mjs";
 import { checkKillSwitch, logToggle } from "./kill-switch.mjs";
+import { authorize, resolvePrincipal } from "./authorization.mjs";
 
 /** Shape of a refusal the HTTP layer can send as-is. */
 function refuse(status, body) {
@@ -74,9 +75,26 @@ export function checkAmountPolicy(cap, rawAmount) {
  * @param {object} req.proposal   erpn.proposal/v1 built by the skill layer
  * @param {object} req.store      IdempotencyStore (already constructed by the caller)
  * @param {() => object} [req.createClient] test seam; defaults to the real client
+ * @param {object} [req.principal]  P8: resolved principal (permissions + company)
+ * @param {string} [req.company]    P8: company supplied by the request, if any
+ * @param {object} [req.env]        P8: env used to resolve a principal when none is passed
  * @returns {Promise<{status:number, body:object}>}
  */
-export async function runExecute({ command_id, proposal, store, createClient, dedup_ack = false, ledger = null } = {}) {
+export async function runExecute({
+  command_id,
+  proposal,
+  store,
+  createClient,
+  dedup_ack = false,
+  ledger = null,
+  principal,
+  company,
+  // P8: the job runner replays with an ACTOR ID rather than a resolved
+  // principal object, so permissions are re-read from current config at the
+  // moment of the write instead of being frozen when the job was queued.
+  user_id,
+  env = process.env,
+} = {}) {
   if (!isValidCommandId(command_id)) {
     return refuse(400, { error: "command_id must be a client-generated UUID" });
   }
@@ -101,6 +119,24 @@ export async function runExecute({ command_id, proposal, store, createClient, de
     return refuse(err?.code === "FORBIDDEN_IN_AI_PATH" ? 403 : 400, {
       code: err?.code ?? "CAPABILITY_INVALID",
       error: err?.message ?? String(err),
+    });
+  }
+
+  // 1b. AUTHORIZATION (P8, plan2_final §5 + §24.2) — server-side, contract
+  //     driven, and BEFORE every other policy so an account that may not run
+  //     this capability never even reaches the amount/business gates. Placed
+  //     ahead of the idempotency gate on purpose: a refusal here must not burn
+  //     a command_id. The principal is resolved once at the HTTP edge, but a
+  //     direct caller (tests, job runner) that passes none still gets a real
+  //     check against the process env instead of a bypass.
+  const actor = principal ?? resolvePrincipal({ user: user_id ?? undefined, env });
+  const authz = authorize(capabilityId, { principal: actor, company, env });
+  if (!authz.ok) {
+    return refuse(authz.code === "AUTHORIZATION_DENIED" ? 403 : 409, {
+      code: authz.code,
+      error: authz.error,
+      authz_mode: actor.mode,
+      user_id: actor.user_id,
     });
   }
 
@@ -168,6 +204,11 @@ export async function runExecute({ command_id, proposal, store, createClient, de
     gate = store.begin(command_id, {
       action: proposal.action,
       fingerprint: fp,
+      // P8 §19 deliverable 4: the command record names the ACTOR. The
+      // correlation log has it too, but the write record is what survives in
+      // the store, so an audit after the fact does not depend on log retention.
+      user_id: actor.user_id,
+      company: authz.company ?? null,
       // Phase 9 — the (customer, invoice) pair is the INTENT. While one command
       // is PENDING on it, a second command_id must not execute it: two proposals
       // for the same debt are legitimate, paying it twice is not.
@@ -260,9 +301,12 @@ export async function runExecute({ command_id, proposal, store, createClient, de
       err?.code === "PAYMENT_WRITE_UNVERIFIED" || Boolean(store.status(command_id)?.reference_no);
     if (afterWrite) {
       return refuse(503, {
-        retry_same_command_id: true,
-        error: `chưa xác minh được kết quả ghi: ${err?.message ?? err} — gửi lại ĐÚNG command_id này để hệ thống đối soát với ERPNext (KHÔNG tạo command_id mới)`,
-      });
+          retry_same_command_id: true,
+          // P8: the effective company travels with the refusal so a queued retry
+          // records the scope this write was authorized under.
+          company: authz.company ?? null,
+          error: `chưa xác minh được kết quả ghi: ${err?.message ?? err} — gửi lại ĐÚNG command_id này để hệ thống đối soát với ERPNext (KHÔNG tạo command_id mới)`,
+        });
     }
     if (err?.code === "PROPOSAL_STALE") {
       // The intent no longer matches ERPNext (debt changed / invoice moved).

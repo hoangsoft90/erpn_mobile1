@@ -168,6 +168,13 @@ export class IdempotencyStore {
       action: meta.action,
       fingerprint: meta.fingerprint,
       intent_key: intentKey ?? existing?.intent_key ?? null,
+      // P8: WHO asked and under which company. begin() writes a FIXED field set,
+      // so an actor passed in meta is dropped unless it is named here — the
+      // "a field the server reads must survive every write" rule. Stored on the
+      // record (not just in the log) so an audit does not depend on log
+      // retention, and a resumed command keeps the original actor.
+      user_id: meta.user_id ?? existing?.user_id ?? null,
+      company: meta.company ?? existing?.company ?? null,
       ts: existing?.ts ?? new Date().toISOString(),
     };
     delete db.commands[key].error;

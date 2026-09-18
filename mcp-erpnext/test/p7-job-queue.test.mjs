@@ -370,7 +370,10 @@ test("F-A wiring — cancel releases the job; /jobs reports completed; main() ru
   const cancelBlock = src.slice(src.indexOf('path === "/execute/cancel"'), src.indexOf('path === "/execute"'));
   assert.match(cancelBlock, /jobQueue\.release\(command_id\)/, "cancel must release a parked job");
   const jobsBlock = src.slice(src.indexOf('path === "/jobs"'), src.indexOf('path === "/ask"'));
-  assert.match(jobsBlock, /completed: jobQueue\.completed\(\)/, "/jobs must surface terminal outcomes");
+  // P8 adds a row-level filter, so the endpoint now maps a FILTERED list. What
+  // this guard is about is that terminal outcomes are still reported at all.
+  assert.match(jobsBlock, /jobQueue\.completed\(\)/, "/jobs must read to terminal outcomes");
+  assert.match(jobsBlock, /completed: completed\.map\(/, "/jobs must surface terminal outcomes");
   // The injectable gateway exists for tests only — the server must NOT inject.
   assert.match(src, /startJobRunner\(\{ jobQueue \}\)/, "main() hands the runner the real gateway");
   assert.ok(!/startJobRunner\(\{[^}]*execute:/.test(src.replace(/export function startJobRunner[\s\S]*?\n\}/, "")),

@@ -81,6 +81,11 @@ export function uncertaintyCopy(code, opts = {}) {
  * - INSUFFICIENT_PERMISSION (contract) is a genuine authorization refusal —
  *   AUTHORIZATION_DENIED. 401/403 at the HTTP edge are transport, not
  *   taxonomy: they are the server's own JSON, sent before any pipeline ran.
+ * - COMPANY_SCOPE_REQUIRED (P8) keeps its own code in the log and the HTTP body
+ *   so an operator can tell "this deployment never pinned COPILOT_COMPANY"
+ *   apart from "this account lacks Accounts User" — but to the USER both are
+ *   the same answer, so it collapses to AUTHORIZATION_DENIED and never reaches
+ *   the screen as a bare code with no words.
  * - every `PAYMENT_*` builder refusal is a business rule: the customer/invoice
  *   exist but this payment would be wrong (settled, not receivable, bad
  *   amount, account/mode unresolvable).
@@ -94,6 +99,7 @@ export function toUncertaintyCode(code) {
   const c = String(code ?? "");
   if (Object.values(UNCERTAINTY_CODES).includes(c)) return c;
   if (c === "INSUFFICIENT_PERMISSION") return UNCERTAINTY_CODES.AUTHORIZATION_DENIED;
+  if (c === "COMPANY_SCOPE_REQUIRED") return UNCERTAINTY_CODES.AUTHORIZATION_DENIED;
   if (c.startsWith("PAYMENT_")) return UNCERTAINTY_CODES.BUSINESS_VALIDATION_FAILED;
   if (c === "ENTITY_NOT_FOUND_BLOCKED") return UNCERTAINTY_CODES.MISSING_ENTITY;
   return null;

@@ -23,6 +23,9 @@ import { routeIntent, routeByCapability } from "./router.mjs";
 // ── P3 (plan2_final §15): LLM classifier for sentences the keyword router misses ──
 import { classifyIntent, classifierConfig } from "./classifier.mjs";
 import { buildPaymentProposal } from "./skills/payment-write.mjs";
+// P8 (plan2_final §5 + §24.2): the authorization boundary. Server-side,
+// contract-driven, never a prompt.
+import { authorize, resolvePrincipal } from "./authorization.mjs";
 // ── P4 (plan2_final §12 + §19): structured learning log for refusals/signals ──
 import { logObservation } from "./learning-log.mjs";
 // ── P5 (plan2_final §2 D2/D3/D8): dsh explicit opt-in gate — READ only ──
@@ -355,6 +358,30 @@ export async function answerQuestion(rawText, opts = {}) {
     // HTTP path never sets COPILOT_DSH_CONTEXT, so the main app is unchanged.
     if (isDshContext(opts.env) && blockedInDshContext(route)) {
       return withUncertainty(dshWriteBlockedAnswer(rawText));
+    }
+    // ── P8 (plan2_final §5): AUTHORIZATION, server-side and contract-driven,
+    // BEFORE any skill touches ERPNext. An account that may not run this
+    // capability gets no proposal at all — so there is nothing to confirm and
+    // nothing that could later execute. Order: after entity-independent
+    // refusals (forbidden/stub/dsh) so those keep their specific codes, and
+    // before route.factory() so a denied user triggers ZERO ERPNext reads.
+    if (route.capability) {
+      const authz = authorize(route.capability, {
+        principal: opts.principal ?? resolvePrincipal({ env: opts.env }),
+        company: opts.company,
+        env: opts.env,
+      });
+      if (!authz.ok) {
+        return withUncertainty({
+          question: rawText,
+          normalized: nlp,
+          routed: { group: route.group, matched: route.matched, capability: route.capability },
+          answer: null,
+          reason: authz.error,
+          error_code: authz.code,
+          proposal: null,
+        });
+      }
     }
     const skills = route.factory(mcp, knownIds);
 

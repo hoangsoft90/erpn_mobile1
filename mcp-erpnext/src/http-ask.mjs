@@ -51,6 +51,7 @@ import http from "node:http";
 import { timingSafeEqual, createHash, randomUUID } from "node:crypto";
 import { answerQuestion, answerQuestionLogged, pickServerScript } from "./copilot-server.mjs";
 import { logEvent, writeOutcomeFor } from "./learning-log.mjs";
+import { AUTHZ_CODES, AUTHZ_MODES, checkPermissions, describeAuthorization, resolvePrincipal } from "./authorization.mjs";
 import { RateLimiter, rateLimitMessage, proposalBucketFor } from "./rate-limit.mjs";
 // The action → capability mapping lives with the contract (single source).
 import { capabilityForAction } from "./capability-contract.mjs";
@@ -187,6 +188,9 @@ function readBody(req) {
   });
 }
 
+/** Authorization boot line is written once per process (see createAskServer). */
+let authzAnnounced = false;
+
 export function createAskServer({
   port = 8788,
   host = "127.0.0.1",
@@ -194,6 +198,11 @@ export function createAskServer({
   idemStore = null,
   jobs = null,
   limiter = null,
+  // P8: test seams. `principal` pins the actor directly; `env` is the config
+  // surface for resolvePrincipal (COPILOT_USERS / COPILOT_DEFAULT_PERMISSIONS /
+  // COPILOT_COMPANY). Both default to the process environment.
+  principal: principalOverride = null,
+  env = process.env,
 } = {}) {
   const bindPolicy = policy ?? resolveBindPolicy({ host });
   const store = idemStore ?? new IdempotencyStore();
@@ -202,8 +211,30 @@ export function createAskServer({
   // operator's explicit opt-out). Tests inject `limiter` to control the clock
   // or to exercise the unlimited path.
   const rateLimiter = limiter ?? new RateLimiter();
-  /** Identity for the per-user bucket: the authenticated user, else loopback. */
-  const userId = bindPolicy.user ?? "local";
+  // P8 (plan2_final §5): identity is resolved ONCE per process — permissions and
+  // company scope are configuration, not per-request state. `principal` is an
+  // explicit seam so tests can drive multi-user behaviour without env juggling.
+  const principal = principalOverride ?? resolvePrincipal({ user: bindPolicy.user, env });
+  /**
+   * Identity for the per-user rate bucket, the audit lines and the job report.
+   * Derived FROM the principal, not from the credential, so there is exactly one
+   * notion of "who" in this process: whatever the log says is also what was
+   * authorized. (They coincide in production, where the credential names the
+   * account; deriving one from the other removes the chance of them drifting.)
+   */
+  const userId = principal.user_id;
+  // Announce ONCE per process: this is boot information about a deployment, not
+  // per-request state, and the test suite constructs hundreds of servers.
+  if (!authzAnnounced) {
+    authzAnnounced = true;
+    const authzSummary = describeAuthorization(env);
+    for (const warning of authzSummary.warnings) {
+      process.stderr.write(`[authz] ${warning}\n`);
+    }
+    process.stderr.write(
+      `[authz] mode=${authzSummary.mode} user=${principal.user_id} permissions=[${principal.permissions.join(", ")}]\n`,
+    );
+  }
   const server = http.createServer(async (req, res) => {
     // Non-loopback: every route (including /health) requires basic auth.
     if (!bindPolicy.loopback && !basicAuthOk(req, bindPolicy)) {
@@ -256,6 +287,30 @@ export function createAskServer({
       if (!rec) {
         sendJson(res, 404, { ok: false, error: `không có lệnh nào với command_id này` });
         return;
+      }
+      // P8: cancel RELEASES someone's intent lock. Now that the record names the
+      // actor who created it, honour that: an account may only release a command
+      // IT created, unless it holds the capability's permission (an operator
+      // clearing the shop's queue). Without this, any authenticated client could
+      // drop another user's confirmed intent — and releasing a lock is what lets
+      // the same debt be proposed again. Checked before the state checks so the
+      // reply does not reveal whether a stranger's command completed.
+      // Older records predate the actor field; they are treated as ownerless, so
+      // only a permission-holder can release them (fail closed, never stranded).
+      const isOwner = Boolean(rec.user_id) && rec.user_id === principal.user_id;
+      if (!isOwner) {
+        const mayRelease = checkPermissions("payment.create", principal);
+        if (!mayRelease.ok) {
+          sendJson(res, 403, {
+            ok: false,
+            code: AUTHZ_CODES.DENIED,
+            error:
+              `tài khoản "${principal.user_id}" không tạo ra lệnh này và không có quyền ` +
+              `huỷ lệnh của người khác — không thực hiện`,
+            command_id,
+          });
+          return;
+        }
       }
       if (rec.status === "COMPLETED") {
         sendJson(res, 409, {
@@ -334,6 +389,18 @@ export function createAskServer({
       if (rel.ok) {
         process.stderr.write(`[jobs] released queued job ${command_id} after verified-safe cancel\n`);
       }
+      // P8 §17: who released the lock. Cancel writes nothing to ERPNext, but it
+      // is a state change on a confirmed money intent, so the audit line names
+      // the actor for the same reason /execute does.
+      logEvent({
+        phase: "cancel",
+        outcome: "cancelled",
+        request_id: randomUUID(),
+        user_id: principal.user_id,
+        command_id,
+        reference_no: rec.reference_no ?? null,
+        released_by: isOwner ? "owner" : "permission",
+      });
       sendJson(res, 200, {
         ok: true,
         cancelled: true,
@@ -396,6 +463,12 @@ export function createAskServer({
           // P1 §10.5: the extra acknowledgement for a business-level duplicate.
           // Absent/false ⇒ the gateway refuses with BUSINESS_DEDUP_CONFIRM_REQUIRED.
           dedup_ack: body?.dedup_ack === true,
+          // P8: the actor and the company the request claims. Neither widens
+          // what the account may do — the gateway re-checks both against the
+          // contract, and company precedence is server-first.
+          principal,
+          company: body?.company,
+          env,
         });
       } catch (err) {
         sendJson(res, 500, {
@@ -442,6 +515,11 @@ export function createAskServer({
           proposal: body?.proposal,
           dedup_ack: body?.dedup_ack === true,
           reason: verdict.body?.error ?? null,
+          // P8: the runner replays later with no request context — the job must
+          // remember which account asked, or the retry would be authorized and
+          // audited as somebody else.
+          user_id: principal.user_id,
+          company: verdict.body?.company ?? body?.company ?? null,
         });
         if (enq.ok && !enq.duplicate) {
           process.stderr.write(`[jobs] queued ${body?.command_id} — will retry via the Safety Gateway\n`);
@@ -454,22 +532,39 @@ export function createAskServer({
       // caller's own jobs are ever interesting; the report is read-only.
       // Review finding F-C: a poller that only ever saw "pending" could never
       // observe VERIFIED/FAILED — include recent terminal jobs (newest first).
+      //
+      // P8 §24.2 (row level): a job carries the customer, amount and result of
+      // somebody's payment, so in MULTI-USER mode the report is scoped to the
+      // account that asked — otherwise any authenticated client could read
+      // another user's payment queue. Single-tenant has exactly one principal,
+      // so nothing is filtered there. Jobs queued before P8 carry no owner and
+      // are therefore shown only to a permission holder (fail closed).
+      const maySeeAllJobs =
+        principal.mode !== AUTHZ_MODES.MULTI_USER ||
+        checkPermissions("payment.create", principal).ok;
+      const visible = (j) => maySeeAllJobs || j.user_id === principal.user_id;
+      const pending = jobQueue.pending().filter(visible);
+      const completed = jobQueue.completed().filter(visible);
+      const hidden = jobQueue.pending().length + jobQueue.completed().length - pending.length - completed.length;
       sendJson(res, 200, {
         ok: true,
-        pending: jobQueue.pending().map((j) => ({
+        pending: pending.map((j) => ({
           command_id: j.command_id,
           state: j.state,
           attempts: j.attempts,
           next_attempt_at: j.next_attempt_at,
           last_error: j.last_error,
         })),
-        completed: jobQueue.completed().map((j) => ({
+        completed: completed.map((j) => ({
           command_id: j.command_id,
           state: j.state,
           attempts: j.attempts,
           erpnext_doc: j.proposal?.result?.erpnext_doc ?? null,
           last_error: j.last_error,
         })),
+        // Never hide the fact that something was filtered: an operator staring
+        // at an empty queue must not conclude the jobs vanished.
+        hidden,
       });
       return;
     }
@@ -477,10 +572,17 @@ export function createAskServer({
       let text;
       let pickedEntityId = null;
       let submitNow = false;
+      // P8: the company the request claims, if any. Server configuration wins
+      // over this (see authorization.resolveCompanyScope) — it can only fill a
+      // gap on a deployment that has not pinned a company itself.
+      let requestedCompany = null;
       try {
         const raw = await readBody(req);
         const parsed = raw ? JSON.parse(raw) : {};
         text = parsed?.text;
+        requestedCompany = typeof parsed?.company === "string" && parsed.company.trim()
+          ? parsed.company.trim()
+          : null;
         // P1 §4.2/§4.4: the client may send back the id the USER picked in the
         // candidate picker. It is validated server-side against a fresh ERPNext
         // read before it can become authoritative (never trusted as-is).
@@ -533,6 +635,12 @@ export function createAskServer({
           answerQuestionLogged(text, {
             pickedEntityId,
             submitNow, // frozen into the proposal snapshot at proposal time
+            // P8: the ask path refuses a capability the account may not run,
+            // BEFORE any skill/ERPNext work — so a card that could never be
+            // confirmed is never built in the first place.
+            principal,
+            company: requestedCompany,
+            env,
             // P10 §17: correlation columns for this question's log line
             // (command_id / action_id / risk come from the proposal).
             correlation: { request_id: requestId, user_id: userId, latency_ms: Date.now() - askStartedAt },

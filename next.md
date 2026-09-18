@@ -96,7 +96,16 @@ Lộ trình production trong `.plan/phases2/` (nguồn kiến trúc: `.plan/plan
 
 - **Commit đợt review vòng 3**: `21d77ff` (test E2E per-capability + `docs/kill-switch-runbook.md`) · `d6295ab` (bài học vòng 3)
 
-**Phases2 lõi đã ĐÓNG: P0 `b4acdb1` · P1 `ee93f13` · P2 `33ff725` · P3 `c38e4ea` · P4 `d7e9ba9` · P5 `6318eca` · P7 `3e6240a` · P10-slice `7cb2798`/`21d77ff`/`d6295ab` (tất cả đã push).**
+**Phases2 đã ĐÓNG: P0 `b4acdb1` · P1 `ee93f13` · P2 `33ff725` · P3 `c38e4ea` · P4 `d7e9ba9` · P5 `6318eca` · P6 `9b54d35` · P7 `3e6240a` · P10-slice `7cb2798`/`21d77ff`/`d6295ab` (tất cả đã push).**
+
+### P8 (phases2) — Multi-user / RBAC / company scope 🟡 KỸ THUẬT XONG — CHỜ DUYỆT COMMIT (đụng auth + vùng tiền)
+
+- **`src/authorization.mjs` (mới)** — boundary phân quyền server-side, đọc từ `capabilities.json` (không hardcode capability nào trong logic): `resolvePrincipal` · `checkPermissions` · `resolveCompanyScope` · `authorize` · `describeAuthorization`
+- **2 chế độ**: `multi_user` (`COPILOT_USERS` JSON, tường minh) và `single_tenant` (mặc định — giữ hành vi cũ để **không chặn lệnh ghi khi nâng cấp**; đo thật: bỏ miễn trừ này làm đỏ **33 test**). Company: server-first (principal → `COPILOT_COMPANY` → request); multi-user thiếu company ⇒ `COMPANY_SCOPE_REQUIRED` (map về copy P2 `AUTHORIZATION_DENIED` để user luôn có chữ)
+- **Wire**: `/ask` chặn **trước** `route.factory()` (không sinh proposal, không đọc ERPNext) · `/execute` chặn ở bước 1b **trước** idempotency (403, **không tiêu `command_id`**) · `/jobs` lọc theo actor · `/execute/cancel` chỉ chủ lệnh hoặc người có quyền · job replay mang `user_id` gốc ⇒ phân quyền **tính lại tại thời điểm ghi**
+- **Audit**: `user_id`+`company` vào record idempotency và job; `logEvent` của `/execute` + `/cancel` nay dùng `principal.user_id` (một khái niệm "ai" duy nhất cho cả rate-limit/audit/job)
+- **Test**: `test/p8-authorization.test.mjs` **+17** · **falsify 13 guard** (gồm 1 lần guard **không thể falsify** ⇒ phát hiện nhánh allow-list chưa từng được test) · self-review tìm **5 lỗi thật** (rò `/jobs` chéo user · cancel không kiểm ai · `COMPANY_SCOPE_REQUIRED` không có copy · audit ghi sai người · allow-list không test nào chạm) · **Node 267** (250→267)
+- Bằng chứng: `.plan/phases2/p8-result.md`
 
 ### F7 + F7-2 + Golden gaps (2026-09-18) ✅ ĐÃ COMMIT `3b41313` · `eb4ba34` · `c5db7cc` (đã push)
 
@@ -105,7 +114,7 @@ Lộ trình production trong `.plan/phases2/` (nguồn kiến trúc: `.plan/plan
 - **Golden gaps k18/m15 sửa xong**: "một triệu hai" = 1.200.000 (shorthand có luật chặt chống va danh xưng); "Con Linh" resolve thành tên "Linh" — Golden runner **0 miss**, gate P9 mở · Python 62
 - Suite: **Python 62 · Node 250 · Flutter 80 · analyze 0** — bằng chứng `result53.txt` + `result54.txt`
 
-### P6 (phases2) — Voice / STT (`speech_to_text`) 🟡 KỸ THUẬT XONG — CHỜ DUYỆT COMMIT (đụng mobile client)
+### P6 (phases2) — Voice / STT (`speech_to_text`) ✅ ĐÃ COMMIT `9b54d35` (đã push)
 
 - **Gate 150 câu audio đã BỎ** (user, 2026-09-18): P6 dùng **STT của OS** (`speech_to_text` 7.5.0), không tự host model, không corpus riêng
 - Luồng đúng luật `plan2_final` §20: 🎙 mic → STT → **text vào CHÍNH ô nhập editable** → user nhìn/sửa → **Gửi** → `POST /ask`; STT **không bao giờ tự gửi**, không có đường tới `/execute`
@@ -117,7 +126,7 @@ Lộ trình production trong `.plan/phases2/` (nguồn kiến trúc: `.plan/plan
 - Suite: Python 62 · Node 250 · **Flutter 101** (80→101) · analyze 0 — `.plan/phases2/p6-result.md`
 - **Gap (có lý do)**: APK CI phải build lại để xác nhận plugin native (agent không có Android SDK) · smoke máy thật có mic = việc người thật (checklist trong `p6-result.md`)
 
-Bước kỹ thuật tiếp theo (khi user đủ điều kiện): **P8** (multi-user, cần credential) · **P9** (skill mới — **gate ĐÃ MỞ** sau khi Golden 0 miss, cần user ra lệnh) — riêng **P10 full** (DR drill, dashboard, load test, rate-limit store phân tán) vẫn hoãn.
+Bước kỹ thuật tiếp theo: **P8 CHỜ DUYỆT COMMIT** (xem mục trên) · **P9** (skill mới — **gate ĐÃ MỞ** sau khi Golden 0 miss, cần user ra lệnh) — riêng **P10 full** (DR drill, dashboard, load test, rate-limit store phân tán) vẫn hoãn.
 ### F7 — ĐÃ GIẢI QUYẾT (user chọn policy (a), 2026-09-18)
 
 > **Luật mới: bảo trì/kill switch KHÔNG phải một lần thử.**
