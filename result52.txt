@@ -128,3 +128,38 @@ next.md:210       (result43 — đã commit c401b0f)
 - KHÔNG làm: P4→(auto-prod), P6 (thiếu audio), P8 (thiếu credential), P9 (cần acceptance thật),
   P10 full (DR drill/dashboard/load test/rate-limit store phân tán), saga/REVERSAL.
 ========================================================================
+
+== 8. COMMIT + PUSH + CI BUILD APK (sau khi đồng bộ docs) ==
+
+$ git commit -m "docs: sync root docs + openspec with P10 review round 3; add human.md" → 2796c32
+$ git commit -m "feat(mobile): name the installed app \"Nghiệp Vụ AI\""              → 765fe27
+$ git push origin change/flutter-chat-mvp
+   d6295ab..765fe27  change/flutter-chat-mvp -> change/flutter-chat-mvp
+
+Lý do đổi tên app nằm trong đợt push này: workflow `android-debug-apk.yml` chỉ trigger khi diff
+nằm trong `apps/mobile/**` (hoặc chính file workflow) — đổi label/title là diff đó, nên push chạy
+được build mà không cần dispatch tay.
+
+$ gh run view 35311447027 --json status,conclusion,headSha
+   status: completed | conclusion: success
+   head:   765fe2722cb5b82a5815857729e5e5b35965e049
+   url:    https://github.com/hoangsoft90/erpn_mobile1/actions/runs/35311447027
+   job "Build debug APK" -> completed success — TẤT CẢ bước success:
+     Checkout · Set up Java 21 · Set up Flutter (stable) · Pub get · Generate code (build_runner)
+     · Analyze · Test · Build debug APK (dart-define endpoint + auth) · Upload APK artifact
+
+$ gh api .../runs/35311447027/artifacts
+   erpn-chat-debug-apk | 84064694 bytes (~80 MB) | hết hạn 2026-12-17T05:36:10Z | id 10532944862
+
+== 9. VERIFY TÊN APP TRONG APK THẬT (không chỉ đọc source) ==
+
+$ gh run download 35311447027 ; python3 - (đọc trực tiếp binary AndroidManifest.xml trong APK)
+   files: 577 | has resources.arsc: True
+   'Nghiệp Vụ AI':   utf8=0  utf16le=1     ← CÓ trong manifest của APK
+   'Nghiệp':         utf8=0  utf16le=1
+   'erpn_mobile':    utf8=0  utf16le=4     ← applicationId/class name (không phải nhãn hiển thị)
+   'ERPNext Copilot': utf8=0 utf16le=0     ← tên cũ đã hết
+   arsc 'Nghi' utf16le=0 → nhãn literal nằm trong AndroidManifest (đúng chỗ), KHÔNG ở resources.arsc
+   (lần đọc đầu tôi tra nhầm `resources.arsc` rồi thấy `erpn_mobile` và tưởng build cũ — bài học:
+    literal label trong Flutter template nằm ở MANIFEST, không phải resource table.)
+========================================================================
