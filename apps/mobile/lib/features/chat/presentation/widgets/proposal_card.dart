@@ -98,6 +98,10 @@ class _ProposalCardState extends ConsumerState<ProposalCard>
           // BUSINESS_DEDUP_CONFIRM_REQUIRED, so sending it is what makes the
           // warned card usable at all.
           if (proposal.dedupRequiresAck) 'dedup_ack': true,
+          // F7-2: submit_now was frozen into this card's params snapshot by the
+          // SERVER when the question was asked — the card replays what the user
+          // saw, not what the settings screen holds now.
+          if (proposal.params?['submit_now'] == true) 'submit_now': true,
         }),
       );
       // The card can be unmounted while /execute is in flight (user navigates
@@ -110,10 +114,19 @@ class _ProposalCardState extends ConsumerState<ProposalCard>
       final body = res.data ?? const {};
       if (body['ok'] == true) {
         final result = body['result'] as Map<String, dynamic>? ?? const {};
+        final submitOk = result['submit_ok'];
         setState(() {
           _result = body['replay'] == true
               ? 'Đã ghi nhận trước đó (chống trùng): ${result['erpnext_doc'] ?? '?'}'
-              : 'Đã ghi phiếu thu: ${result['erpnext_doc'] ?? '?'} — ${result['paid_vnd'] ?? '?'}đ';
+              // F7-2: a submit-now write reports THREE outcomes — draft only
+              // (switch off), draft+submitted, and the PARTIAL case where the
+              // draft exists but the submit failed (the user must finish on
+              // ERPNext; the money record itself stands either way).
+              : (submitOk == true
+                  ? 'Đã ghi và NỘP phiếu thu: ${result['erpnext_doc'] ?? '?'} — ${result['paid_vnd'] ?? '?'}đ (công nợ đã giảm)'
+                  : (submitOk == false
+                      ? 'Đã tạo phiếu NHÁP: ${result['erpnext_doc'] ?? '?'} — NHƯNG submit lỗi: ${result['submit_error'] ?? '?'} — cần submit tay trên ERPNext'
+                      : 'Đã ghi phiếu thu: ${result['erpnext_doc'] ?? '?'} — ${result['paid_vnd'] ?? '?'}đ'));
         });
       } else {
         _handleRefusal(body);
@@ -301,6 +314,16 @@ class _ProposalCardState extends ConsumerState<ProposalCard>
                     'Đề xuất này trùng ý định với một đề xuất gần đây — kiểm tra kỹ trước khi xác nhận.',
                 style: TextStyle(color: scheme.onTertiaryContainer, fontSize: 12),
               ),
+            ),
+          ],
+          // F7-2: what confirming will DO was frozen into the snapshot when the
+          // question was asked (proposal.params.submit_now) — show it here so
+          // the button never promises less or more than the server will do.
+          if (proposal.params?['submit_now'] == true) ...[
+            const SizedBox(height: AppSpacing.xs),
+            Text(
+              '⚡ Khi bật: xác nhận sẽ TẠO phiếu và NỘP NGAY — công nợ khách giảm ngay.',
+              style: TextStyle(color: scheme.error, fontSize: 12),
             ),
           ],
           // Phase 9 UI (result32/result33): a refused card shows WHY —

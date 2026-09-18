@@ -45,6 +45,19 @@ class AppSettingsService {
     return clampMaxChatItems(stored);
   }
 
+  /// F7-2 (user decision 2026-09-18): whether confirming a payment proposal
+  /// may also SUBMIT the draft (docstatus 1 — the customer's debt drops).
+  /// Default is always OFF: absence of the key, a null prefs instance, or a
+  /// storage error all read as disabled (fail-safe — the risky capability is
+  /// never on by accident).
+  bool get allowSubmitPayment {
+    try {
+      return _prefs?.getBool(AppConstants.allowSubmitPaymentStorageKey) ?? false;
+    } catch (_) {
+      return false; // corrupted storage ⇒ behave as OFF
+    }
+  }
+
   /// The value to PRE-FILL the Settings form with on first open.
   String get gatewayBaseUrlOrDefault =>
       gatewayBaseUrl.isEmpty ? AppConstants.defaultGatewayBaseUrl : gatewayBaseUrl;
@@ -104,6 +117,21 @@ class AppSettingsService {
     return clamped;
   }
 
+  /// F7-2: persists the submit switch. The Settings screen only reaches this
+  /// after its own explicit confirmation dialog, so no second prompt here.
+  /// Returns false only when storage is unavailable (the caller keeps the
+  /// previous in-memory state).
+  Future<bool> saveAllowSubmitPayment(bool value) async {
+    final prefs = _prefs;
+    if (prefs == null) return false;
+    try {
+      await prefs.setBool(AppConstants.allowSubmitPaymentStorageKey, value);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// Forgets everything this service stores (used by tests / a future "reset to
   /// default" action). Missing prefs is a no-op.
   Future<void> clear() async {
@@ -114,6 +142,7 @@ class AppSettingsService {
       await prefs.remove(AppConstants.gatewayAuthUserStorageKey);
       await prefs.remove(AppConstants.gatewayAuthPasswordStorageKey);
       await prefs.remove(AppConstants.maxChatItemsStorageKey);
+      await prefs.remove(AppConstants.allowSubmitPaymentStorageKey);
     } catch (_) {
       // ignore
     }

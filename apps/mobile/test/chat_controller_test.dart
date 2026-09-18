@@ -8,6 +8,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:erpn_mobile/app/providers.dart';
+import 'package:erpn_mobile/core/settings/app_settings_service.dart';
 import 'package:erpn_mobile/features/chat/application/chat_controller.dart';
 import 'package:erpn_mobile/features/chat/data/chat_history_service.dart';
 import 'package:erpn_mobile/features/chat/data/chat_models.dart';
@@ -189,6 +190,57 @@ void main() {
     expect(find.text('câu trả lời cũ'), findsNothing);
     expect(prefs.store.containsKey('chat_history_v1'), isFalse);
   });
+
+  test('F7-2: the submit setting is read at ASK time and frozen server-side into the proposal', () async {
+    final prefs = _FakePrefs();
+    final settings = AppSettingsService(prefs: prefs);
+    final bodies = <dynamic>[];
+    final container = ProviderContainer(
+      overrides: [
+        sharedPreferencesProvider.overrideWithValue(prefs),
+        appSettingsServiceProvider.overrideWithValue(settings),
+        copilotApiClientProvider.overrideWithValue(
+          CopilotApiClient(
+            dio: Dio(BaseOptions(baseUrl: 'http://mock.local'))
+              ..httpClientAdapter = _MockAdapter((options) async {
+                final d = options.data;
+                bodies.add(d is String ? jsonDecode(d) as Map<String, dynamic> : d);
+                return _json({'ok': true, 'result': _answerResult});
+              }),
+          ),
+        ),
+      ],
+    );
+    addTearDown(container.dispose);
+    // autoDispose: without an active listener the notifier is disposed right
+    // after read() returns — same keepalive pattern as the cold-start test.
+    container.listen(chatControllerProvider, (_, _) {}, fireImmediately: true);
+    await container.read(chatControllerProvider.future);
+
+    // Default OFF travels explicitly on the first question.
+    await container.read(chatControllerProvider.notifier).send('chị Lan còn nợ bao nhiêu');
+    expect(
+      (bodies.last as Map<String, dynamic>)['submit_now'],
+      isFalse,
+      reason: 'OFF is sent explicitly so the server freezes OFF',
+    );
+
+    // Flip the setting (as the Settings screen would after its dialog)…
+    final saved = await settings.saveAllowSubmitPayment(true);
+    expect(saved, isTrue, reason: 'preflight: the save itself must succeed');
+    expect(
+      container.read(appSettingsServiceProvider).allowSubmitPayment,
+      isTrue,
+      reason: 'preflight: the overridden service must read back ON',
+    );
+    // …and the NEXT question picks it up with no app restart.
+    await container.read(chatControllerProvider.notifier).send('chị Lan còn nợ bao nhiêu');
+    expect(
+      (bodies.last as Map<String, dynamic>)['submit_now'],
+      isTrue,
+      reason: 'the controller re-reads the setting per send — no restart',
+    );
+  });
 }
 
 /// History service whose load() is delayed — reproduces the cold-start window
@@ -228,6 +280,16 @@ class _FakePrefs implements SharedPreferences {
       return store[invocation.positionalArguments.first as String];
     }
     if (invocation.memberName == #setString &&
+        invocation.positionalArguments.length == 2) {
+      store[invocation.positionalArguments[0] as String] =
+          invocation.positionalArguments[1] as Object;
+      return Future<bool>.value(true);
+    }
+    if (invocation.memberName == #getBool &&
+        invocation.positionalArguments.length == 1) {
+      return store[invocation.positionalArguments.first as String] as bool?;
+    }
+    if (invocation.memberName == #setBool &&
         invocation.positionalArguments.length == 2) {
       store[invocation.positionalArguments[0] as String] =
           invocation.positionalArguments[1] as Object;

@@ -658,4 +658,104 @@ void main() {
     expect(writes, 1,
         reason: 'recycling must not fire a second /execute (no second write)');
   });
+
+// ---- F7-2 (user decision 2026-09-18): submit-now card copy & outcomes ----
+
+testWidgets(
+    'F7-2: a submit_now proposal shows the submit banner and sends submit_now on /execute',
+    (tester) async {
+  final requests = <dynamic>[];
+  await tester.pumpWidget(_hostWithMock(
+      _proposal('HIGH', action: 'create_payment_entry'), (options) async {
+    requests.add(options.data);
+    return _json({
+      'ok': true,
+      'replay': false,
+      'result': {
+        'erpnext_doc': 'PE-S001',
+        'paid_vnd': 500000,
+        'submit_ok': true,
+        'docstatus': 1,
+      },
+    });
+  }));
+  // The default _proposal params have no submit_now — build the ON variant by
+  // re-hosting with fromJson, exactly the shape the server freezes.
+  final onJson = jsonDecode(jsonEncode(_proposal('HIGH', action: 'create_payment_entry').toJson()))
+      as Map<String, dynamic>;
+  onJson['params'] = {...onJson['params'] as Map<String, dynamic>, 'submit_now': true};
+  final onProposal = ActionProposal.fromJson(onJson);
+  await tester.pumpWidget(_hostWithMock(onProposal, (options) async {
+    requests.add(options.data);
+    return _json({
+      'ok': true,
+      'replay': false,
+      'result': {
+        'erpnext_doc': 'PE-S001',
+        'paid_vnd': 500000,
+        'submit_ok': true,
+        'docstatus': 1,
+      },
+    });
+  }));
+  // The banner is really there, before any confirm.
+  expect(find.textContaining('NỘP NGAY'), findsOneWidget);
+  await tester.tap(find.text('Xác nhận thu tiền'));
+  await tester.pumpAndSettle();
+  final sent = jsonDecode(requests.last as String) as Map<String, dynamic>;
+  expect(sent['submit_now'], true,
+      reason: 'the card replays the FROZEN snapshot flag, not a live setting');
+  expect(find.textContaining('Đã ghi và NỘP phiếu thu'), findsOneWidget);
+  expect(find.textContaining('công nợ đã giảm'), findsOneWidget);
+});
+
+testWidgets('F7-2: draft-only card (snapshot false) shows no banner and sends no flag',
+    (tester) async {
+  final requests = <dynamic>[];
+  await tester.pumpWidget(_hostWithMock(
+      _proposal('HIGH', action: 'create_payment_entry'), (options) async {
+    requests.add(options.data);
+    return _json({
+      'ok': true,
+      'replay': false,
+      'result': {'erpnext_doc': 'PE-S002', 'paid_vnd': 500000},
+    });
+  }));
+  expect(find.textContaining('NỘP NGAY'), findsNothing);
+  expect(find.textContaining('⚡'), findsNothing);
+  await tester.tap(find.text('Xác nhận thu tiền'));
+  await tester.pumpAndSettle();
+  final sent = jsonDecode(requests.single as String) as Map<String, dynamic>;
+  expect(sent.containsKey('submit_now'), isFalse,
+      reason: 'no flag on the wire when the snapshot is draft-only');
+  expect(find.textContaining('Đã ghi phiếu thu: PE-S002'), findsOneWidget);
+  expect(find.textContaining('NHƯNG submit lỗi'), findsNothing);
+});
+
+testWidgets('F7-2: a submit failure is PARTIAL — draft reported, never a silent success',
+    (tester) async {
+  await tester.pumpWidget(_hostWithMock(
+      _proposal('HIGH', action: 'create_payment_entry'), (options) async {
+    return _json({
+      'ok': true,
+      'replay': false,
+      'result': {
+        'erpnext_doc': 'PE-S003',
+        'paid_vnd': 500000,
+        'submit_ok': false,
+        'submit_error': 'server unavailable',
+        'docstatus': 0,
+      },
+    });
+  }));
+  await tester.tap(find.text('Xác nhận thu tiền'));
+  await tester.pumpAndSettle();
+  expect(find.textContaining('Đã tạo phiếu NHÁP'), findsOneWidget);
+  expect(find.textContaining('NHƯNG submit lỗi'), findsOneWidget);
+  expect(find.textContaining('submit tay trên ERPNext'), findsOneWidget);
+  // The confirm button is gone (the money record exists) and no refusal banner
+  // replaced it — this is a PARTIAL, not a PROPOSAL_STALE-style refusal.
+  expect(find.text('Xác nhận thu tiền'), findsNothing);
+  expect(find.textContaining('🔄'), findsNothing);
+});
 }

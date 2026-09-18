@@ -82,6 +82,44 @@ test("/ask wrapper: health, happy path, and error contracts", async () => {
     // Phase 1 really ran (bridge over HTTP, not a stub)
     assert.ok(askBody.result.normalized.titles.includes("chị"));
 
+    // F7-2 wiring: the submit flag travels /ask → buildPaymentProposal and is
+    // FROZEN into the proposal snapshot — the card copy and the executor both
+    // read the SAME frozen field, so wording can never diverge from behaviour.
+    const payOff = await fetch(`${base}/ask`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: "thu tiền cho Nguyễn Thị Lan 10000" }),
+    });
+    assert.equal(payOff.status, 200);
+    const payOffBody = await payOff.json();
+    assert.equal(payOffBody.ok, true);
+    assert.equal(payOffBody.result.proposal.action, "create_payment_entry");
+    assert.equal(
+      payOffBody.result.proposal.params.submit_now,
+      false,
+      "default (no flag sent) freezes OFF into the snapshot",
+    );
+    assert.match(payOffBody.result.answer, /NHÁP/);
+    assert.doesNotMatch(payOffBody.result.answer, /NỘP NGAY/);
+
+    const payOn = await fetch(`${base}/ask`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        text: "thu tiền cho Nguyễn Thị Lan 10000",
+        submit_now: true,
+      }),
+    });
+    assert.equal(payOn.status, 200);
+    const payOnBody = await payOn.json();
+    assert.equal(payOnBody.ok, true);
+    assert.equal(
+      payOnBody.result.proposal.params.submit_now,
+      true,
+      "the flag sent WITH the question is frozen into THIS proposal",
+    );
+    assert.match(payOnBody.result.answer, /NỘP NGAY/);
+
     // missing text -> 400 clean JSON
     const missing = await fetch(`${base}/ask`, {
       method: "POST",

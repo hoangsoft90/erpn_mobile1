@@ -29,6 +29,12 @@ class AppConstants {
       'settings_gateway_auth_password_v1';
   static const String maxChatItemsStorageKey = 'settings_max_chat_items_v1';
 
+  /// F7-2 (user decision 2026-09-18): "allow real submission" — default OFF.
+  /// Stored separately so the card copy and the executor both read the SAME
+  /// frozen-at-proposal-time value.
+  static const String allowSubmitPaymentStorageKey =
+      'settings_allow_submit_payment_v1';
+
   /// Pre-filled in the Settings screen for the current dev tunnel (Phase 3
   /// decision: localtunnel of the gateway on port 8788). Only a suggestion —
   /// never silently applied over `--dart-define`.

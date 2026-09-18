@@ -96,7 +96,12 @@ class CopilotApiClient {
   /// §4.4). It is sent back so the server can re-validate it against a fresh
   /// ERPNext read — the id is a hint, never authority (the server refuses an id
   /// that is not in the list it just read).
-  Future<AskResult> ask(String text, {String? entityId}) async {
+  ///
+  /// [submitNow] (F7-2): the app's "allow real submission" setting AS IT STOOD
+  /// when this question was asked. The server freezes it into the proposal
+  /// snapshot, so the card's wording and the execute behaviour can never
+  /// diverge from what the user saw when they asked.
+  Future<AskResult> ask(String text, {String? entityId, bool submitNow = false}) async {
     _applySettings();
     try {
       final res = await dio.post<Map<String, dynamic>>(
@@ -104,6 +109,7 @@ class CopilotApiClient {
         data: {
           'text': text,
           if (entityId != null && entityId.isNotEmpty) 'entity_id': entityId,
+          'submit_now': submitNow,
         },
       );
       final body = res.data ?? const {};

@@ -115,6 +115,10 @@ void main() {
       find.widgetWithText(TextFormField, 'Gateway URL'),
       'https://erpn8788.loca.lt',
     );
+    // The F7-2 settings section pushed Save below the test viewport — scroll
+    // it into view first or the tap silently misses (hit-test warning).
+    await tester.ensureVisible(find.text('Lưu'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Lưu'));
     await tester.pumpAndSettle();
     // Back to chat (system back) — the footer must show the SAVED url now.

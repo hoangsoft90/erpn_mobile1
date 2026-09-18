@@ -125,9 +125,16 @@ export function createMcpClient({
      * (http-ask /execute enforces both).
      */
     async callWriteTool(tool, args) {
-      if (tool !== "erpnext_doc_create" || args?.doctype !== "Payment Entry") {
+      // F7-2 (user decision 2026-09-18): submit joins the gate, still fail-closed.
+      // The only two write shapes in the project are:
+      //   - create a Payment Entry draft (Phase 7)
+      //   - submit THAT SAME doctype when the shop enabled it (Phase 7-2)
+      // Anything else — any other tool, any other doctype — is refused in code.
+      const createOk = tool === "erpnext_doc_create" && args?.doctype === "Payment Entry";
+      const submitOk = tool === "erpnext_doc_submit" && args?.doctype === "Payment Entry";
+      if (!createOk && !submitOk) {
         throw new Error(
-          `WRITE_REFUSED: Phase 7 allows only erpnext_doc_create on doctype "Payment Entry" (got tool=${tool} doctype=${args?.doctype})`,
+          `WRITE_REFUSED: only erpnext_doc_create / erpnext_doc_submit on doctype "Payment Entry" are allowed (got tool=${tool} doctype=${args?.doctype})`,
         );
       }
       await this.initialize();

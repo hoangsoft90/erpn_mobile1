@@ -31,6 +31,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   bool _obscurePassword = true;
   bool _saving = false;
 
+  /// F7-2 (user decision 2026-09-18): "allow real submission" switch. Toggling
+  /// ON requires the explicit confirmation dialog — a tap alone never enables
+  /// it, and Save persists whatever state the dialog left.
+  bool _allowSubmit = false;
+
   AppSettingsService get _settings => ref.read(appSettingsServiceProvider);
 
   @override
@@ -44,6 +49,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     _passwordController = TextEditingController(text: s.gatewayAuthPassword);
     _maxItemsController =
         TextEditingController(text: s.maxChatItems.toString());
+    _allowSubmit = s.allowSubmitPayment;
   }
 
   @override
@@ -71,6 +77,41 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     return null;
   }
 
+  /// F7-2: turning the submit switch ON goes through this dialog — never a
+  /// bare tap. Cancelling leaves the switch OFF (no state change); confirming
+  /// is the only path to true. Turning OFF needs no dialog (safe direction).
+  Future<void> _maybeEnableSubmit() async {
+    final scheme = Theme.of(context).colorScheme;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false, // a deliberate choice, not a stray tap outside
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Cho phép nộp phiếu thu thật?'),
+        content: Text(
+          'Khi bật, bấm Xác nhận trên đề xuất thu tiền sẽ NỘP phiếu thật — '
+          'công nợ khách giảm ngay. Muốn hoàn tác phải huỷ submit trực tiếp '
+          'trên ERPNext.',
+          style: TextStyle(color: scheme.onSurface),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Huỷ'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: scheme.error,
+              foregroundColor: scheme.onError,
+            ),
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Bật nộp phiếu thật'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true && mounted) setState(() => _allowSubmit = true);
+  }
+
   Future<void> _save() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
     setState(() => _saving = true);
@@ -84,6 +125,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final storedMax = await settings.saveMaxChatItems(
       int.parse(_maxItemsController.text.trim()),
     );
+    // F7-2: the switch was already confirmed (dialog) when it was turned ON —
+    // Save just persists it alongside the rest.
+    await settings.saveAllowSubmitPayment(_allowSubmit);
     // Reactivity (review 2026-09-17, found via the chat footer): the service's
     // getters read prefs live, but a plain Provider does NOT notify its
     // watchers when only the underlying values change. Invalidate so every
@@ -178,6 +222,39 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                       'thu tiền đang chờ xác nhận sẽ KHÔNG bị cắt.',
                 ),
                 validator: _validateMaxItems,
+              ),
+              const SizedBox(height: AppSpacing.lg),
+              Text(
+                'Thu tiền',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const SizedBox(height: AppSpacing.xs),
+              // F7-2: the submit switch. ON ⇒ confirming a payment proposal
+              // also SUBMITS the draft on ERPNext (debt drops immediately).
+              // Default OFF; enabling requires the explicit dialog above.
+              CheckboxListTile(
+                contentPadding: EdgeInsets.zero,
+                controlAffinity: ListTileControlAffinity.leading,
+                value: _allowSubmit,
+                onChanged: (on) async {
+                  if (on == true) {
+                    await _maybeEnableSubmit();
+                  } else if (mounted) {
+                    setState(() => _allowSubmit = false);
+                  }
+                },
+                title: const Text('Cho phép nộp phiếu thu thật'),
+                subtitle: Text(
+                  _allowSubmit
+                      ? 'ĐANG BẬT: xác nhận trên đề xuất sẽ tạo VÀ NỘP phiếu (công nợ giảm ngay).'
+                      : 'TẮT: xác nhận chỉ tạo phiếu NHÁP — cần submit tay trên ERPNext.',
+                  style: TextStyle(
+                    color: _allowSubmit
+                        ? Theme.of(context).colorScheme.error
+                        : Theme.of(context).colorScheme.onSurfaceVariant,
+                    fontSize: 12,
+                  ),
+                ),
               ),
               const SizedBox(height: AppSpacing.lg),
               FilledButton.icon(

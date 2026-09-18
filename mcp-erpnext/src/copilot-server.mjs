@@ -590,10 +590,20 @@ export async function answerQuestion(rawText, opts = {}) {
             // to "collect the whole debt" when the number was not understood —
             // that turns a failed parse into a bigger payment.
             requireExplicitAmount: true,
+            // F7-2: the app's "allow real submission" setting as it stood WHEN
+            // THIS QUESTION WAS ASKED. Frozen into the proposal snapshot so the
+            // card's wording and the execute behaviour cannot diverge if the
+            // user flips the setting afterwards. It is a boolean from the client
+            // (default false); it can only make the write MORE visible, and the
+            // executor still treats a submit failure as PARTIAL, not FAILED.
+            submit_now: opts.submitNow === true,
           },
         );
         const amt = built.proposal.params.amount_vnd;
-        const answer = `Đề xuất thu ${formatVnd(amt)}đ từ ${customer.customer_name} cho chứng từ ${built.invoice} — kiểm tra và bấm [Xác nhận] để ghi phiếu thu (đề xuất chỉ TẠO PHIẾU NHÁP, chưa submit).${ambNote}`;
+        const base = built.proposal.params.submit_now === true
+          ? `Đề xuất thu ${formatVnd(amt)}đ từ ${customer.customer_name} cho chứng từ ${built.invoice} — bấm [Xác nhận] sẽ TẠO phiếu và NỘP NGAY: công nợ khách giảm ngay khi xác nhận.`
+          : `Đề xuất thu ${formatVnd(amt)}đ từ ${customer.customer_name} cho chứng từ ${built.invoice} — kiểm tra và bấm [Xác nhận] để ghi phiếu thu (đề xuất chỉ TẠO PHIẾU NHÁP, chưa submit).`;
+        const answer = base + ambNote;
         return {
           question: rawText,
           normalized: nlp,

@@ -476,6 +476,7 @@ export function createAskServer({
     if (req.method === "POST" && path === "/ask") {
       let text;
       let pickedEntityId = null;
+      let submitNow = false;
       try {
         const raw = await readBody(req);
         const parsed = raw ? JSON.parse(raw) : {};
@@ -486,6 +487,10 @@ export function createAskServer({
         pickedEntityId = typeof parsed?.entity_id === "string" && parsed.entity_id.trim() !== ""
           ? parsed.entity_id.trim()
           : null;
+        // Submit-now setting as the app held it WHEN THIS QUESTION WAS ASKED —
+        // the server freezes the value into the proposal snapshot (payment-write
+        // executor treats a submit failure as PARTIAL, not FAILED).
+        submitNow = parsed?.submit_now === true;
       } catch (err) {
         sendJson(res, 400, { ok: false, error: `invalid request body: ${err.message}` });
         return;
@@ -527,6 +532,7 @@ export function createAskServer({
         const result = await Promise.race([
           answerQuestionLogged(text, {
             pickedEntityId,
+            submitNow, // frozen into the proposal snapshot at proposal time
             // P10 §17: correlation columns for this question's log line
             // (command_id / action_id / risk come from the proposal).
             correlation: { request_id: requestId, user_id: userId, latency_ms: Date.now() - askStartedAt },

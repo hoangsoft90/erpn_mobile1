@@ -108,7 +108,7 @@ const MODE_ACCOUNTS = {
   "Wire Transfer": "1120 - Bank - DFC",
 };
 
-function mockMcp({ verifyDrift = null } = {}) {
+function mockMcp({ verifyDrift = null, failSubmit = null } = {}) {
   const calls = [];
   let nextDoc = 100;
   const payments = [];
@@ -158,12 +158,23 @@ function mockMcp({ verifyDrift = null } = {}) {
       }
       throw new Error(`unexpected tool ${tool}`);
     },
-    // the ONE sanctioned write method (mirrors client.mjs callWriteTool gate)
+    // the ONE sanctioned write method (mirrors client.mjs callWriteTool gate).
+    // F7-2: exactly ONE more shape than Phase 7 — a SUBMIT of the same Payment
+    // Entry doctype (the gate in client.mjs was widened the same way).
     async callWriteTool(tool, args) {
-      if (tool !== "erpnext_doc_create" || args?.doctype !== "Payment Entry") {
+      const createOk = tool === "erpnext_doc_create" && args?.doctype === "Payment Entry";
+      const submitOk = tool === "erpnext_doc_submit" && args?.doctype === "Payment Entry";
+      if (!createOk && !submitOk) {
         throw new Error(`WRITE_REFUSED: ${tool}/${args?.doctype}`);
       }
       calls.push({ tool, args });
+      if (submitOk) {
+        if (failSubmit) throw new Error(failSubmit);
+        const pe = payments.find((p) => p.name === args.name);
+        if (!pe) throw new Error(`Payment Entry ${args.name} not found`);
+        pe.docstatus = 1;
+        return wrap({ data: pe, message: `Payment Entry ${pe.name} submitted successfully` }, tool);
+      }
       const data = args.data;
       const dup = payments.find((p) => p.reference_no === data.reference_no);
       if (dup) return wrap({ data: dup, message: `Payment Entry ${dup.name} created successfully` }, tool);
@@ -475,4 +486,89 @@ test("command_id must be a UUID; store persists across instances", async () => {
     assert.equal(b.status(cid).status, "COMPLETED");
     assert.equal(b.status(cid).result.erpnext_doc, "PE-0101");
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// ---- F7-2 (user decision 2026-09-18): conditional submit after the draft ----
+
+test("F7-2 OFF: the default proposal stays draft-only (no submit tool call, note unchanged)", async () => {
+  const s = store(); try {
+    const mcp = mockMcp();
+    const cid = newCommandId();
+    const { proposal } = await buildPaymentProposal(fakePaymentSkills(), RESOLVED, { amount_vnd: 10_000 });
+    assert.equal(proposal.params.submit_now, false, "the snapshot must freeze the default OFF");
+    s.begin(cid, { action: proposal.action, fingerprint: fingerprintProposal(proposal) });
+    const res = await executePaymentProposal(mcp, proposal, cid, s);
+    assert.ok(!mcp.calls.some((c) => c.tool === "erpnext_doc_submit"), "no submit when the switch is off");
+    assert.equal(res.submit_requested, undefined);
+    assert.equal(res.docstatus, 0);
+    assert.match(res.note, /NHÁP/);
+    assert.equal(s.status(cid).status, "COMPLETED", "draft-only completes normally");
+  } finally { cleanup(); }
+});
+
+test("F7-2 ON: draft is created AND submitted — docstatus 1 verified by reading back", async () => {
+  const s = store(); try {
+    const mcp = mockMcp();
+    const cid = newCommandId();
+    const { proposal } = await buildPaymentProposal(fakePaymentSkills(), RESOLVED, {
+      amount_vnd: 10_000,
+      submit_now: true,
+    });
+    assert.equal(proposal.params.submit_now, true);
+    s.begin(cid, { action: proposal.action, fingerprint: fingerprintProposal(proposal) });
+    const res = await executePaymentProposal(mcp, proposal, cid, s);
+    assert.equal(mcp.payments.length, 1, "exactly one Payment Entry");
+    assert.equal(mcp.payments[0].docstatus, 1, "the stored document is SUBMITTED");
+    assert.equal(res.submit_ok, true);
+    assert.equal(res.docstatus, 1);
+    assert.match(res.note, /ĐÃ SUBMIT|công nợ/);
+    assert.equal(s.status(cid).status, "COMPLETED");
+  } finally { cleanup(); }
+});
+
+test("F7-2 ON + submit error mid-way: PARTIAL success — draft stands, command completes, never FAILED", async () => {
+  const s = store(); try {
+    const mcp = mockMcp({ failSubmit: "simulated submit failure" });
+    const cid = newCommandId();
+    const { proposal } = await buildPaymentProposal(fakePaymentSkills(), RESOLVED, {
+      amount_vnd: 10_000,
+      submit_now: true,
+    });
+    s.begin(cid, { action: proposal.action, fingerprint: fingerprintProposal(proposal) });
+    const res = await executePaymentProposal(mcp, proposal, cid, s);
+    // the DRAFT exists — that is the truth about the money
+    assert.equal(mcp.payments.length, 1);
+    assert.equal(mcp.payments[0].docstatus, 0, "the draft was NOT submitted");
+    // reported as PARTIAL, not a failure
+    assert.equal(res.submit_ok, false);
+    assert.match(res.submit_error, /simulated submit failure/);
+    assert.match(res.note, /đã tạo NHÁP[\s\S]*SUBMIT lỗi[\s\S]*submit tay trên ERPNext/);
+    assert.equal(res.docstatus, 0);
+    // completing the command (not FAILED) is what keeps a retry a replay:
+    assert.equal(s.status(cid).status, "COMPLETED", "the command must complete on the draft — retry replays, no second write");
+    // and the retry with the same command_id replays the PARTIAL result verbatim
+    const replay = await executePaymentProposal(mcp, proposal, cid, s);
+    assert.equal(mcp.payments.length, 1, "replay must not write again");
+    assert.equal(replay.submit_ok, false);
+    assert.equal(replay.erpnext_doc, res.erpnext_doc);
+  } finally { cleanup(); }
+});
+
+test("F7-2: execute follows the FROZEN snapshot exactly — params.submit_now is the single source", async () => {
+  const s = store(); try {
+    const mcp = mockMcp();
+    const cid = newCommandId();
+    const { proposal } = await buildPaymentProposal(fakePaymentSkills(), RESOLVED, { amount_vnd: 10_000 });
+    assert.equal(proposal.params.submit_now, false);
+    s.begin(cid, { action: proposal.action, fingerprint: fingerprintProposal(proposal) });
+    // The card UI renders from params.submit_now and /execute executes from
+    // the SAME field — there is no second live setting the two could disagree
+    // about. (Trust boundary, documented: submit_now is client-authoritative,
+    // frozen at /ask time, shown on the card, executed as frozen. The gateway
+    // auth is what guards raw HTTP callers, same as command_id itself.)
+    const res = await executePaymentProposal(mcp, proposal, cid, s);
+    assert.ok(!mcp.calls.some((c) => c.tool === "erpnext_doc_submit"), "snapshot false ⇒ draft only");
+    assert.equal(mcp.payments[0].docstatus, 0);
+    assert.equal(s.status(cid).status, "COMPLETED");
+  } finally { cleanup(); }
 });

@@ -33,6 +33,13 @@ class _FakePrefs implements SharedPreferences {
       store[args[0] as String] = args[1] as Object;
       return Future<bool>.value(true);
     }
+    if (invocation.memberName == #getBool && args.length == 1) {
+      return store[args.first as String] as bool?;
+    }
+    if (invocation.memberName == #setBool && args.length == 2) {
+      store[args[0] as String] = args[1] as Object;
+      return Future<bool>.value(true);
+    }
     if (invocation.memberName == #remove && args.length == 1) {
       store.remove(args.first as String);
       return Future<bool>.value(true);
@@ -124,6 +131,24 @@ void main() {
       expect(s.maxChatItems, 50);
     });
 
+    test('allowSubmitPayment defaults OFF (absent key / null prefs / corrupted storage)', () async {
+      final s = AppSettingsService(prefs: _FakePrefs());
+      expect(s.allowSubmitPayment, isFalse,
+          reason: 'the risky capability is never on by accident');
+      expect(AppSettingsService(prefs: null).allowSubmitPayment, isFalse);
+    });
+
+    test('allowSubmitPayment round-trips ON and back OFF', () async {
+      final prefs = _FakePrefs();
+      final s = AppSettingsService(prefs: prefs);
+      expect(await s.saveAllowSubmitPayment(true), isTrue);
+      expect(prefs.store[AppConstants.allowSubmitPaymentStorageKey], true);
+      expect(AppSettingsService(prefs: prefs).allowSubmitPayment, isTrue,
+          reason: 'a NEW service instance reads it back (settings screen recreate)');
+      expect(await s.saveAllowSubmitPayment(false), isTrue);
+      expect(AppSettingsService(prefs: prefs).allowSubmitPayment, isFalse);
+    });
+
     test('isValidGatewayUrl', () {
       expect(AppSettingsService.isValidGatewayUrl('https://x.example'), isTrue);
       expect(AppSettingsService.isValidGatewayUrl('http://127.0.0.1:8788'), isTrue);
@@ -173,6 +198,40 @@ void main() {
 
       await client.ask('q');
       expect(adapter.requests.single.toString(), 'http://compiled-fallback/ask');
+    });
+
+    test('ask() sends submit_now as told — OFF by default, ON when the caller (controller) passes the saved setting', () async {
+      final prefs = _FakePrefs();
+      final settings = AppSettingsService(prefs: prefs);
+      final bodies = <dynamic>[];
+      final adapter = _MockAdapter((options) async {
+        // The client hands dio a Map (dio serialises it later), so at adapter
+        // level the body may be either the Map itself or an encoded String.
+        final d = options.data;
+        bodies.add(d is String ? jsonDecode(d) as Map<String, dynamic> : d);
+        return _okAnswer();
+      });
+      final dio = Dio(BaseOptions(baseUrl: 'http://mock.local'))
+        ..httpClientAdapter = adapter;
+      final client = CopilotApiClient(dio: dio, settings: settings);
+
+      // Mirrors chat_controller.send(): the SETTING is read at ask time and
+      // passed explicitly — the flag on the wire is the value the user's
+      // setting held when THIS question was asked.
+      await client.ask('q', submitNow: settings.allowSubmitPayment);
+      expect(
+        (bodies.last as Map<String, dynamic>)['submit_now'],
+        isFalse,
+        reason: 'default OFF is still sent explicitly (server freezes it)',
+      );
+
+      await settings.saveAllowSubmitPayment(true);
+      await client.ask('q', submitNow: settings.allowSubmitPayment);
+      expect(
+        (bodies.last as Map<String, dynamic>)['submit_now'],
+        isTrue,
+        reason: 'the saved setting now travels on the wire',
+      );
     });
 
     test('changing the URL applies IMMEDIATELY, no rebuild/restart', () async {
@@ -226,12 +285,98 @@ void main() {
       );
     });
 
+    testWidgets('F7-2: the submit switch exists and defaults OFF', (tester) async {
+      final prefs = _FakePrefs();
+      await pump(tester, prefs);
+      expect(find.text('Cho phép nộp phiếu thu thật'), findsOneWidget);
+      expect(find.textContaining('TẮT'), findsOneWidget);
+      expect(
+        tester.widget<CheckboxListTile>(find.byType(CheckboxListTile)).value,
+        isFalse,
+      );
+      expect(prefs.store.containsKey(AppConstants.allowSubmitPaymentStorageKey),
+          isFalse, reason: 'nothing persisted until Save');
+    });
+
+    testWidgets('F7-2: turning ON requires the explicit dialog; Huỷ keeps OFF',
+        (tester) async {
+      final prefs = _FakePrefs();
+      await pump(tester, prefs);
+      await tester.tap(find.text('Cho phép nộp phiếu thu thật'));
+      await tester.pumpAndSettle();
+      // The dialog is really there — a tap alone never enables the switch.
+      expect(find.text('Cho phép nộp phiếu thu thật?'), findsOneWidget);
+      await tester.tap(find.text('Huỷ'));
+      await tester.pumpAndSettle();
+      expect(
+        tester.widget<CheckboxListTile>(find.byType(CheckboxListTile)).value,
+        isFalse,
+        reason: 'cancel must leave the switch untouched',
+      );
+      expect(prefs.store.containsKey(AppConstants.allowSubmitPaymentStorageKey),
+          isFalse);
+    });
+
+    testWidgets('F7-2: confirming the dialog turns the switch ON; Save persists it',
+        (tester) async {
+      final prefs = _FakePrefs();
+      await pump(tester, prefs);
+      await tester.ensureVisible(find.text('Cho phép nộp phiếu thu thật'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Cho phép nộp phiếu thu thật'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Bật nộp phiếu thật'));
+      await tester.pumpAndSettle();
+      expect(
+        tester.widget<CheckboxListTile>(find.byType(CheckboxListTile)).value,
+        isTrue,
+      );
+      expect(find.textContaining('ĐANG BẬT'), findsOneWidget);
+      await tester.ensureVisible(find.text('Lưu'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Lưu'));
+      await tester.pumpAndSettle();
+      expect(prefs.store[AppConstants.allowSubmitPaymentStorageKey], true);
+    });
+
+    testWidgets('F7-2: turning OFF needs no dialog and Save persists OFF',
+        (tester) async {
+      final prefs = _FakePrefs();
+      await prefs.setBool(AppConstants.allowSubmitPaymentStorageKey, true);
+      await pump(tester, prefs);
+      expect(
+        tester.widget<CheckboxListTile>(find.byType(CheckboxListTile)).value,
+        isTrue,
+        reason: 'a previously saved ON is restored on open',
+      );
+      await tester.ensureVisible(find.text('Cho phép nộp phiếu thu thật'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Cho phép nộp phiếu thu thật'));
+      await tester.pumpAndSettle();
+      expect(find.text('Cho phép nộp phiếu thu thật?'), findsNothing,
+          reason: 'the safe direction never asks');
+      expect(
+        tester.widget<CheckboxListTile>(find.byType(CheckboxListTile)).value,
+        isFalse,
+      );
+      await tester.ensureVisible(find.text('Lưu'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Lưu'));
+      await tester.pumpAndSettle();
+      expect(prefs.store[AppConstants.allowSubmitPaymentStorageKey], false);
+    });
+
     testWidgets('invalid URL blocks save; the field shows the error',
         (tester) async {
       final prefs = _FakePrefs();
       await pump(tester, prefs);
 
       await tester.enterText(find.byType(TextFormField).first, 'nonsense');
+      // The new F7-2 section pushed the Save button below the test viewport —
+      // a bare tap() misses (silently), which made this test fail for the
+      // wrong reason. Scroll it into view first.
+      await tester.ensureVisible(find.text('Lưu'));
+      await tester.pumpAndSettle();
       await tester.tap(find.text('Lưu'));
       await tester.pumpAndSettle();
 
@@ -249,6 +394,8 @@ void main() {
       await tester.enterText(fields.at(0), 'https://erpn8788.loca.lt');
       await tester.enterText(fields.at(3), '3'); // below floor (5)
 
+      await tester.ensureVisible(find.text('Lưu'));
+      await tester.pumpAndSettle();
       await tester.tap(find.text('Lưu'));
       await tester.pumpAndSettle();
 
@@ -269,6 +416,8 @@ void main() {
       await tester.enterText(fields.at(2), 'secret');
       await tester.enterText(fields.at(3), '30');
 
+      await tester.ensureVisible(find.text('Lưu'));
+      await tester.pumpAndSettle();
       await tester.tap(find.text('Lưu'));
       await tester.pumpAndSettle();
 

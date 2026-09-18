@@ -68,7 +68,14 @@ class ChatController extends _$ChatController {
 
     state = AsyncData(current.copyWith(isLoading: true, clearError: true));
     try {
-      final result = await ref.read(copilotApiClientProvider).ask(trimmed, entityId: entityId);
+      // F7-2 (user decision 2026-09-18): the submit switch is read NOW, when
+      // the question is asked — the server freezes the answer into the proposal
+      // snapshot. Changing the setting later cannot reword or re-arm a card
+      // already on screen (the card replays its snapshot on /execute).
+      final submitNow = ref.read(appSettingsServiceProvider).allowSubmitPayment;
+      final result = await ref
+          .read(copilotApiClientProvider)
+          .ask(trimmed, entityId: entityId, submitNow: submitNow);
       await _append(ChatTurn.fromAskResult(result, typedQuestion: trimmed));
       return true;
     } on CopilotException catch (err) {

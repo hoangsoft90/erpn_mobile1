@@ -187,6 +187,31 @@ const TOOLS = {
     return { data: doc, message: `Payment Entry ${doc.name} created successfully` };
   },
   /**
+   * Generic submit — mirrors the REAL 3.0.4 handler (source line ~53741):
+   * `erpnext_doc_submit` {doctype, name} → frappe.client.submit. A draft is
+   * submitted (docstatus 0 → 1); submitting an already-submitted doc fails,
+   * exactly like the real server. Optional fault injection for the
+   * "draft written, submit failed" mid-transaction case (F7-2 policy).
+   */
+  erpnext_doc_submit: (args) => {
+    if (process.env.MOCK_ERP_FAIL_SUBMIT) {
+      throw new Error(
+        `simulated submit failure (MOCK_ERP_FAIL_SUBMIT=${process.env.MOCK_ERP_FAIL_SUBMIT})`,
+      );
+    }
+    if (args?.doctype !== "Payment Entry") {
+      throw new Error(`mock doc_submit does not support doctype ${args?.doctype}`);
+    }
+    const pe = PAYMENTS.find((p) => p.name === String(args?.name ?? ""));
+    if (!pe) throw new Error(`Payment Entry ${args?.name} not found`);
+    if (pe.docstatus !== 0) {
+      throw new Error(`Payment Entry ${pe.name} is not submittable (docstatus ${pe.docstatus})`);
+    }
+    pe.docstatus = 1;
+    saveState();
+    return { data: pe, message: `Payment Entry ${pe.name} submitted successfully` };
+  },
+  /**
    * Real-server list path: Payment Entry by reference_no (reconcile) and Mode
    * of Payment (the write path resolves the real mode document name).
    */

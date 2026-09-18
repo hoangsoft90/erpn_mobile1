@@ -92,3 +92,59 @@ test("guard audit: mock server advertises readOnlyHint for every whitelisted too
     await client.close();
   }
 });
+
+// ---- F7-2: the fail-closed write gate allows exactly ONE more shape ----
+
+test("F7-2 gate: erpnext_doc_submit on Payment Entry reaches the mock (docstatus 0 -> 1)", async () => {
+  const client = createMcpClient();
+  try {
+    // create a draft through the sanctioned gate...
+    await client.callWriteTool("erpnext_doc_create", {
+      doctype: "Payment Entry",
+      data: {
+        company: "Demo Feed Co",
+        payment_type: "Receive",
+        party_type: "Customer",
+        party: "CUST-00001",
+        paid_amount: 10_000,
+        received_amount: 10_000,
+        reference_no: "F7-2-GATE-TEST",
+        mode_of_payment: "Cash",
+        paid_to: "1110 - Cash - DFC",
+        paid_from: "1120 - Bank - DFC",
+      },
+    });
+    // ...then submit it through the ONE extra shape the gate now allows.
+    const listed = await client.callTool("erpnext_doc_list", {
+      doctype: "Payment Entry",
+      filters: [["reference_no", "=", "F7-2-GATE-TEST"]],
+    });
+    const pe = listed.data.data[0];
+    assert.equal(pe.docstatus, 0, "created as draft first");
+    const sub = await client.callWriteTool("erpnext_doc_submit", {
+      doctype: "Payment Entry",
+      name: pe.name,
+    });
+    assert.ok(sub.data, "submit returns the document");
+    const after = await client.callTool("erpnext_doc_get", {
+      doctype: "Payment Entry",
+      name: pe.name,
+    });
+    assert.equal(Number(after.data.data.docstatus), 1, "the draft is now SUBMITTED");
+  } finally {
+    await client.close();
+  }
+});
+
+test("F7-2 gate: a submit of a NON-Payment-Entry doctype is still REFUSED (fail-closed)", async () => {
+  const client = createMcpClient();
+  try {
+    await assert.rejects(
+      client.callWriteTool("erpnext_doc_submit", { doctype: "Sales Invoice", name: "SINV-0001" }),
+      /WRITE_REFUSED/,
+      "the gate must not widen to other doctypes",
+    );
+  } finally {
+    await client.close();
+  }
+});

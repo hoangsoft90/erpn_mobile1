@@ -372,6 +372,13 @@ export async function buildPaymentProposal(skills, resolved, opts = {}) {
     amount = outstanding;
   }
 
+  // F7-2 (user decision 2026-09-18): whether a confirm SUBMITS the receipt is
+  // frozen into the snapshot at proposal time. The card's description and the
+  // executor both read THIS value — the setting is never re-read at execute
+  // time, so the user cannot flip the switch between viewing and pressing
+  // confirm and change what the press does (view/execute must not diverge).
+  const submitNow = opts.submit_now === true;
+
   const proposal = buildProposal({
     action: "create_payment_entry",
     risk: "HIGH",
@@ -385,6 +392,8 @@ export async function buildPaymentProposal(skills, resolved, opts = {}) {
       invoice: target.name,
       outstanding_vnd: outstanding,
       mode: opts.mode ?? "Tiền mặt",
+      // Frozen intent: submit-or-draft is part of WHAT was approved.
+      submit_now: submitNow,
     },
     summary: `Thu ${amount}đ từ ${customer.customer_name} cho chứng từ ${target.name}`,
     extra: {
@@ -550,6 +559,59 @@ export async function executePaymentProposal(mcp, proposal, commandId, store) {
     // would be a reportable business difference, not a cosmetic detail.
     result.mode_substituted_from = modeRequested;
   }
+
+  // F7-2 — CONDITIONAL SUBMIT (user decision 2026-09-18). The draft is DONE and
+  // verified at this point: whatever happens below must never turn the whole
+  // transaction into FAILED (the money record exists; begin() refuses FAILED so
+  // a terminal mark would make reconcile impossible). The submit flag comes
+  // from the SNAPSHOT (params.submit_now), frozen when the proposal was built —
+  // the server does not re-read any client-side setting here.
+  if (proposal.params?.submit_now !== true) {
+    result.note = "phiếu tạo ở trạng thái NHÁP (docstatus 0) — submit là bước riêng, cần người quyết định";
+    store.complete(commandId, result);
+    return result;
+  }
+  result.submit_requested = true;
+  try {
+    // Deliberately NOT assertReadOnly(): the guard refuses every write verb by
+    // design. The submit reaches ERPNext only through callWriteTool(), whose
+    // gate now allows exactly one more shape — erpnext_doc_submit on the SAME
+    // Payment Entry doctype (fail-closed in client.mjs).
+    await mcp.callWriteTool("erpnext_doc_submit", { doctype: WRITE_DOCTYPE, name: docName });
+  } catch (err) {
+    // PARTIAL SUCCESS: the draft exists; the submit did not. Report it loudly,
+    // complete the command (draft state is the truth), and tell the user exactly
+    // what to do on ERPNext. NOT FAILED — that would be a lie about the money.
+    result.submit_ok = false;
+    result.submit_error = err?.message ?? String(err);
+    result.docstatus = 0;
+    result.note =
+      `đã tạo NHÁP ${docName} thành công, nhưng SUBMIT lỗi: ${result.submit_error} — cần submit tay trên ERPNext`;
+    process.stderr.write(
+      `[payment-write] submit failed after draft: command=${commandId} doc=${docName} error=${result.submit_error}\n`,
+    );
+    store.complete(commandId, result);
+    return result;
+  }
+  // 6. VERIFY THE SUBMIT by reading the doc back — same rule as the create.
+  const submitted = await mcp.callTool("erpnext_doc_get", { doctype: WRITE_DOCTYPE, name: docName });
+  const submittedDoc = docOf(submitted);
+  const finalStatus = Number(submittedDoc?.docstatus);
+  if (finalStatus !== 1) {
+    // The submit call "succeeded" but the doc is still a draft — treat it like
+    // a failed submit (the draft stands; the user must submit manually).
+    result.submit_ok = false;
+    result.submit_error = `sau submit, docstatus đọc lại = ${submittedDoc?.docstatus ?? "?"} (mong đợi 1)`;
+    result.note = `đã tạo NHÁP ${docName}, submit chưa xác minh được: ${result.submit_error} — cần submit tay trên ERPNext`;
+    process.stderr.write(
+      `[payment-write] submit unverified: command=${commandId} doc=${docName} docstatus=${submittedDoc?.docstatus}\n`,
+    );
+    store.complete(commandId, result);
+    return result;
+  }
+  result.submit_ok = true;
+  result.docstatus = finalStatus;
+  result.note = "phiếu ĐÃ SUBMIT (docstatus 1) — công nợ khách đã giảm; hoàn tác = cancel trên ERPNext";
   store.complete(commandId, result);
   return result;
 }
