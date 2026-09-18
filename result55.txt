@@ -1,0 +1,147 @@
+========================================================================
+RESULT 55 — BUGFIX P6: "MÁY KHÔNG CÓ BỘ NHẬN DẠNG TIẾNG VIỆT" LÀ SAI
+Timestamp: 2026-09-18 (giờ shell)
+Người báo: user (sau khi cài APK lên máy thật).
+Phạm vi: CHỈ client voice — `apps/mobile/lib/features/chat/data/speech_service.dart`
++ `apps/mobile/lib/features/chat/presentation/screens/chat_screen.dart` + 2 file test.
+KHÔNG đụng server/gateway/idempotency/router, KHÔNG ghi ERPNext thật.
+Chưa commit (đụng mobile client → chờ user duyệt, như thông lệ).
+========================================================================
+
+== 1. HIỆN TƯỢNG (user, máy thật) ==
+
+"Gboard voice hiểu tiếng Việt nhưng app hiện 'Máy không có bộ nhận dạng tiếng Việt'."
+
+→ Không phải lỗi mỹ phẩm: cảnh báo SAI chặn đúng use case chính của P6 (nhập bằng
+giọng nói tiếng Việt) — user thấy vậy thì không dám dùng mic dù máy nhận tốt.
+
+== 2. NGUYÊN NHÂN GỐC (đọc doc plugin thật, không đoán) ==
+
+`speech_service.dart` cũ:
+
+    final locales = await _speech.locales();
+    for (final locale in locales) {
+      if (locale.localeId.toLowerCase().startsWith('vi')) return locale.localeId;
+    }
+    return null;                       // ← UI coi null = "không có tiếng Việt"
+
+Doc của chính plugin (`~/.pub-cache/hosted/pub.dev/speech_to_text-7.5.0/lib/speech_to_text.dart`,
+`locales()`), nguyên văn:
+
+  "Android: The list of languages is based on the locales supported by the on device
+   recognizer. This list may not be the complete list of languages available for online
+   recognition. Unfortunately there is no way to get the list of languages supported by
+   the online recognizer."
+
+⇒ `locales()` chỉ phủ recognizer ON-DEVICE. Máy của user (Gboard/online) nhận tiếng Việt,
+nhưng danh sách đó KHÔNG có `vi` ⇒ code cũ trả `null` ⇒ hai hệ quả sai cùng lúc:
+  (a) UI nói "Máy không có bộ nhận dạng tiếng Việt" (claim về năng lực máy — sai bản chất);
+  (b) `listen(localeId: null)` ⇒ OS tự chọn locale bất kỳ, app KHÔNG còn chủ động xin tiếng Việt.
+
+Vết tích trong code cũ (đã xoá): `_pickVietnameseLocale()` trả `String?`;
+`chat_screen.dart` dòng `_notice = _speech.localeId == null ? 'Máy không có bộ nhận dạng
+tiếng Việt — hãy đọc kỹ lại câu chữ trước khi gửi.' : null;`
+
+== 3. SỬA (6 điểm) ==
+
+ 1. `speech_service.dart` — `static const String fallbackLocaleId = 'vi_VN';`
+    Không thấy `vi` trong `locales()` (kể cả list RỖNG) ⇒ vẫn xin `vi_VN`.
+    (Android plugin đổi `_` → `-` trước `EXTRA_LANGUAGE` — đọc source Kotlin:
+     `SpeechToTextPlugin.kt:203  localeId = localeId.replace('_','-')` ⇒ `vi_VN` → `vi-VN`.)
+ 2. Thêm `bool get localeVerified` — TÁCH "máy có liệt kê `vi` hay không" khỏi "dùng được
+    hay không". UI chỉ được dùng nó cho gợi ý NHẸ, không bao giờ cho refusal.
+ 3. `listen()`: nếu platform TỪ CHỐI locale đã xin (throw `ListenFailedException`) và locale
+    đó chưa được máy xác nhận ⇒ retry ĐÚNG 1 lần với locale mặc định; chỉ khi retry cũng
+    hỏng mới `unavailable`. (Trước đây mọi throw ⇒ `unavailable` + tắt service.)
+ 4. `_handleError()`: `error_language_not_supported` / `error_language_unavailable` được
+    xử lý TRƯỚC cờ `permanent` ⇒ bỏ locale đang ép (lần sau dùng mặc định máy) nhưng KHÔNG
+    tắt service vĩnh viễn — đây là "ngôn ngữ chưa hỗ trợ", không phải "máy không có recognizer".
+ 5. `chat_screen.dart`: `_notice = _speech.localeVerified ? null : 'Máy không liệt kê tiếng Việt
+    trong danh sách nhận dạng — vẫn thử nhận dạng tiếng Việt, nên đọc lại câu chữ trước khi gửi.'`
+    ⇒ gỡ hẳn câu "Máy không có bộ nhận dạng tiếng Việt"; `_noticeIsError = false` (không đỏ).
+ 6. Nới copy trạng thái `unavailable` (dùng chung cho cả "máy không có recognizer" và
+    "recognizer từ chối ngôn ngữ") → "Không dùng được nhận dạng giọng nói trên máy này. Bạn
+    nhập bằng bàn phím như bình thường, hoặc thử lại nút micro."
+
+== 4. TEST THẬT (lệnh + output nguyên văn) ==
+
+$ cd apps/mobile && flutter test
+  00:16 +106: .../chat_controller_test.dart: F7-2: the submit setting is read at ASK time...
+  00:16 +107: All tests passed!
+
+$ flutter analyze
+  Analyzing mobile...
+  No issues found! (ran in 4.5s)
+
+$ PYTHONPATH=src python3 -m unittest discover -s tests      # (repo root)
+  Ran 62 tests in 0.376s
+  OK
+
+$ cd mcp-erpnext && env -u ERPNEXT_URL -u ERPNEXT_API_KEY -u ERPNEXT_API_SECRET node --test
+  ℹ pass 267   ℹ fail 0
+
+Số test voice: `speech_service_test.dart` 6 → 11 · `voice_input_test.dart` 15 → 16
+(tổng Flutter 101 → 107). Test mới, nguyên ý:
+ - list KHÔNG có `vi` ⇒ `localeId == 'vi_VN'`, `localeVerified == false`, `localeAttempts == ['vi_VN']`
+ - list RỖNG `[]` ⇒ y như trên (đúng ca máy Android thật)
+ - có `vi` ⇒ dùng nguyên `vi_VN` + `localeVerified == true`
+ - platform TỪ CHỐI `vi_VN` ⇒ `localeAttempts == ['vi_VN', null]` + status `listening` (KHÔNG unavailable)
+ - locale ĐÃ xác nhận mà lỗi ⇒ `localeAttempts == ['vi_VN']` (không silent retry) + `unavailable`
+ - refusal ngôn ngữ qua onError ⇒ status `unavailable`, `localeId == null`, lần nghe sau
+   `localeAttempts == [null]` (service sống, không bị tắt vĩnh viễn)
+ - widget: máy không liệt kê `vi` ⇒ hiện gợi ý nhẹ, câu cũ `findsNothing`, VẪN nghe, VẪN điền
+   vào ô nhập và VẪN không gửi gì (`rec.paths` rỗng); máy có `vi` ⇒ không gợi ý
+
+== 5. FALSIFY (gỡ → đỏ đúng chỗ → khôi phục; `git diff` sạch sau mỗi lần) ==
+
+| | Gỡ gì | Test đỏ (nguyên tên) |
+|---|---|---|
+| A | `_localeId = fallbackLocaleId` → `null` | "a locale list WITHOUT vi still asks for vi_VN (bug P6)" · "an EMPTY locale list still asks for vi_VN (bug P6)" · "a platform that REJECTS the forced locale is retried with the default" |
+| B | bỏ nhánh retry (`... || true`) | "a platform that REJECTS the forced locale is retried with the default" |
+| C | xoá nhánh `error_language_not_supported` | "a language refusal drops the forced locale but keeps the mic usable" |
+| D | UI quay lại ĐÚNG code cũ (`localeId == null` + câu cũ) | "device with no Vietnamese in the locale list → hint, not refusal" |
+
+== 6. LỖI CỦA CHÍNH TÔI TRONG ĐỢT NÀY (đã ghi vào skill) ==
+
+ 6.1 **Falsify D lần đầu SAI VỊ TRÍ**: tôi thay `_notice = _speech.localeVerified ? null : '<câu mới>'`
+     bằng `_notice = (_speech.localeId == null) ? null : '<câu mới>'` (đảo nhánh) ⇒ test đỏ là
+     "a verified Vietnamese locale shows no hint at all" — tức đỏ ở ca KHÁC, KHÔNG phải ca bug của
+     user. Làm lại đúng code cũ (câu cảnh báo cũ + điều kiện `localeId == null`) ⇒ đỏ đúng
+     "hint, not refusal". Bài học: falsify phải TÁI TẠO ĐÚNG bản cũ; đỏ ≠ đỏ đúng chỗ.
+ 6.2 **Trùng tên field/getter trong fake test**: khai `bool localeVerified;` trong `_FakeSpeech`
+     rồi thêm `@override bool get localeVerified` ⇒ 'localeVerified' is already declared
+     (compile fail cả file test). Sửa: field `localeIsVerified`. (Dart không cho tham số named
+     private `this._x` nên không thể "chỉ cần đổi thành _".)
+ 6.3 **`find.textContaining` phân biệt HOA/thường**: copy đổi "không" → "Không" ở đầu câu ⇒ 2 test
+     đỏ dù logic đúng ⇒ mất 1 vòng sửa vô ích.
+ 6.4 **`errorListener` trùng field kế thừa của plugin** (analyze: `overridden_fields` +
+     `annotate_overrides`) ⇒ đổi thành `lastErrorListener`.
+ 6.5 **`dart format` (Dart 3.13 tall style) reformat CẢ FILE**: repo viết theo style cũ —
+     đo thật `dart format --set-exit-if-changed lib test` ⇒ **20/28 file non-conforming**.
+     Chạy format trên 4 file đã sửa làm diff phình 272 → 459 dòng (churn ngoài phạm vi) ⇒ phải
+     `git checkout` 2 file test + khôi phục 2 file lib từ backup rồi apply lại edit tay.
+     Ba lần "Formatted 4 files (4 changed)" là dấu hiệu formatter không phải chuẩn của repo.
+
+== 7. FILE + TRẠNG THÁI ==
+
+M: `apps/mobile/lib/features/chat/data/speech_service.dart` (105 dòng đổi)
+M: `apps/mobile/lib/features/chat/presentation/screens/chat_screen.dart` (19)
+M: `apps/mobile/test/speech_service_test.dart` (148)
+M: `apps/mobile/test/voice_input_test.dart` (51)
+   → 4 files, +272/−51. Secret scan: không có key/token nào trong diff (không đụng `.env`).
+
+Docs: `.plan/phases2/p6-result.md` (+ mục "Bugfix P6", sửa checklist máy thật mục 7, suite
+101 → 107) · `working.md` · `next.md` · `checklist.md` · `.project/modules/chat.md` ·
+`.agents/skills/erpn-verify-first/SKILL.md` (bài học, file gitignored) · `LESSONS_LEARNED.md`.
+
+**CHƯA COMMIT** — chờ user duyệt (mobile client). Message đề xuất:
+
+    fix(p6): locale list is not a capability claim — always ask for vi_VN, hint instead of refusing
+
+Body: `locales()` chỉ phủ recognizer on-device (doc plugin) ⇒ thiếu `vi` KHÔNG có nghĩa là máy
+không hỗ trợ; luôn xin `vi_VN`, retry 1 lần với locale mặc định nếu platform từ chối, refusal
+ngôn ngữ không tắt service, UI đổi sang gợi ý nhẹ. Flutter 107/107 · analyze 0.
+
+**Human còn lại (không phải việc agent):** cài APK (artifact CI sau khi push) → smoke mục 7 trong
+`.plan/phases2/p6-result.md` trên máy thật có Gboard tiếng Việt; nếu máy có logcat thì dán dòng
+`EXTRA_LANGUAGE`/kết quả nhận dạng để đối chiếu.

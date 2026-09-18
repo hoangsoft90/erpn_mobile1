@@ -249,3 +249,29 @@
 - **Đóng phase phân quyền phải duyệt từ danh sách ROUTE, không từ call site.** `runExecute` có đúng
   2 call site là chưa đủ — `/jobs` và `/execute/cancel` không đụng tới nó nhưng vẫn lộ/đổi dữ liệu
   của người khác. Mỗi route tự hỏi "route này lộ gì / đổi gì".
+
+## Bugfix P6 (2026-09-18) — "danh sách của API" bị đọc thành "năng lực của nền tảng"
+
+> Bằng chứng đầy đủ: `result55.txt` · `.plan/phases2/p6-result.md` §"Bugfix P6" · hàng bảng
+> tương ứng trong `.agents/skills/erpn-verify-first/SKILL.md`.
+
+- **Danh sách của API ≠ năng lực thật của nền tảng.** `SpeechToText.locales()` chỉ phủ recognizer
+  **ON-DEVICE** (doc nguyên văn: list "may not be the complete list of languages available for
+  online recognition"); máy Android thường KHÔNG có `vi` trong list mà vẫn nhận tiếng Việt tốt.
+  Code cũ coi "thiếu `vi`" = "máy không hỗ trợ" ⇒ **cảnh báo sai**, chặn đúng use case chính
+  (user thấy vậy thì không dùng mic). Luật: tín hiệu "tôi không chắc" chỉ được hiển thị dạng
+  **gợi ý**, không bao giờ dạng **từ chối/tuyên bố năng lực**; trước khi biến dữ liệu của API
+  thành phán quyết về hệ thống, đọc doc xem nó chỉ phủ cái gì.
+- **Falsify phải tái tạo ĐÚNG code cũ — "đỏ" ≠ "đỏ đúng chỗ".** Lần falsify đầu tôi đảo nhánh
+  ternary nên test đỏ là ca KHÁC (máy CÓ tiếng Việt lại bị gợi ý), không phải ca bug của user;
+  làm lại nguyên văn code cũ mới đỏ đúng test "hint, not refusal".
+- **Implement interface mới bằng FIELD trùng tên getter (Dart) ⇒ compile fail cả file test**
+  (`'localeVerified' is already declared`). Sau khi thêm member vào interface: chạy `analyze`
+  TRƯỚC `test`; fake nên dùng tên field khác (`localeIsVerified`).
+- **`find.textContaining` phân biệt HOA/thường** — đổi chữ đầu câu trong copy làm 2 widget test
+  đỏ dù logic đúng ⇒ mất 1 vòng sửa vô ích. Sau khi sửa copy: grep lại mọi test assert chuỗi đó.
+- **Đừng `dart format` trong repo không conform formatter hiện hành.** Đo trước bằng
+  `dart format --output=none --set-exit-if-changed lib test` ⇒ **20/28 file non-conforming**
+  (tall style Dart 3.13 vs repo style cũ); chạy format trên 4 file đã sửa làm diff phình
+  +272 → +459 rồi phải revert thủ công. Luật: đo mức non-conforming TRƯỚC, nếu repo không theo
+  formatter thì **không** format file mình sửa — diff bugfix phải đúng phạm vi.

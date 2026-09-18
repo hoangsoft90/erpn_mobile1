@@ -14,12 +14,25 @@ local + Action Proposal card (WRITE cần bấm [Xác nhận]).
 | `lib/features/chat/data/chat_models.dart` | `AskResult` (parse `/ask`, đủ shape answer + ActionProposal + uncertainty), `ChatTurn` (history JSON, có command_id + rejection code/problems) |
 | `lib/features/chat/data/copilot_api_client.dart` | dio POST `/ask` + `/execute`; đọc gateway URL/auth từ Settings mỗi request (rỗng ⇒ fallback dart-define); lỗi → sealed exception (message tiếng Việt) |
 | `lib/features/chat/data/chat_history_service.dart` | SharedPreferences; trim theo `maxChatItems` (mặc định 20) — KHÔNG cắt turn có proposal PENDING |
-| `lib/features/chat/data/speech_service.dart` | P6: interface `SpeechService` + `SystemSpeechService` (OS STT, `vi_VN`); không có method gửi/execute |
+| `lib/features/chat/data/speech_service.dart` | P6: interface `SpeechService` + `SystemSpeechService` (OS STT). Luôn xin `vi_VN` (`fallbackLocaleId`); `localeVerified` chỉ nói **danh sách máy có `vi` hay không** — KHÔNG phải "dùng được hay không". `stop()`/`cancel()` tăng session token để bỏ kết quả đến muộn. Không có method gửi/execute |
 | `lib/features/chat/application/chat_controller.dart` | `ChatController` @riverpod — `send()`, `confirmProposal()`, `clearHistory()`; đọc submit setting LÚC HỎI |
 | `lib/features/chat/presentation/screens/chat_screen.dart` | list + `PipelineProgress` (4 pha) + `_InputBar` (mic 🎙) + footer URL + clear dialog |
 | `lib/features/chat/presentation/widgets/proposal_card.dart` | Action Proposal: risk level, [Xác nhận], banner STALE/EXPIRED/PROBLEMS thay nút confirm (fail-closed), kết quả 3 trạng thái |
 | `lib/features/chat/presentation/widgets/entity_picker.dart` | P1: AMBIGUOUS → user chọn, không auto-fuzzy cho WRITE |
 | `lib/features/settings/presentation/screens/settings_screen.dart` | gateway URL/auth/max chat items/submit switch (dialog xác nhận riêng, mặc định OFF) |
+
+## Ghi chú nền tảng — đừng suy diễn sai (P6)
+
+- **Danh sách của API ≠ năng lực thật của nền tảng.** `SpeechToText.locales()` chỉ liệt kê ngôn
+  ngữ của recognizer **ON-DEVICE**; doc plugin ghi rõ list "may not be the complete list of
+  languages available for online recognition" và **không có API** nào cho biết recognizer online
+  hỗ trợ gì. Máy Android thường KHÔNG có `vi` trong list mà vẫn nhận tiếng Việt tốt (Gboard).
+  ⇒ Thiếu `vi` trong list chỉ được dùng cho **gợi ý nhẹ**, không bao giờ cho refusal/claim "máy
+  không hỗ trợ tiếng Việt".
+- **Android nhận `_` trong tag locale**: plugin Kotlin đổi `vi_VN` → `vi-VN` trước
+  `RecognizerIntent.EXTRA_LANGUAGE` ⇒ dùng `vi_VN` là hợp lệ.
+- **`stop()` của plugin LUÔN bắn thêm 1 kết quả cuối** (doc nguyên văn) ⇒ guard "đã dừng thì bỏ
+  kết quả đến muộn" phải được **thực thi** (session token), không chỉ ghi trong comment.
 
 ## API endpoints sử dụng
 
@@ -45,7 +58,7 @@ Contract chi tiết shape `result`: xem `.project/architecture.md` data flow +
 
 ## Trạng thái
 
-- ✅ Done (phases2 P0–P8, Flutter 101 test · analyze 0): chat + proposal card + voice + settings + entity picker + PipelineProgress; stale/expired banner qua HTTP 409 thật (dio throw → đọc `err.response?.data`)
+- ✅ Done (phases2 P0–P8, Flutter 107 test · analyze 0): chat + proposal card + voice + settings + entity picker + PipelineProgress; stale/expired banner qua HTTP 409 thật (dio throw → đọc `err.response?.data`)
 - ⏳ Pending: APK thật trên device (human) · Flutter poll `/jobs` sau execute queued (gap UX nhỏ)
   chung khi feature thứ 2 xuất hiện
 - Bugs đã biết: không có open bug (4 bug lịch sử đã fix, xem `openspec.md`)
