@@ -83,4 +83,6 @@
 2. Người thật: thu audio 150 câu theo `docs/audio-collection-script.md` → mở khóa Phase 4 (STT)
 3. P4 (Learning loop) theo `.plan/phases2/` — P3 đã commit `c38e4ea`, không còn gap chặn
 - (Đã xong trước đó: sign-off Phase 5 ký 2026-09-15 · rotate key ERPNext)
+- [2026-09-18] P5 dsh opt-in commit 6318eca (READ-only gate + D2/D8 proofs)
 - [2026-09-18] P4 learning loop commit d7e9ba9 (JSONL log + cluster + workflow + vòng thử "doanh số")
+- [2026-09-18] **P7 (phases2) queue job nền — kỹ thuật xong, CHỜ DUYỆT COMMIT (vùng tiền)**: `job-queue.mjs` (JSONL repo-local, enqueue chỉ khi verdict `retry_same_command_id`) + review vòng 2 tìm 5 finding thật: **F-A** job enqueue nhưng KHÔNG ai gọi `drain()` (exit criteria P7 gãy ngoài test) → thêm `startJobRunner()` timer trong main(); **F-B** job kẹt RUNNING sau crash → `_load()` chuyển RETRYING; **F-C** `/jobs` chỉ trả pending → thêm `completed()`; **F-D** cancel không nhả job → `release()`; **F-E** import chết. Falsify 4 guard trên /tmp (đều đỏ đúng chỗ). Suite: Python 60 · Node 228 · Flutter 69 · analyze 0. `result50.txt` + `.plan/phases2/p7-result.md`.

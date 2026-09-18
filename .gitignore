@@ -68,3 +68,7 @@ mcp-erpnext/control/
 # P4 learning loop (plan2_final §12): user questions + outcomes are runtime
 # data, never committed — cluster reports are produced from them on demand.
 learning-log/
+
+# P7 background job queue (plan2_final §19 P7): parked intents + attempt
+# history are runtime state (repo-local on purpose, never /tmp), never source.
+job-queue/

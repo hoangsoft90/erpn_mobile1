@@ -167,6 +167,19 @@
   factory=undefined (đúng ca sẽ crash). → Bảng ánh xạ suy từ cấu hình phải có guard + test phủ,
   KHÔNG tin "hiện tại chưa có ca lỗi".
 
+## Vòng review P7 (2026-09-18) — 4 bài học mới
+
+- **Runner đóng cứng dependency ⇒ exit criterion không thể test.** `startJobRunner` gọi thẳng
+  `runExecute` trong closure nên test inject gateway giả vẫn chạy gateway thật → FAILED, và
+  claim "queued → VERIFIED đã test" là rỗng. Fix: tham số có default (`execute = runExecute`)
+  + static assertion call site thật không inject.
+- **Test lỗi syntax = cả file test không chạy**, node chỉ báo 1 fail ở dòng 1. Kiểm `ℹ tests N`
+  trước khi đọc logic.
+- **Falsify phải nhắm đúng hàm mà test đi qua.** Gỡ guard ở `pending()` không chứng minh gì khi
+  `drain()` dùng `dueJobs()`.
+- **State dir mới phải vào `.gitignore` cùng đợt code** (`job-queue/` untracked sau E2E, chứa
+  command_id thật).
+
 ## Kỷ luật bắt buộc trước khi báo "xong" (tóm tắt từ SKILL.md)
 
 1. Chạy test thật của đúng phạm vi đổi (targeted), dán output nguyên văn.

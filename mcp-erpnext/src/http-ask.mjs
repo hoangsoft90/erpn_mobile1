@@ -42,6 +42,7 @@ import { IdempotencyStore, isValidCommandId } from "./idempotency.mjs";
 import { reconcilePaymentEntry } from "./skills/payment-write.mjs";
 import { createMcpClient } from "./client.mjs";
 import { runExecute } from "./safety-gateway.mjs";
+import { JobQueue } from "./job-queue.mjs";
 
 const MAX_BODY = 1_000_000; // one utterance is ~200 chars; 1MB is generous
 
@@ -149,9 +150,10 @@ function readBody(req) {
   });
 }
 
-export function createAskServer({ port = 8788, host = "127.0.0.1", policy = null, idemStore = null } = {}) {
+export function createAskServer({ port = 8788, host = "127.0.0.1", policy = null, idemStore = null, jobs = null } = {}) {
   const bindPolicy = policy ?? resolveBindPolicy({ host });
   const store = idemStore ?? new IdempotencyStore();
+  const jobQueue = jobs ?? new JobQueue();
   const server = http.createServer(async (req, res) => {
     // Non-loopback: every route (including /health) requires basic auth.
     if (!bindPolicy.loopback && !basicAuthOk(req, bindPolicy)) {
@@ -274,6 +276,14 @@ export function createAskServer({ port = 8788, host = "127.0.0.1", policy = null
         });
         return;
       }
+      // Review finding F-D: if the cancelled intent was parked in the job
+      // queue (retryable 503 earlier), releasing it here stops the runner from
+      // replaying it later — landing as a surprising FAILED instead of just
+      // going away. The reconcile proof above is what makes this safe.
+      const rel = jobQueue.release(command_id);
+      if (rel.ok) {
+        process.stderr.write(`[jobs] released queued job ${command_id} after verified-safe cancel\n`);
+      }
       sendJson(res, 200, {
         ok: true,
         cancelled: true,
@@ -318,6 +328,46 @@ export function createAskServer({ port = 8788, host = "127.0.0.1", policy = null
         return;
       }
       sendJson(res, verdict.status, verdict.body);
+      // ── P7: a RETRYABLE refusal (ERP unreachable / write unverified) is the
+      // moment the confirmed intent can be parked for automatic retry. The
+      // verdict body itself says retry_same_command_id — anything else is NOT
+      // queueable (a stale proposal must be re-asked, not retried). Best
+      // effort: a broken queue dir must not change the HTTP answer.
+      if (verdict.status === 503 && verdict.body?.retry_same_command_id === true) {
+        const enq = jobQueue.enqueue({
+          command_id: body?.command_id,
+          proposal: body?.proposal,
+          dedup_ack: body?.dedup_ack === true,
+          reason: verdict.body?.error ?? null,
+        });
+        if (enq.ok && !enq.duplicate) {
+          process.stderr.write(`[jobs] queued ${body?.command_id} — will retry via the Safety Gateway\n`);
+        }
+      }
+      return;
+    }
+    if (req.method === "GET" && path === "/jobs") {
+      // P7: the client polls this instead of push notifications. Only the
+      // caller's own jobs are ever interesting; the report is read-only.
+      // Review finding F-C: a poller that only ever saw "pending" could never
+      // observe VERIFIED/FAILED — include recent terminal jobs (newest first).
+      sendJson(res, 200, {
+        ok: true,
+        pending: jobQueue.pending().map((j) => ({
+          command_id: j.command_id,
+          state: j.state,
+          attempts: j.attempts,
+          next_attempt_at: j.next_attempt_at,
+          last_error: j.last_error,
+        })),
+        completed: jobQueue.completed().map((j) => ({
+          command_id: j.command_id,
+          state: j.state,
+          attempts: j.attempts,
+          erpnext_doc: j.proposal?.result?.erpnext_doc ?? null,
+          last_error: j.last_error,
+        })),
+      });
       return;
     }
     if (req.method === "POST" && path === "/ask") {
@@ -374,10 +424,47 @@ export function createAskServer({ port = 8788, host = "127.0.0.1", policy = null
   return server;
 }
 
+/**
+ * Review finding F-A: enqueued jobs were never drained — nothing in the real
+ * server called drain(), so a retryable 503 parked an intent FOREVER and the
+ * P7 exit criterion (queued → VERIFIED/FAILED) only ever held inside tests.
+ * This loop drains due jobs on a timer through the SAME Safety Gateway
+ * (runExecute) — still exactly one write path. drain() never throws (runner
+ * bugs become retryable verdicts), but the loop itself must survive anyway:
+ * a failed tick is logged, not fatal.
+ */
+export function startJobRunner({ jobQueue, execute = runExecute }) {
+  if (!jobQueue.config.enabled) return null; // JOB_QUEUE=off: no queue, no runner
+  // env-number law (451cd8f): finite AND positive or the default — a NaN
+  // interval would degrade setInterval to 1ms and hammer the gateway.
+  const raw = Number(process.env.JOB_QUEUE_POLL_MS);
+  const intervalMs = Number.isFinite(raw) && raw > 0 ? raw : 15_000;
+  let draining = false; // one drain at a time, no overlap
+  const tick = () => {
+    if (draining) return;
+    draining = true;
+    jobQueue.drain({ runExecute: execute })
+      .then((outcomes) => {
+        for (const o of outcomes) {
+          process.stderr.write(`[jobs] ${o.command_id} → ${o.state}${o.error ? ` (${o.error})` : ""}\n`);
+        }
+      })
+      .catch((err) => process.stderr.write(`[jobs] drain failed: ${err?.message ?? err}\n`))
+      .finally(() => { draining = false; });
+  };
+  const timer = setInterval(tick, intervalMs);
+  timer.unref?.(); // the HTTP server owns the process lifetime, not the runner
+  tick(); // crash-recovery: RETRYING jobs loaded from disk are due immediately
+  return timer;
+}
+
 export async function main(argv = process.argv.slice(2)) {
   const { port, host } = parseArgs(argv);
   const policy = resolveBindPolicy({ host }); // throws before listen on unsafe config
-  const server = createAskServer({ port, host, policy });
+  // One shared queue instance for the HTTP layer and the runner below.
+  const jobQueue = new JobQueue();
+  const server = createAskServer({ port, host, policy, jobQueue });
+  startJobRunner({ jobQueue });
   await new Promise((resolve, reject) => {
     server.once("error", reject);
     server.listen(port, host, resolve);
