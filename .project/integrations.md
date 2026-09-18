@@ -28,12 +28,31 @@
 ### GitHub Actions — CI/CD build APK
 
 - Workflow: `.github/workflows/android-debug-apk.yml`
-- Trigger: push/PR paths `apps/mobile/**` + `workflow_dispatch`
+- Trigger: push/PR paths `apps/mobile/**` + `workflow_dispatch` — commit chỉ đổi
+  backend/docs **KHÔNG** trigger (đúng thiết kế)
 - Steps: Java 21 (temurin) → Flutter stable (subosito, cache) → pub get →
   `analyze --fatal-infos` → `test` → `build apk --debug` → artifact
   `erpn-chat-debug-apk`
 - Quyết định user: **KHÔNG build APK trên VPS** (chỉ analyze/test trên VPS)
-- Chưa chạy lần nào — chờ user cấp GitHub repo để push
+- ✅ Đã chạy XANH nhiều lần; run gần nhất `35354732022` (commit `9b54d35` — P6 voice),
+  artifact ~84 MB, hết hạn 2026-12-17
+
+### LLM Router (Phase 5 — gateway nội bộ, không cloud bắt buộc)
+
+- `scripts/llm-router.mjs` :8900 — config-driven fallback chain (`scripts/llm-router.config.json`)
+- Upstreams: `mac-custom` (LLM tự host trên Mac qua `llm9000.loca.lt`, KHÔNG quota —
+  đầu chain cho dev) · `gemini-openai` (free tier flaky — chỉ cho verify
+  thought_signature qua `E2E_LLM_MODEL=real-gemini`) · Zen billing-blocked (để sau)
+- Audit JSONL repo-local (KHÔNG /tmp — overlayfs container bị xoá khi restart)
+- P3 classifier gọi qua router này; P5 dsh opt-in không đụng /ask
+
+### Authorization config (P8)
+
+- `COPILOT_USERS` (JSON, tùy chọn): `{"user":{"permissions":["Accounts User"],"company":"X"}}`
+  — đặt ⇒ multi_user; không đặt ⇒ single_tenant (hành vi cũ)
+- `COPILOT_COMPANY`: pin company cho single-tenant; multi-user thiếu company ⇒
+  `COMPANY_SCOPE_REQUIRED`
+- `COPILOT_DEFAULT_PERMISSIONS`: thu hẹp quyền single-tenant (= rỗng ⇒ không có quyền nào)
 
 ## Chưa tích hợp (roadmap)
 

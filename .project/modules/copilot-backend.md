@@ -18,7 +18,10 @@ phiên sau hiểu端 nào thuộc app,端 nào thuộc backend.
 |---|---|---|
 | `POST /normalize {text}` | → `{ok:true, result:{text, amount, ...}}` | NLP chuẩn hóa: kinship strip, synonym map, money → int VND |
 | `GET /health` | → `{ok:true, service:...}` | cả 2 service đều có |
-| `POST /ask {text}` | → xem `modules/chat.md` | pipeline đầy đủ |
+| `POST /ask {text}` | → xem `modules/chat.md` | pipeline đầy đủ (rate limit → authz P8 → route → skill) |
+| `POST /execute` | → Safety Gateway | CỬA DUY NHẤT ghi; idempotency + verify; 403 authz KHÔNG đốt `command_id` |
+| `POST /execute/cancel` | → huỷ PENDING | chỉ sau reconcile=0; chỉ chủ lệnh/người có quyền (P8) |
+| `GET /jobs` | → pending+completed | lọc theo actor (P8); job replay mang actor gốc |
 
 ## Skills business-level (read-only, trong `mcp-erpnext/src/skills/`)
 
@@ -50,5 +53,6 @@ set -a; source .env; set +a; node mcp-erpnext/src/http-ask.mjs  # :8788 REAL
 
 ## Trạng thái
 
-- ✅ Done: pipeline read-only end-to-end (ERPNext thật 2026-09-14, `result6.txt`)
-- ⏳ Pending: audit log/rate limit (Phase 5) · write skills (Phase 7+, gate)
+- ✅ Read-only pipeline end-to-end + **phases2 P0–P8 đã commit hết** (2026-09-18, xem `checklist.md` + `.plan/phases2/p*-result.md`): Capability Contract + Safety Gateway (P0) · entity 4 trạng thái + snapshot (P1) · uncertainty + session context (P2) · LLM classifier (P3) · learning loop (P4) · DSH opt-in READ (P5) · voice dictation (P6) · job queue (P7) · authorization/RBAC (P8) · rate limit + correlation (P10 slice)
+- ✅ Write thật: Phase 7 Stage B — `create_payment_entry` qua Safety Gateway, PE **nháp** (submit chỉ khi setting ON, frozen lúc hỏi — F7-2)
+- ⏳ Còn lại: P9 (skill mới — gate đã mở, chờ lệnh user) · saga §7 (chờ duyệt) · P10 full (DR/load/dashboard — infra) · deployment `COPILOT_USERS`/`COPILOT_COMPANY` (human)

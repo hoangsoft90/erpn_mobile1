@@ -13,6 +13,13 @@
 | **Fail-safe null-answer** | `answerQuestion()` | không route/không thấy khách → `answer: null` + `reason` — không bao giờ bịa dữ liệu |
 | **Versioned storage key** | `chat_history_v1` | đổi schema → bump version, không phá dữ liệu cũ |
 | **Whitelist guard in-code** | `readonly-guard.mjs` | chặn write ở tầng CODE; ID chỉ đến từ tool result (`assertKnownId`); output ERPNext bọc `markUntrusted` |
+| **Safety Gateway single door** | `safety-gateway.mjs` (P0) | mọi WRITE qua `runExecute()` — idempotency + verify + reconcile; test tĩnh no-bypass quét `src/`+`scripts/` |
+| **Contract-driven authorization** | `authorization.mjs` (P8) | permission/company scope đọc từ `capabilities.json`; server-first; prompt KHÔNG là quyền; identity suy từ principal (một nguồn "ai") |
+| **Command_id idempotency** | `idempotency.mjs` | client sinh UUID 1 lần/proposal; retry cùng id = replay; record mang actor (P8) |
+| **Fail-closed refusal có copy** | `uncertainty.mjs` (P2) | mọi refusal ra user phải map được vào taxonomy + copy tiếng Việt; unknown raw ⇒ null (không chế) |
+| **Human-approved learning** | `learning-log.mjs` (P4) | pipeline KHÔNG bao giờ tự sửa contract; thêm trigger chỉ qua người duyệt + regression gate |
+| **Voice là input modality** | `speech_service.dart` (P6) | STT chỉ đổ text vào ô input; interface không có method gửi/execute ⇒ không đường voice → WRITE |
+| **Snapshot frozen at ask-time** | F7-2 | cờ submit/giá trị user thấy được đóng băng vào proposal lúc hỏi — đổi setting giữa chừng không làm lệch lúc bấm |
 
 ## Quyết định thiết kế quan trọng (và lý do)
 
@@ -31,6 +38,8 @@
 | 11 | **An toàn số tiền > độ phủ** (nguyên tắc gốc) | sai tiền = mất niềm tin vĩnh viễn; ambiguous → từ chối + hỏi lại là recoverable | đoán số cho "đủ case" |
 | 12 | **KHÔNG build APK trên VPS** (user chốt) | VPS không UI; CI GH Actions chuẩn hóa + lưu artifact | build tại chỗ |
 | 13 | **AGENTS.md duy nhất ở repo root** | không tạo bản thứ hai; `.project/` là knowledge item, không phải rule agent | trùng lặp rule nhiều file |
+| 14 | **An toàn tiền = nhiều lớp độc lập** (P0–P8) | contract → authz → amount → kill switch → freshness → idempotency → verify; mỗi lớp có test + falsify riêng; lớp nào gỡ ra cũng phải đỏ đúng chỗ | gộp hết policy vào 1 chỗ |
+| 15 | **phases2 thay phase cũ** (`.plan/phases2/` supersede `.plan/phases/` phase-04/08/10–15) | P0–P8 giữ 8787/8788 + payment nháp, nâng theo Capability Contract; **cấm** `unknown → DSH`, không đường ghi thứ hai | làm lại theo phase-04/10 cũ (lỗi thời) |
 
 ## Anti-pattern đã từng mắc (không lặp)
 

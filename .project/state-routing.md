@@ -8,22 +8,29 @@ Blueprint khóa theo `architecture` skill — KHÔNG đổi sang Bloc/Redux/getx
 
 | Provider | Loại | File | Ghi chú |
 |---|---|---|---|
-| `appEnvironmentProvider` | `Provider<AppEnvironment>` | `app/providers.dart` | base URL từ dart-define `COPILOT_BASE_URL` |
-| `dioProvider` | `Provider<Dio>` | `app/providers.dart` | baseUrl + connect/receive timeout 15s |
+| `appEnvironmentProvider` | `Provider<AppEnvironment>` | `app/providers.dart` | base URL từ dart-define `COPILOT_BASE_URL` (fallback khi Settings rỗng) |
+| `appSettingsServiceProvider` | `Provider<AppSettingsService>` | `app/providers.dart` | gateway URL/auth/maxChatItems/submit switch (SharedPreferences); **invalidate sau Save** để UI rebuild |
+| `dioProvider` | `Provider<Dio>` | `app/providers.dart` | baseUrl + timeout; URL hiệu lực = Settings > dart-define |
 | `copilotApiClientProvider` | `Provider<CopilotApiClient>` | `app/providers.dart` | override trong test |
 | `sharedPreferencesProvider` | `Provider<SharedPreferences?>` | `app/providers.dart` | **throw UnimplementedError** nếu không override ở `main()`; null = storage fail nhưng app vẫn chạy |
 | `chatHistoryServiceProvider` | `Provider<ChatHistoryService>` | `app/providers.dart` | null-safe wrapper quanh prefs |
-| `chatControllerProvider` | `@riverpod ChatController` (AsyncNotifier) | `features/chat/application/chat_controller.dart` | state = `AsyncValue<ChatState>` |
+| `speechServiceProvider` | `Provider<SpeechService>` | `app/providers.dart` | P6: override trong test (`_FakeSpeech`) |
+| `chatControllerProvider` | `@riverpod ChatController` (AsyncNotifier) | `features/chat/application/chat_controller.dart` | state = `AsyncValue<ChatState>`; autoDispose — test phải `container.listen` giữ alive |
 
 ### ChatState (shape state duy nhất hiện có)
 
 ```dart
+```dart
 ChatState {
-  List<ChatTurn> turns;   // history; 1 turn = 1 cặp bubble hỏi/đáp
-  bool isLoading;         // input disabled + LinearProgress khi true
+  List<ChatTurn> turns;   // history; 1 turn = bubble + proposal + rejection (nếu có)
+  bool isLoading;         // PipelineProgress + input disabled khi true
   String? lastError;      // SnackBar qua ref.listen; KHÔNG dialog chặn
 }
 ```
+
+Turn có proposal mang `command_id` (Expando cache theo proposal instance —
+không đổi khi rebuild/recycle card; /ask mới = id mới). Trim lịch sử theo
+`maxChatItems` nhưng KHÔNG BAO GIỜ cắt turn có proposal PENDING.
 
 ### Quy ước quan trọng
 
@@ -39,7 +46,10 @@ ChatState {
 // app/router/app_router.dart — toàn bộ cấu hình hiện tại
 GoRouter(
   initialLocation: '/chat',
-  routes: [ GoRoute(path: '/chat', name: 'chat', pageBuilder: ... ChatScreen) ],
+  routes: [
+    GoRoute(path: '/chat', name: 'chat', pageBuilder: ... ChatScreen),
+    GoRoute(path: '/settings', name: 'settings', pageBuilder: ... SettingsScreen),
+  ],
   errorBuilder: ...  // scaffold tiếng Việt
 )
 ```

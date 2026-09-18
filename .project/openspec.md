@@ -19,7 +19,8 @@
 
 ## Trạng thái OpenSpec change (chỉ 2 dòng, đổi theo change)
 
-- Change đang mở: **`flutter-chat-mvp`** trên branch `change/flutter-chat-mvp` — kỹ thuật xong
-  (Flutter 13/13, analyze 0), đã push GH; **chờ**: duyệt commit đợt fix result9 → CI APK →
-  chạy thật trên máy → `openspec archive` → merge về master.
-- Tiến độ chi tiết của change: xem `checklist.md` + `openspec/changes/flutter-chat-mvp/tasks.md`.
+- Change đang mở: **`flutter-chat-mvp`** trên branch `change/flutter-chat-mvp` — kỹ thuật XONG và
+  **phases2 P0–P8 đã commit hết** (HEAD `4279aa0`, đã push; suite Python 62 · Node 267 · Flutter 101 ·
+  analyze 0); APK CI xanh (run `35354732022`). **Chờ**: APK/device smoke (human) → `openspec archive` → merge master.
+- Tiến độ chi tiết của change: xem `checklist.md` + `openspec/changes/flutter-chat-mvp/tasks.md`
+  (§6.9–6.16 ghi đủ hash từng phase phases2); roadmap = `.plan/phases2/` (supersede `.plan/phases/`).
