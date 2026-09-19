@@ -76,7 +76,7 @@ Lộ trình production trong `.plan/phases2/` (nguồn kiến trúc: `.plan/plan
 - `docs/dsh-optin.md` (2 chế độ + lệnh smoke); review vòng 2 fix 2 lỗi (`DSH_WRITE_BLOCKED` thiếu trong taxonomy P2; bị xếp nhầm bucket `error`)
 - Suite: **Node 212** · `result49.txt`
 
-### DSH END-TO-END (plan `.plan/dsh_end_to_end.md`) ✅ KỸ THUẬT XONG — CHỜ DUYỆT COMMIT
+### DSH END-TO-END (plan `.plan/dsh_end_to_end.md`) ✅ ĐÃ COMMIT + PUSH (`868be04` client + docs) — CI run #21 success
 
 - Checklist thi hành: `.plan/dsh_e2e_tasks.md` (A–E, mỗi mục [x] kèm bằng chứng) ·
   toàn bộ log: `result57.txt` (§1–§13).
@@ -98,7 +98,7 @@ Lộ trình production trong `.plan/phases2/` (nguồn kiến trúc: `.plan/plan
   thêm 9 guard `ref.mounted` + test hồi quy cho cả 2 đường. `result57.txt` §10.
 - Suite: **Python 62 · Node 290 · Flutter 150 · analyze 0** (mốc 2026-09-19).
 
-### DSH FINAL MINI-SPRINT (plan `.plan/dsh_prompt_check.md`) ✅ KỸ THUẬT XONG — CHỜ DUYỆT COMMIT
+### DSH FINAL MINI-SPRINT (plan `.plan/dsh_prompt_check.md`) ✅ ĐÃ COMMIT + PUSH (`b61df0a` gateway/scripts/pin) — CI run #21 success
 
 - Bằng chứng đầy đủ: **`result58.txt`** (§1 audit → §15 final verdict, bảng PASS/BLOCKED).
 - **§3 PIN runtime**: `package.json` root pin `@deepseek-ai/dsh@0.1.5-rc.1`;
@@ -167,7 +167,7 @@ Lộ trình production trong `.plan/phases2/` (nguồn kiến trúc: `.plan/plan
 - **Self-review sau khi viết tìm 4 lỗi THẬT đã sửa** (xem `p6-result.md` §"Vòng self-review"): kết quả STT đến muộn viết lại câu cũ vào ô vừa gửi (nặng nhất — plugin ghi rõ `stop()` LUÔN bắn thêm 1 kết quả) · `_notice`/`_listening` viết thành `else if` che mất phản hồi "Đang nghe…" · double-tap mở 2 phiên · `cancel()` hứa "không có text sau đó" mà không ai thực thi
 - Suite: Python 62 · Node 267 · **Flutter 107** (80→107) · analyze 0 — `.plan/phases2/p6-result.md`
 - **Bugfix P6 (2026-09-18) ✅ ĐÃ COMMIT `77e2b57` + docs `bbca7ca` (đã push) — `result55.txt`**: user báo trên máy thật "Gboard hiểu tiếng Việt nhưng app báo *Máy không có bộ nhận dạng tiếng Việt*". Gốc: doc plugin `locales()` ghi rõ danh sách đó **chỉ phủ recognizer ON-DEVICE**, có thể thiếu ngôn ngữ mà recognizer ONLINE vẫn nhận ⇒ coi `locales()` thiếu `vi` = "máy không hỗ trợ" là **suy diễn sai**. Sửa: luôn xin `vi_VN` + tín hiệu `localeVerified` tách khỏi "dùng được hay không" + retry 1 lần với locale mặc định khi platform từ chối + refusal ngôn ngữ **không** tắt service + UI **không hiện gì về locale** (bỏ luôn gợi ý nhẹ — cùng ngày, user yêu cầu; cảnh báo thật denied/unavailable/error_language_* vẫn giữ). +6 test, falsify 5 guard, Flutter 101→107.
-- **P6 UX "Tự gửi sau khi nói xong" (⏳ CHỜ DUYỆT COMMIT)**: switch Settings mặc định OFF; ON ⇒ final STT + ô nhập có text ⇒ gọi cùng `onSend()` (`POST /ask`); partial/transcript rỗng không gửi; không auto-confirm WRITE/`/execute`. +13 test, falsify A/B/C, Flutter 107→**120** (`result55.txt` §10–§11); review vòng 3 gỡ guard chết thứ 3 (`_maybeAutoSend` còn 1 điều kiện) + sửa 2 doc sai + sửa báo-sai-kết-quả-lưu · ❓ **chờ user**: `pauseFor: 3s` ⇒ khi BẬT, ngập ngừng giữa câu là gửi câu nửa vời — chọn (a) giữ + ghi rõ cỡ 3 giây vào copy Settings / (b) tăng `pauseFor` khi BẬT / (c) chỉ auto-send khi user **bấm dừng mic** (`human.md` §1)
+- **P6 UX "Tự gửi sau khi nói xong" (✅ ĐÃ COMMIT `f55d557`, đã push)**: switch Settings mặc định OFF; ON ⇒ final STT + ô nhập có text ⇒ gọi cùng `onSend()` (`POST /ask`); partial/transcript rỗng không gửi; không auto-confirm WRITE/`/execute`. +13 test, falsify A/B/C, Flutter 107→**120** (`result55.txt` §10–§11); review vòng 3 gỡ guard chết thứ 3 (`_maybeAutoSend` còn 1 điều kiện) + sửa 2 doc sai + sửa báo-sai-kết-quả-lưu · ❓ **chờ user**: `pauseFor: 3s` ⇒ khi BẬT, ngập ngừng giữa câu là gửi câu nửa vời — chọn (a) giữ + ghi rõ cỡ 3 giây vào copy Settings / (b) tăng `pauseFor` khi BẬT / (c) chỉ auto-send khi user **bấm dừng mic** (`human.md` §1)
 - **APK CI: ✅ đã build lại** — run `35367603981` success (artifact `erpn-chat-debug-apk`, 84.169.705 bytes), **xác minh binary chứa bản fix** (câu SAI cũ = 0 lần trong `kernel_blob.bin`) ⇒ plugin native build được trên CI
 - **Gap còn lại (chỉ người thật)**: cài APK + smoke mic trên **máy thật có Gboard tiếng Việt** (checklist 7 bước trong `p6-result.md`, mục 7 đã sửa theo bugfix này) — theo dõi ở `human.md` §2
 
