@@ -416,3 +416,29 @@ Bối cảnh: user yêu cầu "review code những gì vừa làm" cho tính nă
   `state` ⇒ `UnmountedRefException`. Lỗi có sẵn ở đường `/ask` từ Phase 3, DSH chỉ mở rộng cửa sổ
   (~20s). Sửa: `if (!ref.mounted) return false;` sau mọi await + test dispose cho **cả hai** đường
   (đừng chỉ sửa đường mình đang làm).
+
+## Đợt DSH RUNTIME DISCOVERY (2026-09-19, `result59.txt`) — 5 bài học mới
+
+- **Chuỗi fallback làm cho "PASS" trở thành oracle YẾU: lệnh kiểm tra phải in NGUỒN nào thắng.**
+  `dsh:check` vẫn PASS khi tôi gỡ nhánh `npx` — vì máy dev CÓ `/tmp/dsh-run` nên resolver rơi xuống
+  fallback và chạy được **ở máy này**. Ca thật cần bắt ("chạy được ở máy dev nhưng KHÔNG mang sang
+  máy khác") vẫn im lặng đi kèm chữ PASS. Sửa: in `source=npx-pinned|legacy-tmp|…` và WARN riêng
+  cho nguồn máy-cục-bộ. Luật: khi có ≥2 nguồn hợp lệ, bằng chứng phải nói **đang dùng nguồn nào**,
+  không chỉ "nó chạy".
+- **Falsify phải kiểm cả HARNESS của chính mình — "không thấy đỏ" ≠ "không có đỏ".** 2 vòng falsify
+  (health không chạy thật / gỡ nhánh `DSH_COMMAND`) chạy xong mà output trống: tôi grep
+  `^# (pass|fail)` nhưng reporter MẶC ĐỊNH của `node --test` in `ℹ pass 43`, không phải TAP.
+  Oracle sai ⇒ nguy cơ đọc "im lặng" thành "không lỗi". Luật: sau mọi falsify phải **ĐẾM** được
+  `pass/fail` (hoặc exit code), và khi output rỗng thì nghi oracle trước khi kết luận code đúng.
+- **Response lỗi phải TỰ MANG lý do — đừng buộc người sau mở log server.** `/dsh/ask` trả
+  "DSH Agent không trả lời được (lỗi phiên)" ⇒ phải vào `tail` log mới biết thật ra là
+  `llm-router: all upstreams failed (tried: mac-custom)`. Thêm `log_tail` vào payload: lần chạy
+  ĐẦU TIÊN sau đó đã hưởng lợi ngay (nhìn response là biết tunnel Mac chết). Luật: lỗi đi ra tới
+  client nên kèm 1 mẩu lý do NGUYÊN VĂN từ tầng dưới (đã bound độ dài).
+- **Health phải CHỨNG MINH, không suy luận từ sự tồn tại của file.** Cùng họ với bài học result58
+  (`existsSync ≠ chạy được`): `dshGatewayHealth()` nay chạy `--version` thật qua đúng spawn plan,
+  fail ⇒ `available:false` kèm lý do. Falsify: thay bằng object giả ⇒ 2 test health ĐỎ.
+- **Tách khái niệm theo câu hỏi, đừng gộp field.** `runtime` (topology local/remote — chạy Ở ĐÂU)
+  và `source` (cách resolve — CHẠY BẰNG GÌ: npx/pin/entry/legacy) là 2 câu hỏi khác nhau; gộp lại
+  thì ca "máy Mac báo available mà không chạy được" không chẩn đoán nổi. Tách ra ⇒ đọc 1 dòng
+  `/dsh/health` là biết ngay (và field `source` đã phát hiện đúng lỗi gốc khi falsify ưu tiên).

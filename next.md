@@ -76,6 +76,22 @@ Lộ trình production trong `.plan/phases2/` (nguồn kiến trúc: `.plan/plan
 - `docs/dsh-optin.md` (2 chế độ + lệnh smoke); review vòng 2 fix 2 lỗi (`DSH_WRITE_BLOCKED` thiếu trong taxonomy P2; bị xếp nhầm bucket `error`)
 - Suite: **Node 212** · `result49.txt`
 
+### DSH RUNTIME DISCOVERY (plan `.plan/dsh_prompt_fix1.md`) ⏳ KỸ THUẬT XONG — **CHỜ DUYỆT COMMIT** (vùng an toàn) · bằng chứng `result59.txt`
+
+- **Lỗi gốc (user báo)**: resolver hardcode `/tmp/dsh-run/node_modules/.../lib/bin.js`;
+  máy Mac không cài dsh trong repo mà chạy `npx @deepseek-ai/dsh web` ⇒ `dsh:check`
+  báo "entry missing" + `/dsh/health` `available:false`.
+- **Fix**: `resolveDshRuntime()` — 6 mức `DSH_ENTRY` → `DSH_COMMAND` → package local →
+  **`npx --yes @deepseek-ai/dsh@<pin>`** → `/tmp/dsh-run` (*chỉ khi file tồn tại*) →
+  unavailable; pin đọc từ `package.json` lúc chạy; `dshSpawnPlan()` là chỗ DUY NHẤT
+  quyết định spawn (argv, không shell) và **dùng chung** với `dsh-remote-runner.mjs`.
+- **Bằng chứng**: `npm run dsh:check` PASS (`source=npx-pinned`, `--version ->
+  0.1.5-rc.1`) · `/dsh/health` trả thêm `source` · WRITE block 31ms · `/ask` không dính dsh.
+- **BLOCKED_EXTERNAL**: lần DSH READ cuối không chạy được vì `llm9000.loca.lt` trả
+  **503 Tunnel Unavailable** (người thật bật lại `lt` trên Mac); cùng code đã PASS thật
+  trước đó trong phiên (171.800đ/4); dsh spawn thật được chứng minh bằng 7 call router
+  + `log_tail` chứa output của chính dsh.
+
 ### DSH END-TO-END (plan `.plan/dsh_end_to_end.md`) ✅ ĐÃ COMMIT + PUSH (`868be04` client + docs) — CI run #21 success
 
 - Checklist thi hành: `.plan/dsh_e2e_tasks.md` (A–E, mỗi mục [x] kèm bằng chứng) ·

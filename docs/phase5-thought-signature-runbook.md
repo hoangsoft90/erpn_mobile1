@@ -19,10 +19,9 @@
 ## 0. Điều kiện tiên quyết (kiểm TRƯỚC, không tốn quota)
 
 ```bash
-# 1) Tunnel Mac phải sống (upstream real-gemini KHÔNG cần tunnel, nhưng phiên dsh cần
-#    nlp_service + router; giữ nguyên thói quen kiểm tra)
-ls /tmp/dsh-run/node_modules/@deepseek-ai/dsh/lib/bin.js \
-  || (mkdir -p /tmp/dsh-run && cd /tmp/dsh-run && npm i @deepseek-ai/dsh)
+# 1) Runtime dsh phải resolve được trên MÁY NÀY (không hardcode /tmp nữa — 
+#    từ 2026-09-19 npx pinned là nhánh mặc định: dsh:check in ra source + version)
+npm run dsh:check | grep -E "dsh runtime|runtime runs"
 # 2) ERPNext thật sống (patch E2E_TARGET=real)
 curl -sS -o /dev/null -w "ERPNext: %{http_code}\n" -m 15 "$(grep -E '^ERPNEXT_URL=' .env | cut -d= -f2-)"
 # 3) Config hợp lệ (0 quota)
@@ -52,7 +51,7 @@ date -u "+phiên bắt đầu: %Y-%m-%dT%H:%M:%SZ"
 
 DSH_HOME=/tmp/dsh-home-sig-$(date +%s) DSH_TELEMETRY_MODE=DISABLED \
   E2E_TARGET=real E2E_LLM_MODEL=real-gemini \
-  timeout 300 node /tmp/dsh-run/node_modules/@deepseek-ai/dsh/lib/bin.js \
+  timeout 300 npx --yes "@deepseek-ai/dsh@$(node -p "require('./package.json').dependencies['@deepseek-ai/dsh']")" \
   --profile headless --patch mcp-erpnext/dsh-e2e.patch.yml \
   "Khách làm tròn 2026-09-15-p1b-wf1-2 còn nợ bao nhiêu?" \
   > /tmp/sig-dsh.out 2>&1

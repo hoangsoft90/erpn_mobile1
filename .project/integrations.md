@@ -14,8 +14,12 @@
 
 ### DeepSeek Harness (dsh) — Agent Runtime
 
-- `dsh 0.1.5-rc.1` headless đã chạy thật; cài ở `/tmp/dsh-run` (scratch —
-  mất khi reboot, cài lại = `npm i`)
+- `dsh 0.1.5-rc.1` headless đã chạy thật. Runtime **resolve tự động** theo thứ tự
+  `DSH_ENTRY` → `DSH_COMMAND` → package local → **`npx --yes @deepseek-ai/dsh@<pin>`**
+  (pin đọc từ `package.json` root) → `/tmp/dsh-run` (chỉ khi tồn tại) → unavailable.
+  Kiểm bằng `npm run dsh:check`; `/dsh/health` trả `source` (npx-pinned/legacy-tmp/…)
+  + `--version` thật. **Không** còn coi `/tmp/dsh-run` là installation mặc định
+  (2026-09-19: đường dẫn đó chỉ có trên 1 máy, Mac báo unavailable).
 - Đăng ký copilot: `dsh web --patch mcp-erpnext/dsh.cordis.patch.yml` →
   tool `mcp__erpn_copilot__copilot_ask`
 - LLM backend hiện tại: **mock OpenAI-compatible** (`scripts/mock-llm.mjs`);

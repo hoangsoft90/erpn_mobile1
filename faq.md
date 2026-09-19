@@ -1,9 +1,10 @@
 # FAQ — Những chỗ người dùng DỄ HIỂU SAI khi dùng app
 
 > **Cách đọc file này.** Mỗi mục là một câu hỏi thật, kèm **ví dụ cụ thể** và
-> **"app thực sự làm gì"** — tất cả đã kiểm bằng lệnh/probe thật ngày **2026-09-16**,
+> **"app thực sự làm gì"** — tất cả đã kiểm bằng lệnh/probe thật ngày **2026-09-16**
+> (các mục bổ sung sau đó ghi ngày riêng; **§6.11** kiểm ngày **2026-09-19**),
 > không suy đoán. Chỗ nào app còn thiếu thì ghi thẳng là *thiếu*, không hứa.
-> Bằng chứng đầy đủ: `result25/26/27.txt`. Cách tự chạy lại: xem §8.
+> Bằng chứng đầy đủ: `result25/26/27.txt` (và `result57/58.txt` cho §6.11). Cách tự chạy lại: xem §8.
 >
 > **Ba hiểu nhầm nghiêm trọng nhất, nếu bạn chỉ đọc 3 dòng này:**
 > 1. **Bấm [Xác nhận] xong công nợ KHÔNG giảm** — phiếu thu được tạo ở dạng **NHÁP**,
@@ -345,16 +346,31 @@ Site demo có các khách do quá trình kiểm thử tạo ra, ví dụ: `Khác
 `Khách làm tròn 2026-09-15-p1b-wf1-2`, `Chị Tư — thầu nhỏ`, và **2 phiếu thu nháp demo**
 (`ACC-PAY-2026-00114/00115`, 10.000đ). Các phiếu này **không** làm giảm công nợ (còn nháp).
 
+> Đừng nhầm "dữ liệu demo" với "dữ liệu cài sẵn trong app": những khách này nằm **trong
+> ERPNext**, app đọc ra như mọi khách khác — xem **§6.11** (app không giữ bản sao tĩnh).
+
 ### 6.4 ⚠️ Dữ liệu khách được gửi thẳng cho LLM (chưa che tên/số tiền)
 
 Theo sign-off Phase 5 (2026-09-15), dự án **chốt KHÔNG che (scrub) tên khách/số tiền**
 trước khi gửi cho LLM, và dữ liệu còn đi qua tunnel công cộng. Với dữ liệu **khách thật**,
 hãy cân nhắc lại quyết định này trước khi dùng rộng rãi.
 
-### 6.5 Mỗi máy một lịch sử riêng
+### 6.5 Mỗi máy một lịch sử riêng — và chuyện "ai được hỏi"
 
 Lịch sử chat lưu **cục bộ trên máy**. Xoá app / đổi máy = mất lịch sử (không đồng bộ).
-Hiện **chưa có đăng nhập/phân quyền**: ai cầm được máy là hỏi được công nợ khách.
+
+Về quyền truy cập (đã cập nhật 2026-09-19 — mục này từng ghi "chưa có", nay đã có):
+
+- **Gateway tự bảo vệ lớp vận chuyển**: bind ra ngoài loopback **BẮT BUỘC** basic auth
+  (`ASK_USER` + `ASK_PASSWORD`, mật khẩu ≥ 8 ký tự) — thiếu là **từ chối khởi động**; bind ra
+  interface công cộng còn phải khai thêm `ASK_ALLOW_PUBLIC=1`. Bind loopback thì **cấm** đặt
+  `ASK_*` (lỗi cứng). Có auth ⇒ sai/thiếu ⇒ **401**.
+- **Phân quyền theo hợp đồng** (P8): đặt `COPILOT_USERS` (JSON) ⇒ chế độ `multi_user` — mỗi tài
+  khoản có `permissions` + `company` riêng; thiếu quyền ⇒ từ chối **trước** khi tạo đề xuất
+  (không tốn `command_id`). Không đặt ⇒ `single_tenant` (một người vận hành — giữ hành vi cũ).
+- **Còn lại thì sao:** ở chế độ mặc định (một người vận hành) hoặc khi bạn đưa máy đã lưu sẵn
+  endpoint+auth của mình cho người khác, **ai cầm máy là hỏi được công nợ khách**. Muốn siết:
+  bật auth khi expose + khai `COPILOT_USERS` + cấp thiết bị riêng theo người.
 
 ### 6.6 Nhật ký chứa tên khách & số tiền — đừng copy đi đâu
 
@@ -367,6 +383,56 @@ git-ignore: chúng ghi tên khách/số tiền phục vụ đối soát. **Đừ
 Khoá nằm ở phía máy chủ (`.env`), không nhúng vào APK (đã quét artifact APK: 0 lần xuất hiện).
 Nếu cần thu hồi/đổi khoá, đổi ở `.env` — **không** cần cập nhật app.
 
+### 6.11 🔄 Dữ liệu (khách, mặt hàng, tài khoản, công nợ…) lấy ĐỘNG từ ERPNext — app KHÔNG giữ bản sao tĩnh
+
+**Câu hỏi thật:** *“Mọi dữ liệu từ tài khoản, mặt hàng, khách hàng… đến nội dung khác đều
+được lấy động từ ERPNext site đúng không? Vì dữ liệu có thể thay đổi từ ERPNext nên không
+thể lấy mẫu rồi tạo tĩnh trên app được.”* — **Đúng.** Đã kiểm bằng grep/lệnh, không phải
+lời hứa:
+
+| Kiểm cái gì | Kết quả thật |
+|---|---|
+| App Flutter có asset dữ liệu? | `apps/mobile/assets/` **không tồn tại**; `pubspec.yaml` không khai `assets:`; không có `.json/.csv` nào trong `lib/` |
+| App có nhúng số tiền/tên khách? | grep mẫu số tiền (`1.500.000`…) trong `apps/mobile/lib` ⇒ **0 hit**; tên khách chỉ xuất hiện dưới dạng **câu ví dụ trong copy hướng dẫn** ("chị Lan còn nợ bao nhiêu" là gợi ý trong ô nhập), không phải dữ liệu |
+| Ai đọc ERPNext? | đúng **4 file**: `client.mjs` (spawn MCP server), `copilot-server.mjs`, `readonly-guard.mjs`, `safety-gateway.mjs` — không file nào khác |
+| Đọc bằng gì? | mỗi câu hỏi gọi tool ERPNext **tại thời điểm hỏi**: `erpnext_customer_list`/`_get` · `erpnext_sales_invoice_list` · `erpnext_payment_entry_list` · `erpnext_item_list` · `erpnext_stock_balance` · `erpnext_account_list` · `erpnext_doc_list`/`_get` |
+| Read skill có cache không? | grep `cache\|memo` trong `src/skills/*.mjs` ⇒ **0 hit** ⇒ câu sau hỏi lại ERPNext. `knownIds` chỉ là tập ID gom trong **cùng một request**, không sống sang câu sau |
+| Số tiền ở đâu ra? | **COPY** nguyên từ dữ liệu ERPNext trả về — không chỗ nào tự tính, không hằng số tiền nào trong code |
+
+**Vậy tại sao vẫn có tình huống thấy "số cũ"?** Có đúng **3 chỗ** app *cố ý* giữ lại —
+cả 3 đều có hạn, và không chỗ nào là bản sao dữ liệu nghiệp vụ:
+
+| Chỗ giữ | Giữ gì | Hạn | Khi ERPNext đã đổi thì sao |
+|---|---|---|---|
+| **Session context** (trong RAM) | chỉ *đang nói về khách NÀO* (id + tên) để câu sau khỏi nói lại tên | khách **30 phút**, hoá đơn **10 phút** — hết hạn là **xoá** và app hỏi lại từ đầu | câu tiếp theo đọc lại từ ERPNext; context **hết hạn không bao giờ** được dùng để nuôi lệnh GHI (chỉ `user_selected`/`exact` trong hạn mới được) |
+| **Thẻ đề xuất thu tiền** (proposal snapshot) | số tiền + khách + hoá đơn **đóng băng lúc bạn ra lệnh** | TTL **10 phút** (đổi được bằng `PROPOSAL_TTL_MS`) + **re-validate** trước khi ghi | ⚠️ **CỐ Ý**: bấm [Xác nhận] khi nợ đã đổi ⇒ app **TỪ CHỐI** (`PROPOSAL_STALE`/`PROPOSAL_EXPIRED`), **không** ghi theo số cũ và **không** tự sửa số im lặng |
+| **Sổ lệnh ghi** (`idempotency-store`) | `command_id` + kết quả lệnh đã xử lý | state bền theo thiết kế | chỉ để chống ghi 2 lần — **không** chứa công nợ/tồn kho |
+
+**Mock thì sao?** Dữ liệu mẫu (`Cash`, `Chuyển khoản`, khách "smoke…") chỉ nằm trong
+**`mock-server.mjs`** — dùng cho test và cho máy chưa có credential:
+
+- **Không có** biến `ERPNEXT_*` nào ⇒ chạy **mock** (chế độ dev).
+- **Có một phần** ⇒ **lỗi cứng**, nêu tên biến còn thiếu (không im lặng dùng mock).
+- **URL sai định dạng** ⇒ **lỗi cứng** (`INVALID_ERPNEXT_URL`), không âm thầm rơi về mock.
+
+⇒ Muốn biết câu trả lời vừa rồi đọc ERPNext **thật** hay mock: xem field `erpnext_target`
+(`REAL`/`mock`) trong response — **đừng đoán theo câu chữ của câu trả lời**.
+
+**Hệ quả thực tế (điều cần nhớ):** đổi tên khách / sửa hoá đơn / nhập thêm hàng trên ERPNext
+⇒ **câu hỏi sau đọc đúng ngay**, không phải build lại app, không phải deploy lại gì. Ngược lại,
+app **không có** (và không nên có) danh sách khách/vật tư cài sẵn — mọi danh sách bạn thấy,
+kể cả danh sách chọn khi trùng tên, đều là kết quả đọc live trong chính câu hỏi đó.
+
+**Một "bẫy grep" nên biết:** nếu bạn grep cả repo sẽ thấy tên khách và **số tiền cụ thể**
+(vd `457.875`, `171.800`) trong `mcp-erpnext/test/*` và `tests/*.py` — đó là **dữ liệu mẫu của
+bộ test** (`batch-accuracy.mjs`, mock server…) để chạy được khi không có ERPNext, **không** phải
+nội dung app hiển thị. Phân biệt: `src/` và `apps/mobile/lib/` = code chạy thật (0 dữ liệu cứng);
+`test/` + `mock-server.mjs` = dữ liệu giả để kiểm thử.
+
+> Tự kiểm nhanh (xem §8 để biết cách chạy):
+> `grep -rn "cache\|memo" mcp-erpnext/src/skills/` → phải **rỗng** (không cache),
+> và `grep -c erpnext_target <response>` → phải có (biết đang đọc thật hay mock).
+
 ---
 
 ## 7. Ranh giới hiện tại — app KHÔNG làm những việc này
@@ -375,8 +441,20 @@ Nếu cần thu hồi/đổi khoá, đổi ở `.env` — **không** cần cập
 - ❌ Tạo/sửa **khách hàng**, **hóa đơn**, **đơn hàng**; ghi **bán chịu / ghi nợ**.
 - ❌ **Nhập/xuất kho** (mới chỉ xem tồn).
 - ❌ Câu hỏi **tổng hợp theo ngày/tuần/tháng**.
-- ❌ **Giọng nói** (Phase 4 — đang chờ bộ audio thật 3 miền) và **đọc thành tiếng** (Phase 8).
-- ❌ **Nhiều người dùng / phân quyền** (Phase 10).
+- ❌ **Submit** tự động (xem §5.1): app chỉ tạo **nháp**, trừ khi bạn tự bật switch
+  "Cho phép nộp phiếu thu thật" trong ⚙️ Settings.
+
+**Những thứ TRƯỚC ĐÂY ghi là "chưa làm" nhưng NAY ĐÃ CÓ** (cập nhật 2026-09-19 — đừng đọc
+bản FAQ cũ mà tưởng là tính năng thiếu):
+
+- ✅ **Giọng nói (nhập bằng mic)**: `speech_to_text` thiết bị, tiếng Việt (`vi_VN`) — gồm cả
+  tuỳ chọn "Tự gửi sau khi nói xong" (mặc định **OFF**). Không cần bộ audio 150 câu nữa.
+- ✅ **Đọc câu trả lời thành tiếng (TTS)**: `flutter_tts` thiết bị, tiếng Việt — bật trong
+  ⚙️ Settings (mặc định **OFF**).
+- ✅ **Nhiều người dùng / phân quyền**: có (P8) — xem §6.5; chỉ cần khai `COPILOT_USERS`.
+- ✅ **Chế độ "Phân tích bằng AI"** (đường agent, **chỉ đọc**): thanh chọn trên ô nhập,
+  mặc định "Chat thường"; chọn AI mới gọi agent — **không bao giờ** tạo đề xuất/ghi.
+
 - ✅ Đang làm được: **đọc** công nợ · chứng từ chưa thanh toán · lịch sử phiếu thu · tồn kho,
   và **(máy móc)** ghi **1 phiếu thu nháp** khi có đề xuất HIGH + người xác nhận.
 

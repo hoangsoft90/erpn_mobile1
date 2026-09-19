@@ -20,11 +20,12 @@
 cd mcp-erpnext && npm ci                                  # skill layer (@casys/mcp-erpnext@3.0.4)
 cd ../apps/mobile && flutter pub get \
   && dart run build_runner build --delete-conflicting-outputs   # BẮT BUỘC (chưa có *.g.dart)
-cd ../.. && npm install        # (tuỳ chọn) lấy runtime dsh đúng PIN ở package.json root
+# (dsh KHÔNG bắt buộc cài: gateway chạy bằng `npx --yes @deepseek-ai/dsh@<pin>` —
+#  chỉ `npm install` ở root nếu muốn nó nằm sẵn trong node_modules)
 
 # ── Test — chạy TỪ REPO ROOT, không cần credential, không cần mạng ───────────
 PYTHONPATH=src python3 -m unittest discover -s tests      # Python  — 62 test
-(cd mcp-erpnext && npm test)                             # Node    — 307 test
+(cd mcp-erpnext && npm test)                             # Node    — 313 test
 node --test scripts/test/*.test.mjs                      # Router  — 19 test
 (cd apps/mobile && flutter test && flutter analyze)      # Flutter — 150 test · analyze 0
 
@@ -126,14 +127,21 @@ Gateway spawn runtime này cho mỗi phiên agent. Version **được pin** ở 
 mà không chạy được gì).
 
 ```bash
-npm install            # ở REPO ROOT — lấy đúng @deepseek-ai/dsh@0.1.5-rc.1
 npm run dsh:check      # phải in RESULT: PASS và exit 0
 ```
 
-`dsh:check` kiểm 6 thứ và **fail rõ ràng** (exit ≠ 0) nếu thiếu: node ≥ 20 · pin trong
-`package.json` · entry tồn tại · version khớp pin · entry **chạy được** (`--version`) ·
-patch có cờ `COPILOT_DSH_CONTEXT=1`. Entry được resolve từ package đã cài, không phải
-đường dẫn cứng; muốn trỏ tay thì set `DSH_ENTRY`.
+**Không cần `npm install` để có dsh.** Resolver chọn runtime theo thứ tự:
+`DSH_ENTRY` → `DSH_COMMAND` → package local (`node_modules`) → **`npx --yes @deepseek-ai/dsh@<pin>`**
+→ `/tmp/dsh-run` (*chỉ khi file đó thực sự tồn tại* — là scratch của một máy, **không**
+phải cách cài mặc định) → unavailable. Cách chủ dự án đang chạy
+(`npx @deepseek-ai/dsh web`) rơi đúng vào nhánh npx.
+
+`dsh:check` kiểm và **fail rõ ràng** (exit ≠ 0) nếu thiếu: node ≥ 20 · pin trong
+`package.json` · runtime resolve được · version khớp pin · runtime **chạy được thật**
+(`--version`) · patch có cờ `COPILOT_DSH_CONTEXT=1`. Dòng `dsh runtime:` in cả **nguồn**
+(`source=npx-pinned` / `local-package` / `DSH_ENTRY` / `legacy-tmp`); thấy
+`source=legacy-tmp` nghĩa là đang phụ thuộc đường dẫn riêng của máy — nên set
+`DSH_ENTRY` cho minh bạch.
 
 ## 3. Cấu hình
 
@@ -169,7 +177,7 @@ Các nhóm biến **chỉ có tác dụng khi bật tính năng tương ứng** 
 | | `DSH_SESSION_TTL_MS` / `DSH_MAX_SESSIONS` / `DSH_HOME_BASE` | 30 phút / 200 / tmpdir | Nhớ ngữ cảnh hội thoại + chặn phình bộ nhớ |
 | | `DSH_REMOTE_URL` / `DSH_REMOTE_TOKEN_ENV` | — / `DSH_REMOTE_TOKEN` | Chỉ dùng khi `DSH_MODE=remote` |
 | E2E (chỉ để test) | `E2E_TARGET` | mock | `real` mới cho phiên dsh chạm ERPNext thật (mặc định **mock** để không ai vô tình đọc dữ liệu thật) |
-| | `E2E_LLM_MODEL` | `gemini/gemini-3.6-flash` → `mac-custom` | `real-gemini` ⇒ chọn `gemini-openai` (provider thật) |
+| | `E2E_LLM_MODEL` | `ag/gemini-3.6-flash-low` → `mac-custom` | `real-gemini` ⇒ chọn `gemini-openai` (provider thật) |
 | Phân quyền (P8) | `COPILOT_USERS` / `COPILOT_DEFAULT_PERMISSIONS` / `COPILOT_COMPANY` | chế độ single-tenant | Nhiều người dùng: JSON quyền tường minh; thiếu company ⇒ TỪ CHỐI khi đa người dùng |
 | Vận hành | `COPILOT_GLOBAL_READ_ONLY` | tắt | Bật `1` ⇒ toàn hệ chuyển read-only (503 `SYSTEM_MAINTENANCE`) |
 | | `COPILOT_RATE_LIMIT` | `on` | `off` để tắt giới hạn tần suất (chỉ khi debug) |
@@ -210,14 +218,18 @@ set -a; source ../.env; set +a     # KHÔNG echo giá trị ra màn hình/log
 
 Vai trò 2 upstream chính (xem `_note` trong config):
 
-- **`mac-custom`** (`gemini/gemini-3.6-flash`, key `MAC_LLM_API_KEY`) — **dev/test hàng
+- **`mac-custom`** (`ag/gemini-3.6-flash-low`, key `MAC_LLM_API_KEY`) — **dev/test hàng
   ngày**, không tốn quota provider. ⚠️ Router **lọc chain theo `model`** nên request
   phải xin đúng tên model mới tới được upstream này.
-  ⚠️ **DRIFT 2026-09-19**: tên model cũ `oc/big-pickle` **đã bị Mac khai tử** (403
-  model-not-found — kiểm bằng `curl /v1/models`). `gemini/gemini-3.6-flash` là id đã
-  verify sống trên endpoint đó VÀ có `tool_calls` thật. Giữ **tiền tố** `gemini/`:
-  router so khớp model CHÍNH XÁC (`llm-router.mjs` `candidates()`), nên nó không bao
-  giờ nhầm với `gemini-3.6-flash` (trần) của `gemini-openai`.
+  ⚠️ **DRIFT 2026-09-19 (2 lần)**: tên model cũ `oc/big-pickle` rồi
+  `gemini/gemini-3.6-flash` **đều bị Mac khai tử** (403 model-not-found — kiểm bằng
+  `curl /v1/models`; Mac giờ trả danh sách id dạng tiered `ag/*`).
+  `ag/gemini-3.6-flash-low` là id **probe sống thật** (finish_reason=stop).
+  Router so khớp model **CHÍNH XÁC** (`llm-router.mjs` `candidates()`), nên tiền tố
+  `ag/` không bao giờ nhầm với `gemini-3.6-flash` (trần) của `gemini-openai`. Khi Mac
+  đổi model lần nữa: probe id mới bằng 1 curl `/v1/chat/completions`, rồi đổi ở **4
+  chỗ** (`llm-router.config.json` · `llm-router.e2e.json` · `dsh-e2e.patch.yml` ·
+  `classifier.mjs` default).
 - **`gemini-openai`** (key `GEMINI_API_KEY`) — **verify tương thích provider thật**
   trước production (`thought_signature`…). Free tier **RPD=20** ⇒ KHÔNG dùng để dev
   hàng ngày; 429/503 trong free tier là bình thường, không phải bug.
@@ -241,9 +253,10 @@ npm run dsh:check        # bash scripts/check-dsh-runtime.sh — exit code là n
 npm run check:topology   # LOCAL_OK | REMOTE_OK | BLOCKED (nơi phiên sẽ thật sự chạy)
 ```
 
-Entry được resolve từ package ĐÃ CÀI (`resolveDshEntry()`), không hardcode một máy;
-`DSH_ENTRY` luôn thắng khi cần chỉ định tay. `/dsh/health` trả `runtime` + `version`
-+ `detail` — đọc được là biết máy này có chạy được hay không.
+Runtime được resolve tự động (**không** hardcode một máy); `DSH_ENTRY` luôn thắng khi cần
+chỉ định tay. `/dsh/health` trả `runtime` (topology local/remote) + `source` (cách resolve:
+`npx-pinned`/`local-package`/…) + `version` + `detail` (gồm cả kết quả `--version` thật) —
+đọc được là biết máy này có chạy được hay không.
 
 **Topology local vs remote** (`DSH_MODE`):
 
@@ -385,7 +398,8 @@ Hai endpoint của **chế độ AI (DSH)** — đường agent tách biệt, ch
 ```bash
 # Runtime có chạy được không + đang ở topology nào (không tốn LLM)
 curl -s http://127.0.0.1:8788/dsh/health
-# → {"ok":true,"available":true,"runtime":"local","version":"0.1.5-rc.1","detail":"..."}
+# → {"ok":true,"available":true,"runtime":"local","source":"npx-pinned",
+#    "version":"0.1.5-rc.1","detail":"runtime=npx(npx-pinned) patch=… --version -> 0.1.5-rc.1"}
 
 # Hỏi bằng agent (tốn 1 phiên LLM; mặc định cần T4 router chạy)
 curl -s -X POST http://127.0.0.1:8788/dsh/ask \
@@ -460,13 +474,15 @@ Env dùng chung cho script: `COPILOT_BASE_URL` (mặc định `http://127.0.0.1:
 | `flutter test` fail shader `ink_sparkle.frag` | hết dung lượng đĩa (ENOSPC) làm hỏng build cache | `flutter clean && flutter pub get`; kiểm `df -h` |
 | Python unittest lỗi import | chạy sai cwd | chạy từ repo root với `PYTHONPATH=src` |
 | nlp_service "chết" giữa 2 lệnh | process nền không sống qua block lệnh mới | `curl health` ở đầu block, restart trong **cùng** block, hoặc `setsid` |
-| Request qua router trả 502 `all upstreams failed` | chain bị lọc theo `model` không khớp / upstream đang cooldown | xin đúng tên model (dev: `gemini/gemini-3.6-flash`) và thử lại sau cooldown |
+| Request qua router trả 502 `all upstreams failed` | chain bị lọc theo `model` không khớp / upstream đang cooldown | xin đúng tên model (dev: `ag/gemini-3.6-flash-low`) và thử lại sau cooldown |
 | Request qua `mac-custom` trả **403 model-not-found** | model đã bị đổi/khai tử ở phía Mac (drift, đã xảy ra 2026-09-19 với `oc/big-pickle`) | gọi `GET https://llm9000.loca.lt/v1/models` xem id thật, rồi sửa `model` trong `llm-router*.json` + patch dsh |
 | `curl https://<tunnel>.loca.lt/v1/models` trả **`503 Tunnel Unavailable`** | tunnel trên máy Mac đã tắt/hết hạn (localtunnel cấp URL động) | người thật phải bật lại `lt` trên Mac; đây là **BLOCKED_EXTERNAL**, không phải lỗi code — không tự đổi config để "chạy tạm" |
 | Phiên `/dsh/ask` trả 502 kèm `all upstreams failed (tried: mac-custom)` | LLM upstream chết (tunnel/model drift/quota) — gateway vẫn đúng | xem dòng audit của router (`llm-router-audit/audit-*.jsonl`): `attempts` + `status` cho biết upstream nào hỏng thật |
 | `/dsh/health` báo `available:false` dù có entry | patch thiếu `COPILOT_DSH_CONTEXT=1` (cổng chặn ghi của child sẽ không bao giờ chạy) | giữ nguyên — **đúng** thiết kế từ chối; thêm cờ vào patch hoặc dùng patch chuẩn |
 | `/dsh/ask` trả `DSH_WRITE_BLOCKED` cho một câu bạn nghĩ là ĐỌC | câu đó bị `routeIntent` xếp vào nhóm ghi (vd có "thu tiền") | đọc lại câu hỏi; nếu thật sự là câu đọc thì đây là bug routing → báo, **đừng** nới cổng chặn |
 | `npm run dsh:check` báo lệch version pin | runtime cài khác `package.json` | `npm install` ở repo root, hoặc set `DSH_ENTRY` trỏ đúng entry |
+| `dsh:check` **PASS** nhưng dòng runtime ghi `source=legacy-tmp` | đang dùng `/tmp/dsh-run` — đường dẫn riêng của **một máy**, máy khác sẽ không có | đặt `DSH_ENTRY` cho minh bạch, hoặc để resolver dùng `npx` (không cài gì) — xem §2.5 |
+| `/dsh/ask` trả 502 `DSH_SESSION_FAILED` với `log_tail` | phiên dsh chạy nhưng LLM upstream chết (tunnel/quota/model) | đọc **`log_tail` trong chính response** (từ 2026-09-19) — nó dán nguyên dòng lỗi của dsh/llm-router; không cần đoán |
 | Gateway **từ chối start** với `ASK_USER/ASK_PASSWORD make no sense on a loopback bind` | `.env` có `ASK_*` nhưng đang bind `127.0.0.1` | `unset ASK_USER ASK_PASSWORD` trước khi start (hoặc bind host non-loopback thật) |
 | Script E2E báo `FAIL audit file missing` | `LEARNING_LOG_DIR` sai hoặc service chưa từng chạy | trỏ đúng thư mục (`learning-log/` trong repo) — script **cố ý** fail thay vì in PASS rỗng cho delta `0 → 0` |
 | `curl` tới `mac-custom` lần đầu trả **408/502** | localtunnel chập chờn (đặc tính, có từ 2026-09-15) | gọi lại — audit sẽ ghi `attempts=['mac-custom'] status=408`, không phải lỗi code |
