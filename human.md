@@ -44,9 +44,14 @@
       nhưng khi **thu hồi quyền micro** thì vẫn phải hiện "Chưa được cấp quyền micro…",
       (c) không có gì tự gửi / tự nộp phiếu. Checklist 7 bước: `.plan/phases2/p6-result.md`
       mục "Human smoke" (mục 7 đã sửa theo bugfix + UX follow-up).
-      ⚠️ APK ở run trên build từ `77e2b57` — **2 thay đổi UX sau đó chưa nằm trong APK này** (bỏ gợi ý
-      "không liệt kê tiếng Việt" + switch **"Tự gửi sau khi nói xong"** trong Settings); muốn test
-      đúng bản mới nhất thì cần **build lại APK** sau khi commit đợt UX này.
+      ✅ **CÓ APK MỚI HƠN — dùng bản này** thay cho run cũ ở trên: run #20
+      [`35414524990`](https://github.com/hoangsoft90/erpn_mobile1/actions/runs/35414524990)
+      (`8d2055c`, success, artifact `erpn-chat-debug-apk` **84.213.013 bytes**, hết hạn 2026-12-17) —
+      bản này **đã chứa** cả nhóm P6 UX (`f55d557`: bỏ gợi ý locale + switch "Tự gửi sau khi nói xong")
+      **lẫn TTS** (`1401f16`). ⇒ Test theo APK này, không cần build lại.
+      ⚠️ Lưu ý về bằng chứng: APK mới **chưa được mở ra grep binary** (tải artifact cần token, shell
+      agent không có) — mới chỉ xác minh gián tiếp (commit TTS nằm trong cây đã build + APK tăng
+      43.308 bytes). Nếu muốn chắc ở mức binary, user tự mở APK sau khi tải.
       Thêm 2 điểm cần thử khi có switch mới: (d) để **TẮT** (mặc định) ⇒ đọc xong **không** tự gửi;
       (e) bật **ON** trong ⚙️ Settings → đọc một câu hỏi ⇒ câu hỏi **tự được gửi** ngay, và với câu
       "thu tiền cho…" thì **vẫn phải bấm Xác nhận** trên card (auto-send không bao giờ tự xác nhận).

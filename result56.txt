@@ -252,4 +252,58 @@ tham chiếu `AppConstants.ttsEnabledStorageKey` ⇒ **commit không build đư�
       rồi TTS lên trên ⇒ vẫn là 2 commit tách bạch, TTS push được để build APK.
   (b) Chấp nhận 1 commit chứa cả hai, message ghi rõ phạm vi cả hai nhóm.
 Khuyến nghị: (a) — tách bạch đúng ý user, và P6 UX vốn đã sẵn sàng commit.
-Chưa stage/commit gì.
+⇒ USER ĐÃ CHỌN (a). Đã giải quyết — xem §11.
+
+========================================================================
+§11. COMMIT + PUSH + CI APK — XONG (quyết định user: P6 UX trước, TTS lên trên)
+Timestamp: 2026-09-19
+========================================================================
+
+== Cách tách (đo, không đoán) ==
+Tạm tạo cây "P6-only": revert 6 file sạch-TTS về HEAD + gỡ nội dung TTS khỏi 4 file trộn
+(assert từng anchor trong python, rồi grep lại = 0/0/0/0 dấu vết TTS). VERIFY cây đó
+TRƯỚC khi commit:
+  $ flutter analyze → No issues found!   $ flutter test → **120/120**
+  (khớp ĐÚNG con số đã ghi ở result55 §11 ⇒ chứng minh cây P6-only chính là trạng thái
+   đã được verify hồi đó, không phải bản dựng lại gần giống)
+Sau commit: giải nén snapshot trở lại → `flutter pub get` (lần chạy P6-only đã prune
+`flutter_tts` khỏi `.dart_tool` ⇒ analyze báo 4 lỗi do package config cũ) →
+  $ flutter analyze → No issues found!   $ flutter test → **142/142**
+
+== 3 commit (không gộp — đúng yêu cầu) ==
+  f55d557  feat(p6-ux): dictation auto-send switch, drop the locale hint, honest save report
+           8 file, +424/−45
+  1401f16  feat(tts):   read a new answer aloud via on-device flutter_tts (vi-VN)
+           12 file, +915/−3 (2 file mới: lib/core/tts/tts_service.dart, test/tts_service_test.dart)
+  8d2055c  docs:       record the P6 UX and TTS work — evidence, lessons, live status
+           11 file, +649/−30 (result56.txt mới)
+
+== Kiểm tra TÁCH BẠCH (không chỉ tin vào lệnh git add) ==
+- Commit 1: grep 4 file trộn = **0** dấu vết TTS.
+- Commit 2: **0 dòng THÊM** thuộc chức năng P6 UX
+  (`saveVoiceAutoSend|_voiceAutoSend = on|value: _voiceAutoSend` = 0).
+  16 lần khớp `voiceAutoSend` còn lại đã được ĐỌC TỪNG DÒNG: tất cả là dòng CONTEXT,
+  dòng bị XOÁ, hoặc comment của chính TTS nhắc tên key kia — không có hành vi P6 UX nào
+  được thêm. 2 dòng THÊM duy nhất nhắc P6 UX là 2 neo test
+  `find.widgetWithText(SwitchListTile, 'Tự gửi sau khi nói xong')` — hợp lệ: switch TTS
+  mới chính là thứ làm `find.byType(SwitchListTile)` trở nên mơ hồ.
+- Secret scan cả 3 commit: SẠCH. 2 hit duy nhất đã truy: chuỗi fixture
+  `enterText(fields.at(2), 'secret')` và `ask-time` khớp mẫu `sk-`.
+
+== PUSH + CI ==
+  $ git push origin change/flutter-chat-mvp
+    bbca7ca..8d2055c  change/flutter-chat-mvp -> change/flutter-chat-mvp
+  run #20  https://github.com/hoangsoft90/erpn_mobile1/actions/runs/35414524990
+           head_sha=8d2055c · status=completed · conclusion=SUCCESS
+  artifact erpn-chat-debug-apk · 84.213.013 bytes · expired=false · created 2026-09-19T02:09:51Z
+
+== Bằng chứng APK chứa TTS — GIÁN TIẾP, nói rõ vì sao không trực tiếp ==
+  $ git merge-base --is-ancestor 1401f16 8d2055c  → YES
+    (commit TTS nằm trong cây đã build; 8d2055c không đụng apps/mobile nên nội dung
+     apps/mobile của nó = y hệt 1401f16)
+  size: 84.213.013 − 84.169.705 (APK trước TTS, result55 §8) = **+43.308 bytes**
+    (khớp việc thêm plugin flutter_tts + code + test)
+  ⚠️ KHÔNG grep được binary như result55 §8: tải artifact cần token đã xác thực, shell này
+     không có (`GH_TOKEN`/`GITHUB_TOKEN` = absent, đã kiểm) ⇒ bước "mở APK ra grep" coi như
+     CHƯA LÀM. Muốn bằng chứng trực tiếp thì cần token, hoặc user tự mở APK sau khi tải.
+     ⇒ Không claim "APK chắc chắn chứa TTS" ở mức binary; chỉ claim điều đã đo được.
