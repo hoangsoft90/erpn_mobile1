@@ -18,6 +18,27 @@ final RegExp _uuidLike = RegExp(
   r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}',
 );
 
+/// Which pipeline a question goes down (`.plan/dsh_end_to_end.md`).
+///
+/// [normal] is the DEFAULT and the only path the app ever falls back to; [dsh]
+/// exists solely because the user picked it. There is deliberately no
+/// "auto" value: plan §12 forbids turning an unknown question into an agent
+/// session automatically, so the type itself cannot express that mistake.
+///
+/// Session-scoped on purpose: it is NOT persisted, so every app start begins in
+/// [normal] and the agent path always requires a fresh, visible choice.
+enum ChatMode { normal, dsh }
+
+/// How far a DSH session has got, for the status line.
+///
+/// Three states, not four: the gateway returns ONE non-streaming response, so
+/// there is no honest signal to separate "starting" from "running" — inventing
+/// one would only be cosmetic. [starting] therefore means "sent, awaiting the
+/// agent", which is exactly what the user is looking at until the answer lands.
+/// (Deviation from plan C2's four names, recorded in result57 §10 with this
+/// reason.)
+enum DshPhase { idle, starting, completed, failed }
+
 /// Immutable UI state of the chat screen.
 @immutable
 class ChatState {
@@ -25,6 +46,8 @@ class ChatState {
     this.turns = const [],
     this.isLoading = false,
     this.lastError,
+    this.mode = ChatMode.normal,
+    this.dshPhase = DshPhase.idle,
   });
 
   ChatState copyWith({
@@ -32,17 +55,27 @@ class ChatState {
     bool? isLoading,
     String? lastError,
     bool clearError = false,
+    ChatMode? mode,
+    DshPhase? dshPhase,
   }) {
     return ChatState(
       turns: turns ?? this.turns,
       isLoading: isLoading ?? this.isLoading,
       lastError: clearError ? null : (lastError ?? this.lastError),
+      mode: mode ?? this.mode,
+      dshPhase: dshPhase ?? this.dshPhase,
     );
   }
 
   final List<ChatTurn> turns;
   final bool isLoading;
   final String? lastError;
+
+  /// Which pipeline the NEXT question takes (ChatMode).
+  final ChatMode mode;
+
+  /// Progress of the last DSH session, for the status line.
+  final DshPhase dshPhase;
 }
 
 /// Chat business logic: /ask roundtrip + history persistence.
@@ -65,6 +98,25 @@ class ChatController extends _$ChatController {
   Future<bool> pickEntity(EntityCandidate candidate, {required String question}) =>
       send(question, entityId: candidate.id);
 
+  /// Switches which pipeline the next question uses (C1: explicit, never
+  /// automatic). Clearing the previous DSH phase matters: leaving a "failed"
+  /// badge on screen after the user returned to Normal would describe a mode
+  /// they are no longer in.
+  void setMode(ChatMode mode) {
+    final current = state.value ?? const ChatState();
+    if (current.mode == mode && current.dshPhase == DshPhase.idle) return;
+    state = AsyncData(
+      current.copyWith(mode: mode, dshPhase: DshPhase.idle, clearError: true),
+    );
+  }
+
+  /// One id per app session, so a follow-up inside DSH mode has a conversation
+  /// the gateway can carry context for (bounded TTL server-side). It is NOT
+  /// persisted: a new app start is a new conversation, which matches the mode
+  /// itself resetting to Normal.
+  final String _dshConversationId =
+      'conv-${DateTime.now().millisecondsSinceEpoch}';
+
   Future<bool> send(String text, {String? entityId}) async {
     final trimmed = text.trim();
     if (trimmed.isEmpty) return false;
@@ -76,6 +128,13 @@ class ChatController extends _$ChatController {
     final current = state.value ?? const ChatState();
     if (current.isLoading) return false;
 
+    // C2: DSH mode is a DIFFERENT endpoint with a different bound, and it never
+    // sends entity_id/submit_now — the agent path is read-only server-side, so
+    // there is nothing those fields could legitimately carry here.
+    if (current.mode == ChatMode.dsh) {
+      return _sendDsh(trimmed, current);
+    }
+
     state = AsyncData(current.copyWith(isLoading: true, clearError: true));
     try {
       // F7-2 (user decision 2026-09-18): the submit switch is read NOW, when
@@ -86,6 +145,11 @@ class ChatController extends _$ChatController {
       final result = await ref
           .read(copilotApiClientProvider)
           .ask(trimmed, entityId: entityId, submitNow: submitNow);
+      // This provider is auto-disposed when the chat screen goes away (opening
+      // Settings mid-request). Riverpod then REJECTS a `state =` write with
+      // UnmountedRefException — a real unhandled crash, caught by the DSH
+      // dispose test (result57 §10) and present here since Phase 3.
+      if (!ref.mounted) return false;
       await _append(ChatTurn.fromAskResult(result, typedQuestion: trimmed));
       return true;
     } on CopilotException catch (err) {
@@ -97,8 +161,69 @@ class ChatController extends _$ChatController {
     }
   }
 
+  /// C2 — send through the DSH agent endpoint and show its progress.
+  ///
+  /// The result is recorded through the SAME [_append] normal answers use, so
+  /// the DSH turn is trimmed and persisted identically (and cannot bypass any
+  /// history rule). It carries `routedGroup: 'dsh'` so the bubble says which
+  /// pipeline produced it.
+  ///
+  /// It cannot confirm anything: the proposal on a DSH turn is always null —
+  /// the gateway never returns one on this path (plan §11), and the confirm
+  /// button lives on the proposal card, not on a turn.
+  Future<bool> _sendDsh(String trimmed, ChatState current) async {
+    state = AsyncData(
+      current.copyWith(
+        isLoading: true,
+        clearError: true,
+        dshPhase: DshPhase.starting,
+      ),
+    );
+    try {
+      final res = await ref
+          .read(copilotApiClientProvider)
+          .dshAsk(trimmed, conversationId: _dshConversationId);
+      // A DSH session lasts ~20s, so the user leaving the screen mid-request is
+      // the NORMAL case here, not an edge case: every write after this point
+      // must check that the provider still exists.
+      if (!ref.mounted) return false;
+      await _append(
+        ChatTurn(
+          question: trimmed,
+          answer: res.answer,
+          ok: true,
+          ts: DateTime.now(),
+          routedGroup: 'dsh',
+        ),
+      );
+      if (!ref.mounted) return false;
+      state = AsyncData(
+        (state.value ?? const ChatState())
+            .copyWith(dshPhase: DshPhase.completed),
+      );
+      return true;
+    } on CopilotException catch (err) {
+      return _failDsh(trimmed, err.message);
+    } catch (_) {
+      return _failDsh(trimmed, 'Đã xảy ra lỗi không xác định.');
+    }
+  }
+
+  /// Records a failed DSH session, tolerating a provider that is already gone.
+  Future<bool> _failDsh(String question, String message) async {
+    if (!ref.mounted) return false;
+    await _recordFailure(question, message);
+    if (!ref.mounted) return false;
+    state = AsyncData(
+      (state.value ?? const ChatState()).copyWith(dshPhase: DshPhase.failed),
+    );
+    return false;
+  }
+
   Future<void> clearHistory() async {
     await ref.read(chatHistoryServiceProvider).clear();
+    // Same rule as everywhere else: the screen can be gone by now.
+    if (!ref.mounted) return;
     state = AsyncData(const ChatState());
   }
 
@@ -112,6 +237,7 @@ class ChatController extends _$ChatController {
     required String code,
     required List<String> problems,
   }) async {
+    if (!ref.mounted) return;
     final current = state.value;
     if (current == null) return;
     final targetId = proposal.commandId;
@@ -168,6 +294,7 @@ class ChatController extends _$ChatController {
   }
 
   Future<void> _append(ChatTurn turn) async {
+    if (!ref.mounted) return;
     final current = state.value ?? const ChatState();
     // B.2 (2026-09-16): cap the history at the user's maxChatItems, dropping
     // the OLDEST turns first — but never a turn with a pending proposal. The
@@ -247,6 +374,7 @@ class ChatController extends _$ChatController {
   }
 
   Future<void> _recordFailure(String question, String message) async {
+    if (!ref.mounted) return;
     final current = state.value ?? const ChatState();
     // The failed question is NOT appended as a fake answer row — the user
     // keeps their typed text and can resend. Error surfaces via lastError.

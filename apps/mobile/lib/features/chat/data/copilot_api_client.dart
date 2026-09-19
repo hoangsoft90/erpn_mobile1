@@ -1,7 +1,9 @@
 import 'dart:convert';
 
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 
+import '../../../core/constants/app_constants.dart';
 import '../../../core/settings/app_settings_service.dart';
 import 'chat_models.dart';
 
@@ -26,6 +28,33 @@ class CopilotTimeoutException extends CopilotException {
 
 class CopilotServerException extends CopilotException {
   const CopilotServerException(super.message);
+}
+
+/// The DSH gateway REFUSED the question before running anything — a write-shaped
+/// question, a rate limit, an unsafe patch config. Keeping [code] separate from
+/// [message] is what lets a caller/test tell "the gateway blocked this on
+/// purpose" (DSH_WRITE_BLOCKED) apart from "the session broke".
+class CopilotDshRefusedException extends CopilotException {
+  const CopilotDshRefusedException(this.code, super.message);
+  final String code;
+}
+
+/// One `/dsh/ask` answer. Deliberately narrow: the agent's text plus WHICH
+/// target answered it. There is no proposal, no command id, and no confirm
+/// affordance here — DSH mode is read-only on the server side (plan §11), so
+/// the client has nothing to confirm and never calls /execute from this path.
+@immutable
+class DshAnswer {
+  const DshAnswer({required this.answer, this.erpnextTarget, this.sessionId});
+
+  final String answer;
+
+  /// `REAL` / `MOCK` — echoed by the gateway from dsh's own stderr. Shown so a
+  /// demo can never be mistaken for real ERPNext data.
+  final String? erpnextTarget;
+
+  /// The dsh runtime's session id for this call (audit correlation).
+  final String? sessionId;
 }
 
 /// Thin dio wrapper around the copilot HTTP contract:
@@ -101,6 +130,81 @@ class CopilotApiClient {
   /// when this question was asked. The server freezes it into the proposal
   /// snapshot, so the card's wording and the execute behaviour can never
   /// diverge from what the user saw when they asked.
+  /// DSH mode (`.plan/dsh_end_to_end.md`): the EXPLICIT opt-in agent path.
+  ///
+  /// Only the mode selector calls this — never `ask()`, never a fallback for an
+  /// unknown question (plan §12 "KHÔNG AUTO FALLBACK"): the deterministic path
+  /// owns every normal question, and this path exists only because the user
+  /// chose it.
+  ///
+  /// [conversationId] maps to the gateway's per-conversation session context
+  /// (bounded TTL server-side) so a follow-up like "thế còn tháng trước?" has
+  /// something to refer to. One id per app session.
+  Future<DshAnswer> dshAsk(String message, {String? conversationId}) async {
+    _applySettings();
+    try {
+      final res = await dio.post<Map<String, dynamic>>(
+        '/dsh/ask',
+        data: {
+          'message': message,
+          if (conversationId != null && conversationId.isNotEmpty)
+            'conversation_id': conversationId,
+        },
+        // Per-request override: the agent session outlives askTimeout.
+        options: Options(
+          receiveTimeout: AppConstants.dshTimeout,
+          sendTimeout: AppConstants.dshTimeout,
+        ),
+      );
+      final body = res.data ?? const {};
+      if (body['ok'] != true) {
+        throw CopilotDshRefusedException(
+          (body['code'] as String?) ?? 'DSH_FAILED',
+          (body['error'] as String?) ?? 'Phiên AI không trả về kết quả.',
+        );
+      }
+      final result = body['result'];
+      final answer =
+          result is Map<String, dynamic> ? result['answer'] as String? : null;
+      if (answer == null || answer.trim().isEmpty) {
+        throw const CopilotServerException(
+          'Phiên AI không trả về câu trả lời nào.',
+        );
+      }
+      return DshAnswer(
+        answer: answer.trim(),
+        erpnextTarget: body['erpnext_target'] as String?,
+        sessionId: body['dsh_session_id'] as String?,
+      );
+    } on DioException catch (err) {
+      // The gateway answers NON-2xx with a JSON envelope and real Vietnamese
+      // copy — surface its words and code rather than a generic failure.
+      final data = err.response?.data;
+      if (data is Map<String, dynamic>) {
+        final serverError = data['error'];
+        if (serverError is String && serverError.isNotEmpty) {
+          if (err.response?.statusCode == 401) {
+            throw const CopilotServerException(
+              'Máy chủ yêu cầu xác thực nhưng app không có thông tin đăng nhập. '
+              'APK cần build lại với --dart-define=COPILOT_AUTH_USER và '
+              'COPILOT_AUTH_PASSWORD trỏ đúng máy chủ.',
+            );
+          }
+          throw CopilotDshRefusedException(
+            (data['code'] as String?) ?? 'DSH_FAILED',
+            serverError,
+          );
+        }
+      }
+      if (err.type == DioExceptionType.connectionTimeout ||
+          err.type == DioExceptionType.receiveTimeout ||
+          err.type == DioExceptionType.sendTimeout) {
+        throw const CopilotTimeoutException();
+      }
+      throw const CopilotNetworkException();
+    }
+  }
+
   Future<AskResult> ask(String text, {String? entityId, bool submitNow = false}) async {
     _applySettings();
     try {

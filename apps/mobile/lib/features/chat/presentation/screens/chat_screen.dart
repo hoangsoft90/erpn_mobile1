@@ -140,6 +140,17 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                           ChatBubble(turn: chat.turns[i]),
                     ),
             ),
+            // C1/C2 (`.plan/dsh_end_to_end.md`): the explicit mode selector and
+            // the DSH status line. Default is Normal; nothing here can switch
+            // mode on its own — the user taps it or the question goes down the
+            // deterministic path as before.
+            _ModeBar(
+              mode: chat.mode,
+              phase: chat.dshPhase,
+              enabled: !chat.isLoading,
+              onChanged: (mode) =>
+                  ref.read(chatControllerProvider.notifier).setMode(mode),
+            ),
             // P2 deliverable 4 (plan2_final §24.11): a long pipeline shows
             // WHERE it is (hiểu → tra khách → kiểm tra → chờ xác nhận), not
             // a bare endless spinner.
@@ -169,6 +180,92 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// The mode selector: Normal (deterministic /ask) vs "Phân tích bằng AI"
+/// (explicit DSH opt-in).
+///
+/// Two things this widget deliberately does NOT have:
+/// * no automatic switching — nothing in the app can move the selection, only a
+///   tap on a segment (plan §12);
+/// * no confirmation affordance — the DSH path is read-only, so the AI notice
+///   says where a real write still has to happen (the normal chat + [Xác nhận]).
+class _ModeBar extends StatelessWidget {
+  const _ModeBar({
+    required this.mode,
+    required this.phase,
+    required this.enabled,
+    required this.onChanged,
+  });
+
+  final ChatMode mode;
+  final DshPhase phase;
+  final bool enabled;
+  final ValueChanged<ChatMode> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDsh = mode == ChatMode.dsh;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        AppSpacing.md, AppSpacing.xs, AppSpacing.md, 0,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Scrollable so the two Vietnamese labels never overflow on a narrow
+          // phone (a RenderFlex overflow here would be a visible bug).
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: SegmentedButton<ChatMode>(
+              segments: const [
+                ButtonSegment(
+                  value: ChatMode.normal,
+                  icon: Icon(Icons.chat_bubble_outline),
+                  label: Text('Chat thường'),
+                ),
+                ButtonSegment(
+                  value: ChatMode.dsh,
+                  icon: Icon(Icons.auto_awesome),
+                  label: Text('Phân tích bằng AI'),
+                ),
+              ],
+              selected: {mode},
+              showSelectedIcon: false,
+              onSelectionChanged:
+                  enabled ? (selection) => onChanged(selection.first) : null,
+            ),
+          ),
+          if (isDsh) ...[
+            const SizedBox(height: AppSpacing.xs),
+            Text(
+              'Chế độ AI chỉ ĐỌC. Thu tiền vẫn phải hỏi ở chat thường rồi bấm '
+              'Xác nhận.',
+              style: theme.textTheme.bodySmall,
+            ),
+          ],
+          if (isDsh && phase == DshPhase.starting) ...[
+            const SizedBox(height: AppSpacing.xs),
+            Text(
+              'Đang phân tích bằng AI… câu hỏi này cần khoảng 20 giây.',
+              style: theme.textTheme.bodySmall,
+            ),
+          ],
+          if (isDsh && phase == DshPhase.failed) ...[
+            const SizedBox(height: AppSpacing.xs),
+            Text(
+              'Phiên AI vừa lỗi — câu hỏi của bạn vẫn còn trong ô nhập, '
+              'bấm Gửi để thử lại.',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.error,
+              ),
+            ),
+          ],
+        ],
       ),
     );
   }

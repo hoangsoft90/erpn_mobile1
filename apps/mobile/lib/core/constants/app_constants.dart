@@ -14,6 +14,15 @@ class AppConstants {
   /// Per tasks.md 2.2 — 15s for one /ask roundtrip (NLP + ERPNext).
   static const Duration askTimeout = Duration(seconds: 15);
 
+  /// DSH mode (`.plan/dsh_end_to_end.md`): one /dsh/ask is an AGENT session —
+  /// the measured real round trip through the router is ~20s, and the gateway
+  /// itself kills a session at DSH_TIMEOUT_MS (180s). Deliberately LONGER than
+  /// the gateway's own bound so the app waits for the gateway's answer (or its
+  /// clean timeout copy) instead of cutting the connection first and showing
+  /// "hết thời gian chờ" for a session the server would have finished.
+  /// Normal mode keeps [askTimeout] — the two paths never share a bound.
+  static const Duration dshTimeout = Duration(seconds: 210);
+
   // ---- Settings screen (2026-09-16) ----------------------------------------
   // Stored in the SAME SharedPreferences instance as history. Versioned keys
   // so a future change never misreads old data.
