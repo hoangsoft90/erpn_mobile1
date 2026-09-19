@@ -40,7 +40,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { timingSafeEqual } from "node:crypto";
 
-import { buildDshChildEnv, dshRuntimeInfo, scrubDiagnostics } from "../mcp-erpnext/src/dsh-gateway.mjs";
+import { buildDshChildEnv, dshRuntimeInfo, dshSpawnPlan, verifyDshRuntime, resolveDshRuntime, scrubDiagnostics } from "../mcp-erpnext/src/dsh-gateway.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, "..");
@@ -58,8 +58,10 @@ const port = Number(argValue("--port", process.env.DSH_REMOTE_PORT ?? 8799));
 const token = String(process.env.DSH_REMOTE_TOKEN ?? "").trim();
 // Resolved exactly as the gateway resolves it — one implementation, so the
 // runner cannot disagree with the caller about which binary is "the" dsh.
+// The spawn shape comes from the SAME dshSpawnPlan() the local gateway uses:
+// node <entry> … for an entry runtime, `npx --yes @deepseek-ai/dsh@<pin> …`
+// for the default — never a copy of either shape, never a shell string.
 const runtime = dshRuntimeInfo(process.env);
-const entry = runtime.entry;
 const patch = runtime.patch;
 const cwd = String(process.env.DSH_CWD ?? REPO_ROOT);
 const maxTimeoutMs = Number(process.env.DSH_TIMEOUT_MAX_MS ?? 600_000);
@@ -70,12 +72,30 @@ if (!token || token.length < 16) {
   console.error("[dsh-runner] FATAL: DSH_REMOTE_TOKEN must be set (>=16 chars). Refusing to start.");
   process.exit(2);
 }
-if (!runtime.entryExists) {
-  console.error(`[dsh-runner] FATAL: dsh entry not found (${entry || "unset"}). Set DSH_ENTRY.`);
+if (runtime.mode === "unavailable") {
+  console.error("[dsh-runner] FATAL: no dsh runtime resolved. Set DSH_ENTRY / DSH_COMMAND, or declare @deepseek-ai/dsh in package.json.");
+  process.exit(2);
+}
+if (runtime.mode === "entry" && runtime.entryExists === false) {
+  console.error(`[dsh-runner] FATAL: dsh entry not found (${runtime.entry}). Set DSH_ENTRY.`);
   process.exit(2);
 }
 if (!runtime.patchExists) {
   console.error(`[dsh-runner] FATAL: patch not found (${patch}). Set DSH_PATCH.`);
+  process.exit(2);
+}
+
+// PROOF before listening: run `--version` through the exact spawn plan a
+// request would take. A runner that cannot run dsh must not come up green.
+try {
+  const verified = await verifyDshRuntime(process.env);
+  if (!verified.ran) {
+    console.error(`[dsh-runner] FATAL: runtime does not run (${verified.detail}).`);
+    process.exit(2);
+  }
+  console.log(`[dsh-runner] runtime proof: ${verified.detail} (source=${runtime.source})`);
+} catch (err) {
+  console.error(`[dsh-runner] FATAL: runtime proof threw: ${err?.message ?? err}`);
   process.exit(2);
 }
 if (!runtime.patchMarksDshContext) {
@@ -129,7 +149,9 @@ function runDsh(prompt, timeoutMs) {
     childEnv.DSH_HOME = dshHome;
     childEnv.DSH_TELEMETRY_MODE = "DISABLED";
 
-    const child = spawn(process.execPath, [entry, "--profile", "headless", "--patch", patch, prompt], {
+    // ONE spawn shape, shared with the local gateway (dshSpawnPlan).
+    const plan = dshSpawnPlan(resolveDshRuntime(process.env));
+    const child = spawn(plan.file, [...plan.args, "--profile", "headless", "--patch", patch, prompt], {
       cwd,
       env: childEnv,
       stdio: ["ignore", "pipe", "pipe"],
@@ -181,7 +203,15 @@ const server = http.createServer(async (req, res) => {
       sendJson(res, 401, { ok: false, error: "unauthorized" });
       return;
     }
-    sendJson(res, 200, { ok: true, runtime: "dsh-remote-runner", entry, version: runtime.version ?? "unknown" });
+    sendJson(res, 200, {
+      ok: true,
+      runtime: "dsh-remote-runner",
+      mode: runtime.mode,
+      source: runtime.source,
+      entry: runtime.entry,
+      command: runtime.command,
+      version: runtime.version ?? "unknown",
+    });
     return;
   }
 
@@ -220,7 +250,9 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(port, "127.0.0.1", () => {
-  console.log(`[dsh-runner] listening on 127.0.0.1:${port} (entry=${entry}, version=${runtime.version ?? "unknown"})`);
+  console.log(
+    `[dsh-runner] listening on 127.0.0.1:${port} (runtime=${runtime.runtime}, source=${runtime.source}, version=${runtime.version ?? "unknown"})`,
+  );
   console.log(`[dsh-runner] expose it: lt -s dsh${port} --port ${port}`);
   console.log(`[dsh-runner] never log the token: it is read from DSH_REMOTE_TOKEN and never printed`);
 });

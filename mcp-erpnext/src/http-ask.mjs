@@ -290,6 +290,11 @@ export function createAskServer({
           service: "dsh-gateway",
           available: health.available,
           runtime: health.mode,
+          // HOW it runs (npx-pinned / legacy-tmp / DSH_ENTRY …) — separate from
+          // `runtime` (topology). A runtime resolved from a machine-local path
+          // is the exact failure mode that did not travel to another host, so
+          // the answer must not be invisible.
+          source: health.source ?? null,
           version: health.version ?? null,
           detail: health.detail,
           mode: "dsh",
@@ -302,6 +307,7 @@ export function createAskServer({
           service: "dsh-gateway",
           available: false,
           runtime: null,
+          source: null,
           version: null,
           detail: `health probe failed: ${err?.message ?? err}`,
           mode: "dsh",
@@ -371,6 +377,12 @@ export function createAskServer({
             runtime: outcome.runtime ?? null,
             conversation_id: outcome.conversationId,
             request_id: outcome.requestId,
+            // The scrubbed diagnostic the gateway already computed (child's last
+            // stderr, parse failure, spawn error). Without it, "lỗi phiên" was
+            // the whole story and the real cause of the first npx session
+            // failure lived only in the router audit. Same boundary as every
+            // other field here: scrubbed, bounded, no path to a secret.
+            log_tail: outcome.logTail ?? null,
           };
           if (outcome.code === DSH_IN_FLIGHT) {
             sendJson(res, 429, { ...payload, error: payload.error, retryable: true });

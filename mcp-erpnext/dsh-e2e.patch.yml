@@ -59,13 +59,15 @@
 #
 # The ROUTER routes by model name, so the model requested here selects the
 # upstream chain (see scripts/llm-router.e2e.json):
-#   E2E_LLM_MODEL unset / anything else → gemini/gemini-3.6-flash → mac-custom
+#   E2E_LLM_MODEL unset / anything else → ag/gemini-3.6-flash-low → mac-custom
 #       (default: self-hosted, NO provider quota — daily dev/test)
 #   E2E_LLM_MODEL=real-gemini           → gemini-3.6-flash → gemini-openai (real
 #       provider compat verify: thought_signature; free tier RPD=20)
-# MODEL DRIFT 2026-09-19: mac-custom used to be oc/big-pickle, which the Mac
-# endpoint no longer serves (403). The prefixed id is the one verified live
-# there with real tool_calls; keep the prefix — the router matches exactly.
+# MODEL DRIFT 2026-09-19 (2nd, `.plan/dsh_prompt_fix1.md` §10 evidence): the Mac
+# retired oc/big-pickle, then gemini/gemini-3.6-flash too; /v1/models now lists
+# tiered ag/* ids. ag/gemini-3.6-flash-low probed LIVE (finish_reason=stop).
+# The router matches model names EXACTLY, so the prefix is what keeps ag/*
+# distinct from gemini-openai's bare `gemini-3.6-flash`.
 # The router provider's apiKeyEnv stays GEMINI_API_KEY — it is never sent to
 # mac-custom (the router replaces Authorization per-upstream from MAC_LLM_API_KEY).
 - id: llm-pi-ai
@@ -76,10 +78,9 @@
         api: openai-completions
         baseURL: http://127.0.0.1:8900/v1
         models:
-          - id: gemini/gemini-3.6-flash
-          - id: gemini-3.6-flash
+          - id: ag/gemini-3.6-flash-low
 - id: agent-default-model
   config:
     provider: router
     model: !!js >-
-      process.env.E2E_LLM_MODEL === 'real-gemini' ? 'gemini-3.6-flash' : 'gemini/gemini-3.6-flash'
+      process.env.E2E_LLM_MODEL === 'real-gemini' ? 'gemini-3.6-flash' : 'ag/gemini-3.6-flash-low'

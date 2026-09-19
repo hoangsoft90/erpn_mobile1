@@ -8,7 +8,7 @@
     {
       "name": "mac-custom",
       "baseUrl": "https://llm9000.loca.lt/v1",
-      "model": "gemini/gemini-3.6-flash",
+      "model": "ag/gemini-3.6-flash-low",
       "apiKeyEnv": "MAC_LLM_API_KEY",
       "timeoutMs": 120000,
       "cooldownMs": 15000,

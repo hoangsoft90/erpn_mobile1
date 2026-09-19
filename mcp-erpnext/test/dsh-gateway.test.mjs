@@ -19,7 +19,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -42,6 +42,10 @@ import {
   dshPatchMarksDshContext,
   dshGatewayHealth,
   dshRuntimeInfo,
+  resolveDshRuntime,
+  pinnedDshVersion,
+  verifyDshRuntime,
+  dshSpawnPlan,
   isValidConversationId,
   DSH_TIMEOUT_MESSAGE,
 } from "../src/dsh-gateway.mjs";
@@ -758,13 +762,40 @@ test("dshGatewayHealth — local mode verifies the patch marker, not just file e
     const unsafe = path.join(dir, "unsafe.yml");
     writeFileSync(unsafe, "- insert:\n    - id: erpn-copilot-mcp\n");
 
-    const ok = await dshGatewayHealth({ env: { DSH_ENTRY: process.execPath, DSH_PATCH: safe } });
+    // DSH_ENTRY=the real dsh entry already on THIS machine (resolved the same
+    // way the gateway would): the runtime PROOF (`--version`) then runs the
+    // same spawn plan a question would take — no mock. (node itself is NOT a
+    // dsh entry — `node node --version` would exec the ELF, not print a
+    // version — which is exactly what a previous draft of this assertion got
+    // wrong; the test must mirror reality, not a plausible-looking stand-in.)
+    const rt = resolveDshRuntime(process.env);
+    // env = process.env + override (PATH must survive, or the proof cannot exec).
+    const ok = await dshGatewayHealth({ env: { ...process.env, DSH_ENTRY: rt.entry, DSH_PATCH: safe } });
     assert.equal(ok.available, true);
     assert.equal(ok.mode, "local");
+    assert.match(ok.detail, /--version/, "available is PROVEN by running --version, not inferred from files");
 
-    const bad = await dshGatewayHealth({ env: { DSH_ENTRY: process.execPath, DSH_PATCH: unsafe } });
+    const bad = await dshGatewayHealth({ env: { ...process.env, DSH_ENTRY: rt.entry, DSH_PATCH: unsafe } });
     assert.equal(bad.available, false, "a patch without the write-gate marker is NOT available");
     assert.match(bad.detail, /COPILOT_DSH_CONTEXT/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("dshGatewayHealth — local runtime that cannot run is NOT available (proof, not files)", async () => {
+  // DSH_COMMAND pointing at a command that exits non-zero: file existence used
+  // to be enough to report available; now the --version proof must fail it.
+  const dir = mkdtempSync(path.join(tmpdir(), "dsh-health-npx-"));
+  try {
+    const safe = writeSafePatch(path.join(dir, "safe.yml"));
+    const broken = path.join(dir, "broken");
+    writeFileSync(broken, "#!/bin/sh\nexit 3\n");
+    const health = await dshGatewayHealth({
+      env: { DSH_COMMAND: broken, DSH_PATCH: safe, DSH_VERIFY_TIMEOUT_MS: "5000" },
+    });
+    assert.equal(health.available, false, "a runtime that cannot run must never be reported available");
+    assert.match(health.detail, /does not run/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -784,11 +815,76 @@ test("dshGatewayHealth — remote mode reports the runner's version when it answ
   assert.equal(health.version, "0.1.5-rc.1");
 });
 
-test("dshRuntimeInfo — reports the installed version and the patch marker honestly", () => {
+test("dshRuntimeInfo — reports the resolved runtime honestly (npx-pinned default here)", () => {
   const info = dshRuntimeInfo();
+  // This repo has NO local install: the resolved default is the pinned npx
+  // command, and the version IS the pin — not read from a file that is absent.
+  assert.equal(info.mode, "command");
+  assert.equal(info.runtime, "npx");
+  assert.equal(info.source, "npx-pinned");
+  assert.deepEqual(info.args, ["--yes", "@deepseek-ai/dsh@0.1.5-rc.1"]); // arg[1] = pin from package.json
   assert.equal(info.version, "0.1.5-rc.1", "the pinned runtime version is visible for the §3 check");
-  assert.equal(info.entryExists, true);
+  assert.equal(info.entryExists, null, "a PATH command has no honest existsSync answer — proof is verifyDshRuntime()");
   assert.equal(info.patchMarksDshContext, true);
+});
+
+test("resolveDshRuntime — priority order and pin discipline", () => {
+  // IMPORTANT: every env here CARRIES process.env.PATH (a bare {} is a valid
+  // env for the resolver, but a child spawned with it could not exec npx —
+  // a previous draft of verifyDshRuntime passed {} and "proved" nothing).
+  const envWith = (over) => ({ ...process.env, ...over });
+  // 1. DSH_ENTRY wins over everything.
+  const byEntry = resolveDshRuntime(envWith({ DSH_ENTRY: "/x/bin.js", DSH_COMMAND: "nope" }));
+  assert.equal(byEntry.mode, "entry");
+  assert.equal(byEntry.source, "DSH_ENTRY");
+  // 2. DSH_COMMAND beats the local package and npx; DSH_ARGS parses both shapes.
+  const byCommand = resolveDshRuntime(envWith({ DSH_COMMAND: "/x/dsh", DSH_ARGS: '["--profile","headless"]' }));
+  assert.equal(byCommand.mode, "command");
+  assert.deepEqual(byCommand.args, ["--profile", "headless"]);
+  const byCommandSplit = resolveDshRuntime(envWith({ DSH_COMMAND: "/x/dsh", DSH_ARGS: "--profile headless" }));
+  assert.deepEqual(byCommandSplit.args, ["--profile", "headless"]);
+  // 4→5→6. With nothing installed and no pin, /tmp is used ONLY when it exists;
+  // with neither, the answer is unavailable — never a guessed path.
+  const nothing = resolveDshRuntime(envWith({}));
+  assert.ok(["command", "entry", "unavailable"].includes(nothing.mode));
+  if (nothing.mode === "command") {
+    assert.equal(nothing.command, "npx");
+    assert.match(nothing.args[1], /@deepseek-ai\/dsh@/, "npx args carry the PIN, never the bare package");
+  }
+});
+
+test("pinnedDshVersion — reads the root pin; an undeclared pin is null, never guessed", () => {
+  assert.equal(pinnedDshVersion(), "0.1.5-rc.1");
+});
+
+test("verifyDshRuntime — the real runtime proves it runs; a failing command does not", async () => {
+  const rt = resolveDshRuntime(process.env);
+  // env MUST carry PATH (the default is process.env): a bare {} would spawn
+  // without a lookup path and prove nothing about this machine.
+  const ok = await verifyDshRuntime(rt.mode === "command" ? process.env : { ...process.env, DSH_ENTRY: rt.entry });
+  assert.equal(ok.ran, true);
+  assert.equal(ok.version, "0.1.5-rc.1", "--version output is captured verbatim");
+
+  const dir = mkdtempSync(path.join(tmpdir(), "dsh-verify-"));
+  try {
+    const bad = path.join(dir, "broken");
+    writeFileSync(bad, "#!/bin/sh\nexit 3\n");
+    chmodSync(bad, 0o755); // executable, so this test measures the exit code, not EACCES
+    const fail = await verifyDshRuntime({ ...process.env, DSH_COMMAND: bad });
+    assert.equal(fail.ran, false);
+    assert.match(fail.detail, /exited 3/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("dshSpawnPlan — command runtime stays argv-shaped (never one executable string)", () => {
+  const plan = dshSpawnPlan({ mode: "command", command: "npx", args: ["--yes", "@deepseek-ai/dsh@0.1.5-rc.1"] });
+  assert.equal(plan.file, "npx");
+  assert.deepEqual(plan.args, ["--yes", "@deepseek-ai/dsh@0.1.5-rc.1"]);
+  const entryPlan = dshSpawnPlan({ mode: "entry", entry: "/x/bin.js", args: [] });
+  assert.equal(entryPlan.file, process.execPath);
+  assert.deepEqual(entryPlan.args, ["/x/bin.js"]);
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

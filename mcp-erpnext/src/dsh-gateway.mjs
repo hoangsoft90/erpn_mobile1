@@ -59,64 +59,240 @@ import { logEvent, learningLogConfig } from "./learning-log.mjs";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, "..", "..");
 const DEFAULT_PATCH = path.join(HERE, "..", "dsh-e2e.patch.yml"); // MOCK target by default (safety, plan §15)
-// Last-resort location, used only when the package cannot be resolved here. It
-// is the documented sandbox from .agents/skills/erpn-dsh-setup — NOT the
-// primary answer: hardcoding one machine's path is exactly what made "DSH khả
-// dụng" untrue on every other machine (`.plan/dsh_prompt_check.md` §3).
+// Legacy sandbox location — LAST in the priority list and only when the file
+// actually exists (`.plan/dsh_prompt_fix1.md`): it was one machine's setup, and
+// treating it as the primary answer is what made "DSH khả dụng" untrue
+// everywhere else. The default runtime is the PINNED npx package.
 const DSH_ENTRY_FALLBACK = "/tmp/dsh-run/node_modules/@deepseek-ai/dsh/lib/bin.js";
 
 /**
- * Resolve the dsh CLI entry from the package that is ACTUALLY installed, the
- * same way node itself would (a local install, a `npm -g` root, or the sandbox).
- * DSH_ENTRY always wins, so an operator can always point at an explicit file.
- *
- * @returns {string} path to the entry (possibly non-existent — callers check)
+ * The dsh version PIN from the ROOT package.json, read at call time (deploy
+ * can bump the pin without touching this file). null when undeclared — and a
+ * null pin means the npx runtime is UNAVAILABLE, never "run whatever npx
+ * finds": an unpinned agent would drift without any code change here.
  */
-export function resolveDshEntry(env = process.env) {
-  if (env.DSH_ENTRY) return String(env.DSH_ENTRY);
-  const candidates = [];
+export function pinnedDshVersion() {
+  try {
+    const pkg = JSON.parse(readFileSync(path.join(REPO_ROOT, "package.json"), "utf8"));
+    const pin = pkg?.dependencies?.["@deepseek-ai/dsh"];
+    return typeof pin === "string" && pin.trim() !== "" ? pin.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The runtime the gateway would spawn, resolved ONCE and represented honestly
+ * (`​.plan/dsh_prompt_fix1.md`): an agent can be a FILE this host runs through
+ * node, or a COMMAND (npx) — collapsing `npx @deepseek-ai/dsh` into one
+ * executable string is exactly the wrong shape, so the resolver keeps them
+ * apart. Priority (first wins):
+ *
+ *   1. DSH_ENTRY                 — operator-pinned file (absolute path)
+ *   2. DSH_COMMAND [+ DSH_ARGS]  — operator-pinned command
+ *   3. local @deepseek-ai/dsh    — resolvable from this file upward
+ *   4. npx --yes @deepseek-ai/dsh@<PIN> — the DEFAULT: the pin comes from the
+ *      root package.json (never bare, never hardcoded here)
+ *   5. legacy /tmp/dsh-run       — only when that file actually exists
+ *   6. unavailable               — reported as unavailable, never guessed
+ *
+ * @returns {{mode: "entry"|"command"|"unavailable", source: string,
+ *            entry: string|null, command: string|null, args: string[],
+ *            version: string|null}}
+ */
+export function resolveDshRuntime(env = process.env) {
+  const entryMode = (entry, source, version) => ({
+    mode: "entry",
+    source,
+    entry,
+    command: null,
+    args: [],
+    version: version ?? null,
+  });
+  const commandMode = (command, args, source, version) => ({
+    mode: "command",
+    source,
+    entry: null,
+    command,
+    args,
+    version: version ?? null,
+  });
+
+  // 1. DSH_ENTRY always wins, so an operator can always point at an explicit file.
+  if (env.DSH_ENTRY) return entryMode(String(env.DSH_ENTRY), "DSH_ENTRY");
+
+  // 2. DSH_COMMAND + DSH_ARGS — a command the operator controls. DSH_ARGS is a
+  // JSON array (recommended — no splitting surprises) or, as a convenience,
+  // whitespace-split; it is operator config, never user input, and it is never
+  // passed through a shell.
+  if (env.DSH_COMMAND) {
+    return commandMode(String(env.DSH_COMMAND), parseDshCommandArgs(env.DSH_ARGS), "DSH_COMMAND");
+  }
+
+  // 3. The package ACTUALLY installed, the same way node itself would resolve it.
   try {
     const require_ = createRequire(import.meta.url);
     const pkgJson = require_.resolve("@deepseek-ai/dsh/package.json");
     const dir = path.dirname(pkgJson);
     const pkg = JSON.parse(readFileSync(pkgJson, "utf8"));
     const bin = typeof pkg.bin === "string" ? pkg.bin : pkg.bin?.dsh;
-    if (bin) candidates.push(path.resolve(dir, bin));
+    if (bin) {
+      return entryMode(path.resolve(dir, bin), "local-package", pkg.version ?? null);
+    }
   } catch {
-    /* not installed on this machine — fall through to the sandbox path */
+    /* not installed on this machine — fall through */
   }
-  candidates.push(DSH_ENTRY_FALLBACK);
-  return candidates.find((c) => existsSync(c)) ?? DSH_ENTRY_FALLBACK;
+
+  // 4. The pinned npx runtime — the DEFAULT when nothing is installed. Bare
+  // `@deepseek-ai/dsh` is deliberately impossible here: no pin, no runtime.
+  const pin = pinnedDshVersion();
+  if (pin) {
+    return commandMode("npx", ["--yes", `@deepseek-ai/dsh@${pin}`], "npx-pinned", pin);
+  }
+
+  // 5. Legacy sandbox — only when the file really is there (never reported as
+  // the runtime when npx is available, per the fix prompt).
+  if (existsSync(DSH_ENTRY_FALLBACK)) {
+    return entryMode(DSH_ENTRY_FALLBACK, "legacy-tmp");
+  }
+
+  // 6. Truthful unavailable.
+  return { mode: "unavailable", source: "unavailable", entry: null, command: null, args: [], version: null };
+}
+
+/** DSH_ARGS → argv array (JSON array first, whitespace-split as fallback). */
+function parseDshCommandArgs(raw) {
+  const s = String(raw ?? "").trim();
+  if (s === "") return [];
+  try {
+    const parsed = JSON.parse(s);
+    if (Array.isArray(parsed) && parsed.every((x) => typeof x === "string")) return parsed;
+  } catch {
+    /* not JSON — whitespace fallback below */
+  }
+  return s.split(/\s+/).filter(Boolean);
+}
+
+/**
+ * Back-compat shim over resolveDshRuntime(): the FILE this host would run
+ * through node, or null for command-based/unavailable runtimes. Callers want
+ * the full shape — use resolveDshRuntime().
+ */
+export function resolveDshEntry(env = process.env) {
+  return resolveDshRuntime(env).entry;
+}
+
+/**
+ * PROOF, not guessing (`.plan/dsh_prompt_fix1.md` §4): run the resolved runtime
+ * with `--version` and report what actually came back. This is how health and
+ * `dsh:check` can say "usable" without a real question — the command itself
+ * demonstrates it runs. Bounded (kill + failure) like every other spawn.
+ *
+ * @returns {Promise<{ran: boolean, version: string|null, detail: string}>}
+ */
+export async function verifyDshRuntime(env = process.env, opts = {}) {
+  const rt = resolveDshRuntime(env);
+  if (rt.mode === "unavailable") {
+    return { ran: false, version: null, detail: "no dsh runtime: set DSH_ENTRY / DSH_COMMAND, or declare @deepseek-ai/dsh in package.json" };
+  }
+  const plan = dshSpawnPlan({ ...rt });
+  const timeoutMs = envMs(env, "DSH_VERIFY_TIMEOUT_MS", 30_000);
+  return await new Promise((resolve) => {
+    let stdout = "";
+    let stderr = "";
+    let timedOut = false;
+    const child = spawn(plan.file, [...plan.args, "--version"], {
+      cwd: REPO_ROOT,
+      env: buildDshChildEnv(env),
+      // npx resolves through PATH — the exact lookup PATH gives is wanted, so
+      // NO shell: a POSIX shell would wrap the command and change what "runs".
+      shell: false,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGKILL");
+    }, timeoutMs);
+    child.stdout.on("data", (d) => {
+      stdout += d.toString();
+    });
+    child.stderr.on("data", (d) => {
+      stderr += d.toString();
+    });
+    child.on("error", (err) => {
+      clearTimeout(timer);
+      resolve({ ran: false, version: null, detail: `spawn failed: ${err?.message ?? err}` });
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      const out = (stdout || "").split("\n").map((l) => l.trim()).filter(Boolean).pop() ?? null;
+      if (timedOut) {
+        resolve({ ran: false, version: null, detail: `--version timed out after ${timeoutMs}ms` });
+      } else if (code !== 0) {
+        resolve({ ran: false, version: null, detail: `--version exited ${code}: ${(stderr || stdout).trim().slice(0, 200)}` });
+      } else {
+        resolve({ ran: true, version: out, detail: `--version -> ${out}` });
+      }
+    });
+  });
 }
 
 /**
  * What this machine can actually run, for ops/health (`.plan/dsh_prompt_check.md`
- * §3): entry path, patch, and the installed package version — the operator needs
- * to see the version to know whether the pin holds.
+ * §3 + `.plan/dsh_prompt_fix1.md` §4): the resolved runtime shape, the patch, and
+ * the version — for an entry runtime the version comes from the installed
+ * package.json; for an npx runtime it IS the pin; otherwise null. Nothing here
+ * is hardcoded, and nothing claims to run — PROOF is verifyDshRuntime().
  *
- * @returns {{entry: string, patch: string, version: string|null, entryExists: boolean,
- *            patchExists: boolean, patchMarksDshContext: boolean}}
+ * @returns {{mode: "entry"|"command"|"unavailable", source: string,
+ *            entry: string|null, command: string|null, args: string[],
+ *            runtime: string, version: string|null,
+ *            entryExists: boolean, patch: string, patchExists: boolean,
+ *            patchMarksDshContext: boolean}}
  */
 export function dshRuntimeInfo(env = process.env) {
-  const entry = resolveDshEntry(env);
+  const rt = resolveDshRuntime(env);
   const patch = String(env.DSH_PATCH ?? DEFAULT_PATCH);
-  let version = null;
-  try {
-    // The tarball keeps package.json two levels above lib/bin.js; a global
-    // install keeps the same shape. Reading it here avoids a `--version` spawn.
-    const pkgPath = path.resolve(path.dirname(entry), "..", "package.json");
-    version = JSON.parse(readFileSync(pkgPath, "utf8")).version ?? null;
-  } catch {
-    /* version unknown is reported as null, never guessed */
+  // "Exists" is a FILE question — it has an honest answer only for an entry
+  // (or an explicit path command). A PATH command like `npx` is NOT knowable
+  // from stat alone (existsSync("npx") would just stat the CWD), so it stays
+  // null here; verifyDshRuntime() is the proof that a command runs.
+  let entryExists = null;
+  if (rt.mode === "entry") {
+    entryExists = existsSync(rt.entry);
+  } else if (rt.mode === "command" && rt.command.includes("/")) {
+    entryExists = existsSync(rt.command);
   }
   return {
-    entry,
+    mode: rt.mode,
+    source: rt.source,
+    entry: rt.entry,
+    command: rt.command,
+    args: rt.args,
+    // "npx" | "entry" | "unavailable" — the coarse shape ops output prints.
+    runtime: rt.mode === "command" ? "npx" : rt.mode,
+    version: rt.version,
+    entryExists,
     patch,
-    version,
-    entryExists: existsSync(entry),
     patchExists: existsSync(patch),
     patchMarksDshContext: existsSync(patch) && dshPatchMarksDshContext(patch),
   };
+}
+
+/**
+ * THE spawn plan — one implementation for local gateway, remote runner and the
+ * runtime check, so no caller can drift into `spawn("npx arg arg", ...)` as a
+ * single executable string (that shape never launches). An entry runtime runs
+ * through `process.execPath` (node); a command runtime runs the command with
+ * its argv. Never a shell string.
+ *
+ * @returns {{file: string, args: string[]}}
+ */
+export function dshSpawnPlan(rt) {
+  if (rt.mode === "command") {
+    return { file: rt.command, args: [...rt.args] };
+  }
+  return { file: process.execPath, args: [rt.entry] };
 }
 
 /** The gateway refused the question ITSELF (never reached the dsh runtime). */
@@ -190,8 +366,13 @@ export function isValidConversationId(value) {
  * remote/Mac verification.
  */
 export function dshGatewayConfig(env = process.env) {
+  const rt = resolveDshRuntime(env);
   return {
-    dshEntry: resolveDshEntry(env),
+    // The FULL runtime shape (mode/source/entry/command/args) — the spawn site
+    // needs more than a file path, and collapsing it back to a string is what
+    // broke runtime discovery in the first place.
+    runtime: rt,
+    dshEntry: rt.entry,
     patch: String(env.DSH_PATCH ?? DEFAULT_PATCH),
     // WHERE the runtime lives (see the header): 'local' spawns here, 'remote'
     // calls the Mac runner. Anything that is not exactly 'remote' means local,
@@ -506,6 +687,13 @@ export function parseDshErrorTail(stdout) {
  */
 export async function runDshAsk(question, opts = {}) {
   const cfg = { ...dshGatewayConfig(opts.env ?? process.env), ...(opts.overrides ?? {}) };
+  // Overrides may pin a specific entry (tests inject a recording fake; an
+  // operator trick is not possible here — overrides never come from the wire).
+  // The runtime shape must FOLLOW the override, or the spawn would use the
+  // resolver's npx command while the guards check the override file.
+  if (cfg.dshEntry && cfg.runtime?.entry !== cfg.dshEntry) {
+    cfg.runtime = { mode: "entry", source: "override", entry: cfg.dshEntry, command: null, args: [], version: null };
+  }
   const conversationId = opts.conversationId ?? randomUUID();
   const sessionId = randomUUID();
   const startedAt = Date.now();
@@ -666,8 +854,15 @@ export async function dshGatewayHealth(opts = {}) {
 
   if (cfg.mode === "local") {
     const info = dshRuntimeInfo(env);
-    if (!info.entryExists) return { available: false, mode: "local", version: info.version, detail: `missing dsh entry: ${info.entry}` };
-    if (!info.patchExists) return { available: false, mode: "local", version: info.version, detail: `missing patch: ${info.patch}` };
+    if (info.mode === "unavailable") {
+      return { available: false, mode: "local", version: null, detail: "no dsh runtime resolved (DSH_ENTRY / DSH_COMMAND / pinned package)" };
+    }
+    if (info.mode === "entry" && !info.entryExists) {
+      return { available: false, mode: "local", version: info.version, detail: `missing dsh entry: ${info.entry}` };
+    }
+    if (!info.patchExists) {
+      return { available: false, mode: "local", version: info.version, detail: `missing patch: ${info.patch}` };
+    }
     if (!info.patchMarksDshContext) {
       return {
         available: false,
@@ -676,11 +871,20 @@ export async function dshGatewayHealth(opts = {}) {
         detail: `patch is missing ${DSH_CONTEXT_ENV}=1 (write gate would not fire)`,
       };
     }
+    // PROOF over inference: a command runtime has no file to stat, so the only
+    // honest "available" is running `--version` through the exact spawn plan a
+    // question would take. (Bounded; failure ⇒ unavailable, never a shrug.)
+    const verified = await verifyDshRuntime(env, opts);
+    if (!verified.ran) {
+      return { available: false, mode: "local", version: info.version, detail: `runtime does not run: ${verified.detail}` };
+    }
     return {
       available: true,
       mode: "local",
-      version: info.version,
-      detail: `entry=${info.entry} patch=${path.basename(info.patch)}`,
+      runtime: info.runtime,
+      source: info.source,
+      version: verified.version ?? info.version,
+      detail: `runtime=${info.runtime}(${info.source}) patch=${path.basename(info.patch)} ${verified.detail}`,
     };
   }
 
@@ -730,7 +934,10 @@ async function runDshAskInner(question, cfg, conversationId, sessionId, startedA
     return runRemoteDsh(prompt, cfg, conversationId, sessionId, startedAt, opts);
   }
 
-  if (!existsSync(cfg.dshEntry)) {
+  // Missing-runtime and missing-patch are different failures with different
+  // fixes — and a command runtime (npx) has NO file to stat up front, so only
+  // an entry runtime can be refused for entry existence.
+  if (cfg.runtime.mode === "entry" && !existsSync(cfg.runtime.entry)) {
     return {
       ok: false,
       code: "DSH_UNAVAILABLE",
@@ -738,7 +945,19 @@ async function runDshAskInner(question, cfg, conversationId, sessionId, startedA
         "DSH Agent hiện không khả dụng (runtime chưa cài). Vui lòng thử lại sau.",
       conversationId,
       sessionId: null,
-      logTail: `missing dsh entry: ${cfg.dshEntry}`,
+      logTail: `missing dsh entry: ${cfg.runtime.entry}`,
+      elapsedMs: Date.now() - startedAt,
+    };
+  }
+  if (cfg.runtime.mode === "unavailable") {
+    return {
+      ok: false,
+      code: "DSH_UNAVAILABLE",
+      reason:
+        "DSH Agent hiện không khả dụng (chưa cấu hình runtime). Vui lòng thử lại sau.",
+      conversationId,
+      sessionId: null,
+      logTail: "no dsh runtime resolved (DSH_ENTRY / DSH_COMMAND / pinned package)",
       elapsedMs: Date.now() - startedAt,
     };
   }
@@ -781,7 +1000,10 @@ async function runDshAskInner(question, cfg, conversationId, sessionId, startedA
   let stderr = "";
   try {
     const result = await new Promise((resolve) => {
-      const child = spawn(process.execPath, [cfg.dshEntry, "--profile", "headless", "--patch", cfg.patch, prompt], {
+      // ONE spawn shape for every runtime (dshSpawnPlan): node <entry> … or
+      // npx --yes @deepseek-ai/dsh@<pin> … — never a shell string.
+      const plan = dshSpawnPlan(cfg.runtime);
+      const child = spawn(plan.file, [...plan.args, "--profile", "headless", "--patch", cfg.patch, prompt], {
         cwd: cfg.cwd,
         env: childEnv,
         stdio: ["ignore", "pipe", "pipe"],
@@ -941,7 +1163,14 @@ export async function dshGatewayAsk(question, opts = {}) {
       mode: "dsh",
       runtime: outcome.runtime ?? cfg.mode,
       dsh_session_id: outcome.sessionId,
+      // WHY it failed, not just that it did. The failure branch knew the reason
+      // (child's last stderr / parse error) and used to keep it server-side: the
+      // first real npx session failed in 5.6s and the only way to learn why was
+      // the router audit (a 408 from the Mac tunnel) — the client, and anyone
+      // reading the response, saw "lỗi phiên". Already scrubbed by
+      // scrubDiagnostics (no keys, no host, no token).
       erpnext_target: outcome.target ?? null,
+      logTail: outcome.logTail ?? null,
     };
   }
 

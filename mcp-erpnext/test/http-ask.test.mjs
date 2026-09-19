@@ -13,6 +13,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 
 // Hermetic (result9 fix, widened in result21): strip leaked ERPNEXT_* AND ASK_*
@@ -181,6 +183,13 @@ test("/dsh/ask route: health truth, malformed conversation_id, and a WRITE quest
     assert.equal(healthBody.runtime, "local");
     assert.equal(typeof healthBody.available, "boolean");
     assert.equal(healthBody.version, "0.1.5-rc.1", "the pinned runtime version is reported (plan §3)");
+    // HOW the runtime was resolved, next to WHERE it runs: a runtime taken from
+    // a machine-local path is the failure mode that did not travel to another
+    // host (dsh_prompt_fix1 §3), so the field must reach the probe caller.
+    assert.ok(
+      healthBody.source === null || typeof healthBody.source === "string",
+      "source (how the runtime resolved) is reported, not silently dropped",
+    );
 
     // A client-supplied conversation_id becomes a Map key and a log field, so a
     // malformed one is refused at the boundary (review F3) — 400, no session.
@@ -226,6 +235,54 @@ test("/dsh/ask route: health truth, malformed conversation_id, and a WRITE quest
   }
 });
 
+test("/dsh/ask route: a FAILED session reports WHY (log_tail), not just \"session failed\"", async () => {
+  // Found by running the real npx session: it failed in 5.6s and the response
+  // said only "lỗi phiên" — the actual cause (a 408 from the Mac tunnel) was
+  // recoverable ONLY from the router audit. The failure branch already had the
+  // child's last stderr; it just never left the process. Injected through the
+  // DSH_ENTRY seam with a fake entry that fails loudly.
+  const nlp = await startNlpService();
+  const { __setNlpServicePortForTest } = await import("../src/copilot-server.mjs");
+  const previousPort = process.env.NLP_SERVICE_PORT;
+  const dir = mkdtempSync(path.join(tmpdir(), "dsh-ask-fail-"));
+  let server = null;
+  try {
+    process.env.NLP_SERVICE_PORT = String(nlp.port);
+    __setNlpServicePortForTest(nlp.port);
+    const fakeEntry = path.join(dir, "fails.mjs");
+    writeFileSync(fakeEntry, 'process.stderr.write("dsh-child-boom: upstream 408\\n"); process.exit(3);\n');
+    const patch = path.join(dir, "safe.patch.yml");
+    writeFileSync(patch, "- insert:\n    - id: erpn-copilot-mcp\n      config:\n        env:\n          COPILOT_DSH_CONTEXT: '1'\n");
+
+    const { createAskServer } = await import("../src/http-ask.mjs");
+    server = createAskServer({
+      port: 0,
+      host: "127.0.0.1",
+      env: { ...process.env, DSH_ENTRY: fakeEntry, DSH_PATCH: patch, DSH_TIMEOUT_MS: "15000" },
+    });
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const base = `http://127.0.0.1:${server.address().port}`;
+
+    const res = await fetch(`${base}/dsh/ask`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: "chị Lan còn nợ bao nhiêu" }),
+    });
+    assert.equal(res.status, 502);
+    const body = await res.json();
+    assert.equal(body.ok, false);
+    assert.equal(body.code, "DSH_SESSION_FAILED");
+    assert.equal(typeof body.log_tail, "string", "the response carries a diagnostic");
+    assert.match(body.log_tail, /dsh-child-boom|exit=3/, `expected the child's own words, got: ${body.log_tail}`);
+    assert.equal(body.runtime, "local");
+  } finally {
+    server?.close();
+    nlp.child.kill();
+    rmSync(dir, { recursive: true, force: true });
+    __setNlpServicePortForTest(previousPort ?? "8787");
+  }
+});
+
 test("/dsh/health cannot take the gateway down: a throwing probe answers 503", async () => {
   // The fault is injected through a legal seam: `env.DSH_ENTRY` is read only by
   // the dsh branch, so a throwing getter there breaks the probe and nothing else
@@ -250,6 +307,7 @@ test("/dsh/health cannot take the gateway down: a throwing probe answers 503", a
     assert.equal(health.status, 503);
     const body = await health.json();
     assert.equal(body.available, false);
+    assert.equal(body.source, null, "a failed probe does not pretend to have a runtime source");
     assert.match(body.detail, /health probe failed/);
 
     // The process is still serving — a broken probe is contained.
