@@ -59,6 +59,19 @@
    code khoá `(customer|invoice)`; mô tả hành vi phải grep đúng dòng code rồi copy
    nguyên văn, không suy diễn từ tên biến/tên test.
 
+7. **Oracle RỖNG — khẳng định không thể sai (falsify XANH oan)** — khác nhóm 2 (nhóm 2
+   là *nhìn sai output*, nhóm này là *test không có khả năng thất bại*). result56
+   §5a bắt được 2 ca trong CÙNG một đợt: (a) adapter ghi request gắn vào Dio riêng
+   của `copilotApiClientProvider` trong khi `ProposalCard` POST `/execute` qua
+   `dioProvider` ⇒ nhét auto-confirm vào card mà test "không có request /execute"
+   VẪN XANH; (b) khẳng định "text đọc không chứa UUID" bị chính sanitizer (lớp phòng
+   thủ khác) gỡ UUID trước khi tới oracle ⇒ đổi nguồn thành JSON máy mà VẪN XANH.
+   Luật: khẳng định **PHỦ ĐỊNH** / khẳng định **ÂM** phải được falsify bằng cách TỰ
+   TAY phát ra hành vi bị cấm rồi xem test có đỏ — xanh nghĩa là oracle rỗng, KHÔNG
+   phải "code an toàn". Khi có nhiều lớp phòng thủ: test phải khẳng định **NGUỒN**
+   (hình dạng dữ liệu vào), không chỉ **giá trị cuối đã bị lọc**, và falsify TỪNG lớp
+   ĐỘC LẬP.
+
 ## Top bài học theo thiệt hại (mỗi cái tốn ≥ 1 phiên hoặc chạm tiền)
 
 - **Đọc source trước khi đoán API/tool name** — 3 lần viết lại guard/skill chỉ vì
@@ -68,6 +81,21 @@
   thật ghi phiếu thứ hai trên ERPNext demo).
 - **Unit xanh ≠ chạy thật** — accuracy 27.8% khi chạy ERPNext thật dù test xanh
   (result9); xác nhận môi trường nào xanh thì báo môi trường đó.
+- **Test xanh ≠ test có giá trị** — một test viết ra mà không thể ĐỎ thì không bảo vệ
+  được gì (xem nhóm 7, `result56` §5a): 2/6 falsify đầu tiên xanh oan vì recorder gắn
+  sai provider và vì một lớp guard khác che mất. Falsify là cách DUY NHẤT phát hiện
+  loại này — suite xanh không nói gì về chất lượng oracle.
+- **Đừng `await` tác dụng phụ không bắt buộc trong hàm mà giá trị trả về gate việc dọn
+  UI** — `result56` §9-F1: `await speak(...)` (đúng snippet plan) + engine TTS treo ⇒
+  `send()` không bao giờ return ⇒ ô nhập không xoá dù câu trả lời đã xong = **stuck UI**.
+  Chứng minh bằng fake **never-completing** + `.timeout()` (đỏ thật), sửa bằng
+  `unawaited(...)` + try/catch bao trùm cả cổng. Khi thấy `await` một tiện ích trong
+  đường đi của UI: hỏi "future này không bao giờ xong thì user kẹt ở đâu?".
+- **Assertion dùng chung ĐUÔI CÂU giữa 2 control = flaky tiềm ẩn** (`result56` §9-F2):
+  `textContaining('vẫn phải bấm Xác nhận khi thu tiền')` xanh vì switch kia đang OFF;
+  probe đo khi bật CẢ HAI = 2 matches ⇒ sẽ đỏ về sau vì lý do không liên quan. Sau khi
+  thêm control mới: **bật hết control rồi đo lại số match**, đừng tin `findsOneWidget`
+  đang xanh.
 - **An toàn > tốc độ** — mọi nhánh fail-open tìm được trong review đều chuyển thành
   fail-closed (result26: 5 lỗi, result29: 2 lỗi), không trao đổi bằng "hiếm khi xảy ra".
 - **Vùng tiền/số/phân quyền: không tự commit, không tự ký duyệt** — gate của user,
@@ -270,8 +298,51 @@
   TRƯỚC `test`; fake nên dùng tên field khác (`localeIsVerified`).
 - **`find.textContaining` phân biệt HOA/thường** — đổi chữ đầu câu trong copy làm 2 widget test
   đỏ dù logic đúng ⇒ mất 1 vòng sửa vô ích. Sau khi sửa copy: grep lại mọi test assert chuỗi đó.
+- **Test widget + widget NGOÀI viewport: `ListView` LAZY không BUILD phần tử dưới màn hình.** Thêm 1 mục
+  vào `SettingsScreen` ⇒ 3 test cũ đỏ (`Bad state: No element` ở `ensureVisible(find.text('Lưu'))`) dù code
+  đúng, vì nút Save bị đẩy ra ngoài 800×600 và **chưa từng tồn tại** để tìm. Sửa: cho viewport test cao
+  hơn (`tester.view.physicalSize = Size(1000, 2400)` + `addTearDown(tester.view.reset)`) — không đi
+  scroll từng chỗ; nếu phải scroll thì dùng `scrollUntilVisible`, không dùng `ensureVisible`.
+- **Mỗi luật chặn ở đúng MỘT tầng.** Vòng này tôi đặt check "transcript rỗng" ở cả `_onSpeechResult`
+  (caller) lẫn `_maybeAutoSend` (callee) ⇒ lớp trong là code không thể chạm: falsify gỡ nó mà **0 test
+  đỏ**. Gỡ lớp trùng + tham số thừa; luật = falsify từng chỗ, chỗ nào gỡ mà không đỏ thì nó chết.
+- **Tín hiệu user KHÔNG HÀNH ĐỘNG ĐƯỢC thì đừng hiển thị (kể cả "gợi ý nhẹ").** Vòng 1 của bugfix
+  P6 đổi "Máy không có bộ nhận dạng tiếng Việt" → gợi ý nhẹ "Máy không liệt kê tiếng Việt…"; user
+  báo vẫn thấy dòng đó trên máy nhận tiếng Việt tốt (không thể "thêm locale" cho máy, mà đọc vẫn
+  chạy) ⇒ vòng 2 **bỏ hẳn** (`_notice = null`), giữ nguyên cảnh báo THẬT `denied`/`unavailable`/
+  `error_language_*` + thêm test cho ca "máy thiếu `vi` **và** bị thu hồi quyền". Luật: trước khi
+  hiển thị một tín hiệu nền tảng, hỏi "user đọc xong làm được gì?"; hạ giọng cảnh báo mà vẫn hiện
+  thường = vẫn còn phải bỏ.
 - **Đừng `dart format` trong repo không conform formatter hiện hành.** Đo trước bằng
   `dart format --output=none --set-exit-if-changed lib test` ⇒ **20/28 file non-conforming**
   (tall style Dart 3.13 vs repo style cũ); chạy format trên 4 file đã sửa làm diff phình
   +272 → +459 rồi phải revert thủ công. Luật: đo mức non-conforming TRƯỚC, nếu repo không theo
   formatter thì **không** format file mình sửa — diff bugfix phải đúng phạm vi.
+
+## Review vòng 3 — switch "Tự gửi sau khi nói xong" (2026-09-18)
+
+Bối cảnh: user yêu cầu "review code những gì vừa làm" cho tính năng auto-send vừa viết. 3 lỗi thật
++ 1 guard chết thứ 3 + 1 câu hỏi để ngỏ (chi tiết `result55.txt` §11).
+
+- **"Đỏ" trong falsify KHÔNG tự chứng minh test MỚI của mình có giá trị.** Gỡ lớp guard
+  `if (!_listening) return;` ⇒ đúng là đỏ, nhưng đỏ ở **test cũ** ("a late result after stop must
+  not resurrect text") — nghĩa là lớp đó đã có test khác canh từ trước, test mới của tôi không
+  chứng minh được gì về nó. Luật: sau mỗi falsify, đọc **TÊN test đỏ**; nếu không phải test mình
+  vừa viết thì ghi trung thực là "lớp này đã được test cũ canh", đừng gán công lao.
+- **Guard thứ 3 trong CÙNG một tính năng vẫn là guard chết** — sau khi đã gỡ 2 guard trùng, lớp
+  `if (!widget.enabled) return;` trong `_maybeAutoSend` vẫn không thể chạm (gỡ ra: 120 test vẫn
+  xanh). Lớp THẬT SỰ chặn gửi chồng là `ChatController.send` (`if (state.isLoading) return false`).
+  Luật: mỗi luật **một nhà**; lớp nào gỡ ra mà suite không đổi = lớp chết, xoá luôn.
+- **Doc nằm cạnh code vừa đổi hành vi vẫn hứa hành vi cũ.** `_InputBar` docstring còn "The mic has
+  **no** auto-send" sau khi thêm switch; `SpeechService.localeVerified` còn "UI may only show a soft
+  note" sau khi UI bỏ hẳn notice. Luật: sau khi đổi hành vi, grep chính từ khoá của hành vi đó
+  (`auto-send`, `notice`, `"no " + tên hành vi`) trên toàn repo — kể cả doc của **interface**.
+- **Báo "đã lưu" từ MỘT trong nhiều lần ghi.** `_save()` chỉ đọc `okGateway`, còn `bool` của
+  `saveAllowSubmitPayment`/`saveVoiceAutoSend` bị bỏ ⇒ storage ghi string được nhưng từ chối bool
+  ⇒ switch hiện ON mà không lưu gì (đúng họ lỗi "nói đã lưu nhưng không lưu" user từng gặp với URL
+  gateway). Sửa: `ok = okGateway && okSubmit && okVoice` + test với fake **chỉ-từ-chối-ghi-bool**
+  (mọi fake "thành công hết" không bao giờ lộ lỗi ghi một phần).
+- **Để ngỏ còn hơn tự quyết một hành vi user chưa chắc muốn:** `pauseFor: 3s` (Android có thể ép
+  1–3s) nghĩa là khi switch BẬT, **ngập ngừng giữa câu** = "đọc xong" ⇒ gửi câu nửa vời. Hành vi
+  đúng đặc tả ("final ⇒ gửi") nhưng hậu quả có thể ngoài ý user ⇒ ghi vào `human.md` §1 kèm 3 lựa
+  chọn (a/b/c) và **không tự đổi**.

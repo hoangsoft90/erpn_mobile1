@@ -134,14 +134,231 @@ Docs: `.plan/phases2/p6-result.md` (+ mục "Bugfix P6", sửa checklist máy th
 101 → 107) · `working.md` · `next.md` · `checklist.md` · `.project/modules/chat.md` ·
 `.agents/skills/erpn-verify-first/SKILL.md` (bài học, file gitignored) · `LESSONS_LEARNED.md`.
 
-**CHƯA COMMIT** — chờ user duyệt (mobile client). Message đề xuất:
+**ĐÃ COMMIT + PUSH** (user duyệt bằng lệnh "push code lên gh build apk", 2026-09-18):
+`77e2b57` fix (4 file code, +272/−51) · `bbca7ca` docs (6 file, +195/−6) →
+`5c5c99c..bbca7ca  change/flutter-chat-mvp -> change/flutter-chat-mvp`
 
-    fix(p6): locale list is not a capability claim — always ask for vi_VN, hint instead of refusing
+== 8. APK CI — BUILD LẠI + XÁC MINH BINARY CHỨA BẢN FIX (không chỉ tin "run xanh") ==
 
-Body: `locales()` chỉ phủ recognizer on-device (doc plugin) ⇒ thiếu `vi` KHÔNG có nghĩa là máy
-không hỗ trợ; luôn xin `vi_VN`, retry 1 lần với locale mặc định nếu platform từ chối, refusal
-ngôn ngữ không tắt service, UI đổi sang gợi ý nhẹ. Flutter 107/107 · analyze 0.
+$ git push origin change/flutter-chat-mvp
+  5c5c99c..bbca7ca  change/flutter-chat-mvp -> change/flutter-chat-mvp
 
-**Human còn lại (không phải việc agent):** cài APK (artifact CI sau khi push) → smoke mục 7 trong
-`.plan/phases2/p6-result.md` trên máy thật có Gboard tiếng Việt; nếu máy có logcat thì dán dòng
-`EXTRA_LANGUAGE`/kết quả nhận dạng để đối chiếu.
+$ gh run list --limit 5
+  queued    docs: record the P6 locale bugfix …   android-debug-apk   change/flutter-chat-mvp
+            push   35367603981   2s   2026-09-18T16:17:37Z
+
+$ gh run watch 35367603981 --exit-status --interval 20      # exit 0
+$ gh run view 35367603981 --json conclusion,status,headSha,jobs
+  conclusion=success status=completed head=bbca7ca jobs=Build debug APK:success
+
+$ gh api /repos/hoangsoft90/erpn_mobile1/actions/runs/35367603981/artifacts
+  name=erpn-chat-debug-apk  size=84169705 bytes  expired=false
+  expires_at=2026-12-17T16:17:37Z
+
+Xác minh APK THẬT sự chứa bản fix (tải artifact rồi grep binary, không suy từ status):
+
+$ gh run download 35367603981 -n erpn-chat-debug-apk -D /tmp/apk-verify
+  -rw-r--r-- 165061846  /tmp/apk-verify/app-debug.apk
+$ unzip -o -q app-debug.apk -d extracted && grep -c <chuỗi> extracted/assets/flutter_assets/kernel_blob.bin
+  "Máy không liệt kê tiếng Việt"            → 2
+  "Máy không có bộ nhận dạng tiếng Việt"    → 0   ← câu SAI của bug đã biến mất khỏi binary
+  "vi_VN"                                  → 3
+
+⇒ APK từ CI đúng là bản có fix (câu cũ = 0 lần trong `kernel_blob.bin`), không phải build cũ.
+
+Bước còn lại (người thật): cài APK rồi bấm 🎙 trên máy có Gboard tiếng Việt; nếu máy có logcat thì
+dán dòng `EXTRA_LANGUAGE` / kết quả nhận dạng để đối chiếu.
+Link tải artifact:
+https://github.com/hoangsoft90/erpn_mobile1/actions/runs/35367603981/artifacts/erpn-chat-debug-apk
+
+== 9. UX FOLLOW-UP CÙNG NGÀY — BỎ LUÔN GỢI Ý NHẸ (chưa commit) ==
+(phần dưới giữ nguyên; tính năng mới "Tự gửi sau khi nói xong" ghi ở §10)
+
+User báo sau khi dùng bản đã sửa: máy nhận tiếng Việt OK mà **vẫn** thấy dòng
+"Máy không liệt kê tiếng Việt trong danh sách nhận dạng — vẫn thử…" ⇒ vẫn là tiếng ồn.
+
+Yêu cầu + đã làm:
+- **XOÁ notice khi chỉ vì `!localeVerified`** (`chat_screen.dart`): `_notice = null;` thay cho
+  ternary theo `_speech.localeVerified` ⇒ grep `liệt kê tiếng Việt` trong `apps/mobile/lib/` = **0 hit**.
+- **GIỮ cảnh báo thật**: `denied` / `unavailable` / `error_language_*` (đi qua `_onSpeechStatus`
+  + `_deniedOrUnavailable`) — có test riêng cho ca "máy thiếu `vi` **và** bị thu hồi quyền" ⇒
+  thông báo quyền micro **vẫn hiện**.
+- **KHÔNG đổi** `fallbackLocaleId = 'vi_VN'`, không đổi logic `listen()`/retry/`_handleError`.
+- `localeVerified` vẫn còn ở tầng service (nhánh retry + test dùng) nhưng **UI không đọc nữa**.
+
+$ flutter test      → 107/107 · analyze → No issues found!
+$ falsify E         → chèn lại notice `!localeVerified` ⇒ đỏ đúng
+                      "locale list without vi → NO notice at all, mic just works" (khôi phục diff sạch)
+
+Bài học: **tín hiệu user KHÔNG THỂ HÀNH ĐỘNG thì đừng hiển thị** — user không thể "thêm locale" cho
+máy; câu gợi ý chỉ khiến họ tưởng app thiếu gì. (Đã ghi vào SKILL.md + LESSONS_LEARNED.md.)
+
+**Human còn lại (không phải việc agent):** cài APK ở trên lên máy thật có Gboard tiếng Việt → smoke
+mục 7 trong `.plan/phases2/p6-result.md` (đọc ra đúng chữ · KHÔNG hiện dòng nào về "tiếng Việt" ·
+trên cùng máy, thu hồi quyền micro ⇒ **vẫn** phải hiện thông báo quyền · không tự gửi/tự nộp)
+
+== 10. TÍNH NĂNG MỚI — SETTINGS "TỰ GỬI SAU KHI NÓI XONG" (chưa commit) ==
+
+Yêu cầu user: switch trong Settings, **mặc định OFF**; khi ON thì sau kết quả STT **final**, nếu ô
+nhập có text (trim ≠ rỗng) và không đang loading → gọi **cùng** đường Send (`POST /ask`), KHÔNG path
+riêng, KHÔNG auto-confirm WRITE, KHÔNG đụng `/execute`, partial không trigger.
+
+### Diff
+
+| File | Nội dung |
+|---|---|
+| `core/constants/app_constants.dart` | key versioned `settings_voice_auto_send_v1` |
+| `core/settings/app_settings_service.dart` | `voiceAutoSend` (default OFF, fail-safe: thiếu key/null prefs/JSON hỏng ⇒ false) + `saveVoiceAutoSend()` + `clear()` xoá luôn |
+| `features/settings/.../settings_screen.dart` | mục **"Giọng nói"** + `SwitchListTile` "Tự gửi sau khi nói xong", copy đổi theo trạng thái (BẬT: "đọc xong là gửi câu hỏi ngay — **vẫn phải bấm Xác nhận khi thu tiền**"), lưu cùng nút Lưu |
+| `features/chat/.../chat_screen.dart` | `_onSpeechResult`: final ⇒ `_maybeAutoSend()`; `_maybeAutoSend()` chỉ gọi `widget.onSend()` — cùng đường với nút Gửi |
+| 3 file test | `voice_input_test.dart` +6, `settings_test.dart` +5 (service 3 + UI 2), `settings_navigation_test.dart` (viewport) |
+
+Điểm chặn trong `_onSpeechResult` (một chỗ duy nhất cho mỗi luật):
+
+    if (!_listening) return;                       // đã dừng/đã gửi ⇒ bỏ kết quả muộn (P6)
+    if (transcript.trim().isEmpty) {                // không nghe được gì
+      if (isFinal) setState(() => _listening = false);
+      return;                                       // KHÔNG đụng ô nhập, KHÔNG gửi
+    }
+    ... ghi vào ô nhập ...
+    if (!isFinal) return;                           // partial không bao giờ gửi
+    setState(() => _listening = false);
+    _maybeAutoSend();
+
+    _maybeAutoSend(): if (!widget.enabled) return;                 // đang loading
+                      if (field.trim().isEmpty) return;            // không có gì để gửi
+                      if (!settings.voiceAutoSend) return;         // mặc định OFF
+                      await widget.onSend();                       // CÙNG đường Send
+
+### Test (lệnh + output thật)
+
+$ flutter test   → 118/118 (107 → 118)   ·   flutter analyze → No issues found!
+
+Test mới:
+- service: `voiceAutoSend` default OFF (thiếu key / null prefs) · round-trip ON↔OFF (instance mới
+  đọc lại được) · **storage hỏng/kiểu sai ⇒ false, không ném** · `clear()` xoá key
+- UI Settings: switch có mặt + default OFF + **chưa ghi gì cho tới khi bấm Lưu** · bật ON **không cần
+dialog** (khác F7-2 — nó không nằm trong đường tiền), copy "ĐANG BẬT" + "vẫn phải bấm Xác nhận",
+Lưu ⇒ đọc lại bằng instance mới = true
+- chat: OFF (mặc định) + final ⇒ **không** gửi, chữ còn nguyên trong ô · ON + final ⇒ **đúng 1**
+request `/ask`, body text đúng, ô nhập được xoá · ON + partial ⇒ không gửi · ON + final nhưng
+**transcript rỗng** ⇒ không gửi và **ô nhập không bị sửa** (không thêm space lạ) · ON + recognizer
+từ chối ⇒ không gửi, vẫn hiện thông báo lỗi · ON + câu lệnh ghi ⇒ chỉ `/ask`, `paths` không chứa
+execute
+
+### Falsify (gỡ → đỏ đúng chỗ → khôi phục)
+
+| | Gỡ gì | Test đỏ |
+|---|---|---|
+| A | check `voiceAutoSend` | 5 test (OFF-mặc-định + 4 test cũ "không được gửi") |
+| B | block "transcript rỗng" ở caller | "auto-send ON: an empty final result sends nothing" |
+| C | `if (!isFinal) return;` | "partial results never send" + 3 test P6 cũ |
+
+⇒ **Falsify B lần đầu KHÔNG đỏ** vì tôi có 2 lớp check trùng: bản trong `_maybeAutoSend` là **code
+không thể chạm tới** (caller đã chặn trước). Đã gỡ lớp trùng, giữ đúng 1 chỗ mỗi luật + gỡ luôn
+tham số `transcript` không còn dùng. (Đúng bài học P8: nhánh chết ⇒ falsify không đỏ.)
+
+### Lỗi tự gây trong đợt này
+
+1. **Guard trùng/không thể chạm** (ở trên) — falsify phát hiện, đã gỡ.
+2. **Thêm 1 mục vào ListView ⇒ test cũ đỏ vì ListView LAZY**: `SettingsScreen` là `ListView` nên
+   phần tử dưới màn hình **không được BUILD**; `tester.ensureVisible(find.text('Lưu'))` cũ không
+tìm thấy gì (`Bad state: No element`) ⇒ 2 test cũ + 1 test navigation đỏ dù code đúng. Sửa: cho
+viewport test cao hơn (`tester.view.physicalSize = Size(1000, 2400)` + `addTearDown(view.reset)`)
+thay vì đi scroll từng chỗ.
+3. **Assertion copy mơ hồ**: `find.textContaining('TẮT')` / `('ĐANG BẬT')` giờ khớp 2 switch ⇒ phải
+ghi rõ `'TẮT: xác nhận'` / `'ĐANG BẬT: đọc xong'`. (Cùng họ với bài học `textContaining` phân biệt
+hoa/thường ở §6.3.)
+4. Lint Dart: helper cục bộ không được bắt đầu bằng `_` → `scrollTo` (không phải `_scrollTo`).
+
+== 11. REVIEW VÒNG 3 (2026-09-18) — 3 LỖI THẬT + 1 GUARD CHẾT THỨ 3 + 1 CÂU HỎI MỞ ==
+
+Yêu cầu user: "review code những gì vừa làm". Phạm vi: 4 file code + 3 file test của đợt UX này.
+Nguyên tắc: mỗi finding phải chỉ ra cơ chế cụ thể + falsify được, không phỏng đoán.
+
+--- R5. Doc SAI trong chính class vừa sửa -------------------------------------
+
+`_InputBar` docstring vẫn ghi: *"The mic has no auto-send and no route to `/execute`"* — SAI kể từ
+khi thêm switch. Loại lỗi nguy hiểm vì người đọc sau sẽ tin doc chứ không đọc 3 lớp guard.
+Sửa: "Auto-send exists ONLY as a user opt-in (default OFF) and reuses that same `onSend`".
+
+--- R6. Doc SAI thứ 2 (tầng service) -----------------------------------------
+
+`SpeechService.localeVerified` doc vẫn ghi *"the UI may only show a soft 'check the wording' note
+— never a refusal"* — sau §9 thì UI **không hiển thị gì**. Ghi lại đúng vai trò còn lại: nó chỉ
+được `listen()` đọc để quyết định cho retry locale một lần với locale mặc định.
+
+--- R7. GUARD CHẾT thứ 3 trong CÙNG tính năng ---------------------------------
+
+`_maybeAutoSend()` có 3 lớp check. Falsify từng lớp:
+
+| Lớp | Gỡ ra | Kết quả |
+|---|---|---|
+| `!widget.enabled` (đang có request) | bỏ hẳn | 🟢 xanh toàn bộ 120 test ⇒ **không thể chạm** |
+| check rỗng ô nhập | bỏ (đợt trước) | 🟢 xanh ⇒ đã gỡ |
+| check rỗng transcript | bỏ (đợt trước) | 🟢 xanh ⇒ đã gỡ |
+
+⇒ `_maybeAutoSend` nay **chỉ còn 1 điều kiện**: `voiceAutoSend`. Các luật còn lại đã có đúng
+**một nhà**: session/`_listening` ở `_onSpeechResult` · "có gì để gửi" ở `_send` · "không gửi chồng"
+ở `ChatController.send` (`if (state.isLoading) return false`) — lớp này mới là lớp THẬT SỰ chặn gửi
+chồng, nên bản copy trong `_maybeAutoSend` không bao giờ đỏ được.
+
+--- R8. BÁO SAI KẾT QUẢ LƯU (đúng họ lỗi user từng gặp với URL gateway) ------
+
+`_save()` chỉ lấy `okGateway` để chọn thông báo:
+
+    final okGateway = await settings.saveGateway(...);
+    await settings.saveAllowSubmitPayment(_allowSubmit);   // ← bool bị bỏ
+    await settings.saveVoiceAutoSend(_voiceAutoSend);      // ← bool bị bỏ
+    ... Text(okGateway ? 'Đã lưu — ...' : 'Không lưu được ...')
+
+⇒ storage ghi được string nhưng từ chối ghi bool (ghi một phần) ⇒ switch **hiện ON** mà **không hề
+được lưu** ⇒ user tưởng đã bật, app đọc prefs = OFF ⇒ "bật mà không thấy tác dụng".
+Sửa: `final ok = okGateway && okSubmit && okVoice;` (thông báo lỗi khi BẤT KỲ phần nào không ghi được).
+
+--- Test thêm + falsify -----------------------------------------------------
+
+    $ flutter test   → 120/120 (118 → 120)   ·   flutter analyze → No issues found!
+
+2 test mới:
+- `auto-send ON: a SECOND final result cannot send twice` — recognizer nhả nhiều final khi tắt;
+  xác nhận 1 câu = 1 request và final muộn **không** ghi lại chữ vào ô đã gửi.
+- `a switch that did not persist is reported, never called success` — `_FakePrefs(failBoolWrites: true)`
+  (setString OK, setBool ném) ⇒ phải thấy "Không lưu được cài đặt", **không** được thấy "Đã lưu —".
+
+| # | Gỡ gì | Kết quả |
+|---|---|---|
+| A | `ok = okGateway && okSubmit && okVoice` → `ok = okGateway` | 🔴 đúng test mới R8 |
+| B | bỏ `if (!_listening) return;` | 🔴 **nhưng ở test CŨ**: "a late result after stop must not resurrect text" |
+| C | bỏ `if (!widget.enabled) return;` | 🟢 xanh ⇒ guard chết, đã gỡ |
+
+⇒ Ghi nhận TRUNG THỰC: falsify B đỏ, nhưng **không phải** ở test mới của tôi — nghĩa là lớp guard
+đó đã được test cũ canh. Bài học: "đỏ" không tự chứng minh test MỚI có giá trị; phải hỏi "test của
+MÌNH bắt được regression nào mà test khác không bắt được". Test mới vẫn giữ vì nó canh **đường
+auto-send** (test cũ không chạy qua switch), nhưng không được gán cho nó công lao của lớp
+`!_listening`.
+
+--- ❓ CÂU HỎI MỞ (đã ghi `human.md` §1, chưa tự đổi hành vi) -----------------
+
+`_startListening` đặt `pauseFor: 3s`. Doc của chính plugin:
+
+> "`pauseFor` sets the maximum duration of a pause in speech with no words detected, after that it
+> automatically stops the listen for you. On some systems, notably Android, there is a system
+> imposed pause of from one to three seconds that cannot be overridden."
+
+Với switch BẬT: người dùng **ngập ngừng giữa câu** ⇒ "final" tới ⇒ câu **nửa vời** được gửi và
+phiên nghe kết thúc. Hành vi này đúng đặc tả ("final ⇒ gửi") nhưng có thể không phải ý user.
+Ba lựa chọn (a/b/c) ở `human.md` §1 — cần user quyết, agent không tự đổi.
+
+--- Dọn kèm: 2 dòng lạc ở cuối §10 -------------------------------------------
+
+Đoạn "nếu máy có logcat thì dán dòng `EXTRA_LANGUAGE`... Link artifact" của §8 bị dán lẫn vào cuối
+mục "Lỗi tự gây" của §10 (làm sai nghĩa cả hai mục). Đã trả về đúng §8.
+
+--- Files (đợt review này) --------------------------------------------------
+
+**Sửa:** `apps/mobile/lib/features/chat/presentation/screens/chat_screen.dart` (doc R5 + gỡ guard chết R7)
+· `apps/mobile/lib/features/chat/data/speech_service.dart` (doc R6)
+· `apps/mobile/lib/features/settings/presentation/screens/settings_screen.dart` (R8)
+· `apps/mobile/test/settings_test.dart` (fake + 1 test R8) · `apps/mobile/test/voice_input_test.dart` (1 test R7)
+· `result55.txt` · `.plan/phases2/p6-result.md` · `human.md`

@@ -55,8 +55,8 @@ Phase 10.
 
 ## Trạng thái rút gọn (cập nhật: 2026-09-18)
 
-- ✅ **Phases2 P0–P8 ĐÃ ĐÓNG, commit hết** (P0 `b4acdb1` … P6 `9b54d35` · P7 `3e6240a` · P8 `90401f0` · P10-slice `7cb2798`/`21d77ff`/`d6295ab`) — suite: Python 62 · Node 267 · Flutter 101 · analyze 0
+- ✅ **Phases2 P0–P8 ĐÃ ĐÓNG, commit hết** (P0 `b4acdb1` … P6 `9b54d35` + bugfix locale `77e2b57` · P7 `3e6240a` · P8 `90401f0` · P10-slice `7cb2798`/`21d77ff`/`d6295ab`) — suite: Python 62 · Node 267 · **Flutter 107** · analyze 0
 - ✅ Write thật: thu tiền tạo PE NHÁP qua Safety Gateway + idempotency; submit là setting riêng (mặc định OFF)
-- ⏳ Còn lại: P9 (skill mới — gate mở, chờ lệnh) · saga §7 (chờ duyệt) · P10 full (infra) · APK/device smoke + P8 deployment credentials (human)
+- ⏳ Còn lại: P9 (skill mới — gate mở, chờ lệnh) · saga §7 (chờ duyệt) · P10 full (infra) · **device smoke phần mic** + P8 deployment credentials (human — xem `human.md`)
 
 Chi tiết đầy đủ: [`openspec.md`](openspec.md) + root `checklist.md`/`next.md`.
