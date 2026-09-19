@@ -57,8 +57,11 @@ abstract class SpeechService {
   /// `false` does NOT mean Vietnamese is unsupported: Android's list reports
   /// only the ON-DEVICE recognizer, and there is no API for the online one's
   /// languages (plugin doc, `locales()`). Google's online recognizer handles
-  /// Vietnamese fine on a device whose list has no `vi` entry, so the UI may
-  /// only show a soft "check the wording" note — never a refusal.
+  /// Vietnamese fine on a device whose list has no `vi` entry, and the user
+  /// cannot act on the difference — so the UI says NOTHING about locales
+  /// (P6 UX, 2026-09-18). It stays on the interface because [listen] itself
+  /// reads it: it decides whether forcing `vi_VN` may be retried once with the
+  /// device default, or whether the recognizer is genuinely unusable.
   bool get localeVerified;
 
   /// Whether a dictation session is currently open.

@@ -14,7 +14,13 @@ import 'package:erpn_mobile/features/chat/data/copilot_api_client.dart';
 import 'package:erpn_mobile/features/settings/presentation/screens/settings_screen.dart';
 
 class _FakePrefs implements SharedPreferences {
+  _FakePrefs({this.failBoolWrites = false});
+
   final Map<String, Object> store = {};
+
+  /// Storage that accepts strings but refuses bools — a partial write failure.
+  /// The Save button must not report success when part of it did not persist.
+  final bool failBoolWrites;
 
   @override
   dynamic noSuchMethod(Invocation invocation) {
@@ -37,6 +43,7 @@ class _FakePrefs implements SharedPreferences {
       return store[args.first as String] as bool?;
     }
     if (invocation.memberName == #setBool && args.length == 2) {
+      if (failBoolWrites) throw StateError('bool write refused');
       store[args[0] as String] = args[1] as Object;
       return Future<bool>.value(true);
     }
@@ -147,6 +154,30 @@ void main() {
           reason: 'a NEW service instance reads it back (settings screen recreate)');
       expect(await s.saveAllowSubmitPayment(false), isTrue);
       expect(AppSettingsService(prefs: prefs).allowSubmitPayment, isFalse);
+    });
+
+    test('voiceAutoSend defaults OFF (absent key / null prefs)', () {
+      expect(AppSettingsService(prefs: _FakePrefs()).voiceAutoSend, isFalse,
+          reason: 'dictation must never send by accident');
+      expect(AppSettingsService(prefs: null).voiceAutoSend, isFalse);
+    });
+
+    test('voiceAutoSend round-trips ON and back OFF', () async {
+      final prefs = _FakePrefs();
+      final s = AppSettingsService(prefs: prefs);
+      expect(await s.saveVoiceAutoSend(true), isTrue);
+      expect(prefs.store[AppConstants.voiceAutoSendStorageKey], true);
+      expect(AppSettingsService(prefs: prefs).voiceAutoSend, isTrue,
+          reason: 'a NEW instance reads it back (screen recreate)');
+      expect(await s.saveVoiceAutoSend(false), isTrue);
+      expect(AppSettingsService(prefs: prefs).voiceAutoSend, isFalse);
+    });
+
+    test('voiceAutoSend tolerates corrupted storage (fail-safe OFF)', () async {
+      final prefs = _FakePrefs();
+      // A wrong TYPE in the same key: the getter must not throw.
+      prefs.store[AppConstants.voiceAutoSendStorageKey] = 'yes';
+      expect(AppSettingsService(prefs: prefs).voiceAutoSend, isFalse);
     });
 
     test('isValidGatewayUrl', () {
@@ -267,11 +298,32 @@ void main() {
 
   group('SettingsScreen', () {
     Future<void> pump(WidgetTester tester, _FakePrefs prefs) async {
+      // The form has outgrown the default 800x600 test viewport, and the body
+      // is a LAZY ListView: whatever sits below the fold is never BUILT, so
+      // finders miss it entirely. A taller surface keeps every control built
+      // and visible — tests then tap what they mean instead of scrolling into
+      // it (scroll-into-view used to silently miss the Save button).
+      tester.view.physicalSize = const Size(1000, 2400);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
       await tester.pumpWidget(
         ProviderScope(
           overrides: [sharedPreferencesProvider.overrideWithValue(prefs)],
           child: const MaterialApp(home: SettingsScreen()),
         ),
+      );
+      await tester.pumpAndSettle();
+    }
+
+    /// Scrolls the settings ListView until [finder] exists AND is visible.
+    /// `ensureVisible` is not enough: the form is a LAZY ListView, so a control
+    /// below the fold has not been built at all (adding the voice section pushed
+    /// the Save button out of the initial viewport).
+    Future<void> scrollTo(WidgetTester tester, Finder finder) async {
+      await tester.scrollUntilVisible(
+        finder,
+        200,
+        scrollable: find.byType(Scrollable).first,
       );
       await tester.pumpAndSettle();
     }
@@ -289,7 +341,7 @@ void main() {
       final prefs = _FakePrefs();
       await pump(tester, prefs);
       expect(find.text('Cho phép nộp phiếu thu thật'), findsOneWidget);
-      expect(find.textContaining('TẮT'), findsOneWidget);
+      expect(find.textContaining('TẮT: xác nhận'), findsOneWidget);
       expect(
         tester.widget<CheckboxListTile>(find.byType(CheckboxListTile)).value,
         isFalse,
@@ -321,7 +373,7 @@ void main() {
         (tester) async {
       final prefs = _FakePrefs();
       await pump(tester, prefs);
-      await tester.ensureVisible(find.text('Cho phép nộp phiếu thu thật'));
+      await scrollTo(tester, find.text('Cho phép nộp phiếu thu thật'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Cho phép nộp phiếu thu thật'));
       await tester.pumpAndSettle();
@@ -331,8 +383,8 @@ void main() {
         tester.widget<CheckboxListTile>(find.byType(CheckboxListTile)).value,
         isTrue,
       );
-      expect(find.textContaining('ĐANG BẬT'), findsOneWidget);
-      await tester.ensureVisible(find.text('Lưu'));
+      expect(find.textContaining('ĐANG BẬT: xác nhận'), findsOneWidget);
+      await scrollTo(tester, find.text('Lưu'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Lưu'));
       await tester.pumpAndSettle();
@@ -349,7 +401,7 @@ void main() {
         isTrue,
         reason: 'a previously saved ON is restored on open',
       );
-      await tester.ensureVisible(find.text('Cho phép nộp phiếu thu thật'));
+      await scrollTo(tester, find.text('Cho phép nộp phiếu thu thật'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Cho phép nộp phiếu thu thật'));
       await tester.pumpAndSettle();
@@ -359,11 +411,78 @@ void main() {
         tester.widget<CheckboxListTile>(find.byType(CheckboxListTile)).value,
         isFalse,
       );
-      await tester.ensureVisible(find.text('Lưu'));
+      await scrollTo(tester, find.text('Lưu'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Lưu'));
       await tester.pumpAndSettle();
       expect(prefs.store[AppConstants.allowSubmitPaymentStorageKey], false);
+    });
+
+    testWidgets('P6 UX: the voice auto-send switch exists and defaults OFF',
+        (tester) async {
+      final prefs = _FakePrefs();
+      await pump(tester, prefs);
+      await scrollTo(tester, find.text('Tự gửi sau khi nói xong'));
+      expect(find.text('Tự gửi sau khi nói xong'), findsOneWidget);
+      final sw = tester.widget<SwitchListTile>(find.byType(SwitchListTile));
+      expect(sw.value, isFalse);
+      expect(find.textContaining('TẮT: đọc xong'), findsOneWidget);
+      expect(prefs.store.containsKey(AppConstants.voiceAutoSendStorageKey),
+          isFalse, reason: 'nothing persisted until Save');
+    });
+
+    testWidgets('P6 UX: turning the voice switch ON needs no dialog and persists',
+        (tester) async {
+      final prefs = _FakePrefs();
+      await pump(tester, prefs);
+      await scrollTo(tester, find.text('Tự gửi sau khi nói xong'));
+      await tester.pumpAndSettle();
+      // No confirmation dialog: it only changes WHEN the client sends text the
+      // user just spoke — it cannot confirm a proposal or reach /execute.
+      await tester.tap(find.text('Tự gửi sau khi nói xong'));
+      await tester.pumpAndSettle();
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(
+        tester.widget<SwitchListTile>(find.byType(SwitchListTile)).value,
+        isTrue,
+      );
+      expect(find.textContaining('ĐANG BẬT: đọc xong'), findsOneWidget);
+      expect(find.textContaining('vẫn phải bấm Xác nhận'), findsOneWidget,
+          reason: 'the copy must say a payment still needs its own tap');
+
+      await scrollTo(tester, find.text('Lưu'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Lưu'));
+      await tester.pumpAndSettle();
+      expect(prefs.store[AppConstants.voiceAutoSendStorageKey], true);
+      expect(
+        AppSettingsService(prefs: prefs).voiceAutoSend,
+        isTrue,
+        reason: 'the chat screen reads it live on the next final result',
+      );
+    });
+
+    testWidgets(
+        'a switch that did not persist is reported, never called success',
+        (tester) async {
+      // Gateway (string) writes succeed, the switch (bool) write fails — the
+      // old code only looked at the gateway result and said "Đã lưu" while the
+      // switch was silently not stored (review 2026-09-18).
+      final prefs = _FakePrefs(failBoolWrites: true);
+      await pump(tester, prefs);
+      await scrollTo(tester, find.text('Tự gửi sau khi nói xong'));
+      await tester.tap(find.text('Tự gửi sau khi nói xong'));
+      await tester.pumpAndSettle();
+
+      await scrollTo(tester, find.text('Lưu'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Lưu'));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('Không lưu được cài đặt'), findsOneWidget);
+      expect(find.textContaining('Đã lưu —'), findsNothing);
+      expect(AppSettingsService(prefs: prefs).voiceAutoSend, isFalse,
+          reason: 'nothing was stored ⇒ the app must not behave as ON');
     });
 
     testWidgets('invalid URL blocks save; the field shows the error',
@@ -375,7 +494,7 @@ void main() {
       // The new F7-2 section pushed the Save button below the test viewport —
       // a bare tap() misses (silently), which made this test fail for the
       // wrong reason. Scroll it into view first.
-      await tester.ensureVisible(find.text('Lưu'));
+      await scrollTo(tester, find.text('Lưu'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Lưu'));
       await tester.pumpAndSettle();
@@ -394,7 +513,7 @@ void main() {
       await tester.enterText(fields.at(0), 'https://erpn8788.loca.lt');
       await tester.enterText(fields.at(3), '3'); // below floor (5)
 
-      await tester.ensureVisible(find.text('Lưu'));
+      await scrollTo(tester, find.text('Lưu'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Lưu'));
       await tester.pumpAndSettle();
@@ -416,7 +535,7 @@ void main() {
       await tester.enterText(fields.at(2), 'secret');
       await tester.enterText(fields.at(3), '30');
 
-      await tester.ensureVisible(find.text('Lưu'));
+      await scrollTo(tester, find.text('Lưu'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('Lưu'));
       await tester.pumpAndSettle();

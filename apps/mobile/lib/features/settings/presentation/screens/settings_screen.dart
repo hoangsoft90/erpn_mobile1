@@ -36,6 +36,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   /// it, and Save persists whatever state the dialog left.
   bool _allowSubmit = false;
 
+  /// P6 UX (user decision 2026-09-18): "Tự gửi sau khi nói xong" — default OFF.
+  /// No dialog needed: it only changes WHEN the client sends text the user just
+  /// spoke; it cannot confirm a proposal or reach /execute.
+  bool _voiceAutoSend = false;
+
   AppSettingsService get _settings => ref.read(appSettingsServiceProvider);
 
   @override
@@ -50,6 +55,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     _maxItemsController =
         TextEditingController(text: s.maxChatItems.toString());
     _allowSubmit = s.allowSubmitPayment;
+    _voiceAutoSend = s.voiceAutoSend;
   }
 
   @override
@@ -127,7 +133,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     );
     // F7-2: the switch was already confirmed (dialog) when it was turned ON —
     // Save just persists it alongside the rest.
-    await settings.saveAllowSubmitPayment(_allowSubmit);
+    //
+    // Every write counts towards the reported result (review 2026-09-18):
+    // reporting success from saveGateway() alone meant a switch could show as
+    // ON while nothing was persisted — the same "it said saved, but it was
+    // not" class of bug the footer URL once had.
+    final okSubmit = await settings.saveAllowSubmitPayment(_allowSubmit);
+    final okVoice = await settings.saveVoiceAutoSend(_voiceAutoSend);
+    final ok = okGateway && okSubmit && okVoice;
     // Reactivity (review 2026-09-17, found via the chat footer): the service's
     // getters read prefs live, but a plain Provider does NOT notify its
     // watchers when only the underlying values change. Invalidate so every
@@ -145,9 +158,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       ..hideCurrentSnackBar()
       ..showSnackBar(
         SnackBar(
-          backgroundColor: okGateway ? null : scheme.errorContainer,
+          backgroundColor: ok ? null : scheme.errorContainer,
           content: Text(
-            okGateway
+            ok
                 ? 'Đã lưu — áp dụng ngay, không cần khởi động lại.'
                 : 'Không lưu được cài đặt (bộ nhớ thiết bị không khả dụng).',
           ),
@@ -252,6 +265,31 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     color: _allowSubmit
                         ? Theme.of(context).colorScheme.error
                         : Theme.of(context).colorScheme.onSurfaceVariant,
+                    fontSize: 12,
+                  ),
+                ),
+              ),
+              const SizedBox(height: AppSpacing.lg),
+              Text(
+                'Giọng nói',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const SizedBox(height: AppSpacing.xs),
+              // P6 UX: dictation normally FILLS the input and waits for Gửi.
+              // Turning this ON sends the final transcript through the very
+              // same Send path — the user still gets to read the question in
+              // the chat, and a payment proposal still needs its own Xác nhận.
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                value: _voiceAutoSend,
+                onChanged: (on) => setState(() => _voiceAutoSend = on),
+                title: const Text('Tự gửi sau khi nói xong'),
+                subtitle: Text(
+                  _voiceAutoSend
+                      ? 'ĐANG BẬT: đọc xong là gửi câu hỏi ngay — vẫn phải bấm Xác nhận khi thu tiền.'
+                      : 'TẮT: đọc xong chỉ điền vào ô nhập, bạn xem/sửa rồi bấm Gửi.',
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
                     fontSize: 12,
                   ),
                 ),

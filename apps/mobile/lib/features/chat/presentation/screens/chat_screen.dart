@@ -201,9 +201,10 @@ class _EmptyState extends StatelessWidget {
 }
 
 /// P6 (`plan2_final.md` §20): mic → platform STT → the transcript lands in
-/// THIS editable field → the USER reads/edits → presses Send. The mic has no
-/// auto-send and no route to `/execute`; the only request path out of this
-/// widget is the existing [onSend] → `POST /ask`.
+/// THIS editable field → the USER reads/edits → presses Send. There is no
+/// route to `/execute`; the only request path out of this widget is the
+/// existing [onSend] → `POST /ask`. Auto-send exists ONLY as a user opt-in
+/// ("Tự gửi sau khi nói xong", default OFF) and reuses that same [onSend].
 class _InputBar extends ConsumerStatefulWidget {
   const _InputBar({
     super.key,
@@ -230,8 +231,8 @@ class _InputBarState extends ConsumerState<_InputBar> {
   /// 2026-09-18).
   bool _starting = false;
 
-  /// Why the mic could not start (permission / no recognizer / no Vietnamese
-  /// locale). Shown verbatim — a silent no-op is a dead end for the user.
+  /// Why the mic could not start (permission / no recognizer / language
+  /// refusal). Shown verbatim — a silent no-op is a dead end for the user.
   String? _notice;
   bool _noticeIsError = false;
 
@@ -295,16 +296,16 @@ class _InputBarState extends ConsumerState<_InputBar> {
       // and _onSpeechResult ignores results that arrive while not listening.
       setState(() {
         _listening = true;
-        // A SOFT note, never an error. `localeVerified` reports only what the
-        // device's ON-DEVICE locale list contained; the online recognizer
-        // handles Vietnamese fine without it (bug P6: Gboard understood
-        // Vietnamese while this screen claimed the phone had no Vietnamese
-        // recognizer). The mic still works — so the note is an accuracy hint,
-        // not a refusal.
+        // NO locale notice at all (P6 UX, user 2026-09-18). `localeVerified`
+        // only reports whether the device's ON-DEVICE locale list mentions
+        // `vi`, which says nothing about whether Vietnamese works — the online
+        // recognizer handles it (Gboard did, on a phone whose list had no
+        // `vi`). The user cannot act on that difference and dictation works, so
+        // showing it is pure noise. Real refusals still speak for themselves:
+        // denied / unavailable / error_language_* arrive through
+        // [_onSpeechStatus] and [_deniedOrUnavailable].
         _noticeIsError = false;
-        _notice = _speech.localeVerified
-            ? null
-            : 'Máy không liệt kê tiếng Việt trong danh sách nhận dạng — vẫn thử nhận dạng tiếng Việt, nên đọc lại câu chữ trước khi gửi.';
+        _notice = null;
       });
 
       await _speech.listen(onResult: _onSpeechResult, onStatus: _onSpeechStatus);
@@ -344,6 +345,13 @@ class _InputBarState extends ConsumerState<_InputBar> {
     // user just sent would be written back into the field the send cleared
     // (self-review 2026-09-18).
     if (!_listening) return;
+    if (transcript.trim().isEmpty) {
+      // Nothing was actually heard (no speech / timeout). Leave the field
+      // exactly as the user left it — appending an empty transcript would only
+      // add a stray space — but a FINAL result still closes the session.
+      if (isFinal) setState(() => _listening = false);
+      return;
+    }
     final combined = _baseText.trim().isEmpty
         ? transcript
         : '${_baseText.trimRight()} $transcript';
@@ -351,9 +359,36 @@ class _InputBarState extends ConsumerState<_InputBar> {
       text: combined,
       selection: TextSelection.collapsed(offset: combined.length),
     );
-    // Deliberately NO auto-send (deliverable 4): the user must see and edit the
-    // text, then press Send themselves.
-    if (isFinal) setState(() => _listening = false);
+    if (!isFinal) return; // partials only ever update the field
+    setState(() => _listening = false);
+    // P6 deliverable 4 default: no auto-send — the user reads/edits, then
+    // presses Send. Opt-in only via Settings ("Tự gửi sau khi nói xong").
+    _maybeAutoSend();
+  }
+
+  /// P6 UX (user decision 2026-09-18): OPTIONAL auto-send, default OFF.
+  ///
+  /// This method decides exactly ONE thing — did the user opt in. Every other
+  /// precondition already holds by the time it is called, and each has exactly
+  /// ONE home elsewhere (review 2026-09-18: the three copies that used to sit
+  /// here were unreachable — each was removed on its own with the whole suite
+  /// still green, so none of them was doing any work):
+  /// * FINAL + actually heard words + session open ⇒ [_onSpeechResult] only
+  ///   reaches here on a final result of a session it still owned (an empty
+  ///   transcript returns before the field is touched).
+  /// * no request in flight ⇒ the send path itself closes the mic
+  ///   ([didUpdateWidget]), so a request in flight implies `_listening == false`
+  ///   and an earlier return.
+  /// * nothing to send ⇒ the field holds the non-empty transcript, and `_send`
+  ///   drops an empty/whitespace question anyway.
+  /// * a concurrent send ⇒ `ChatController.send` refuses while `isLoading`.
+  ///   That is the layer that actually prevents a double request, which is why
+  ///   a copy of it here could never fail a test.
+  /// It then calls the SAME [onSend] the button calls — there is no second path
+  /// to `/ask`, and nothing here can confirm a proposal or reach `/execute`.
+  Future<void> _maybeAutoSend() async {
+    if (!ref.read(appSettingsServiceProvider).voiceAutoSend) return;
+    await widget.onSend();
   }
 
   @override

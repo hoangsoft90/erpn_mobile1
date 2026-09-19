@@ -35,6 +35,13 @@ class AppConstants {
   static const String allowSubmitPaymentStorageKey =
       'settings_allow_submit_payment_v1';
 
+  /// P6 UX (user decision 2026-09-18): "Tự gửi sau khi nói xong" — default
+  /// OFF, i.e. dictation keeps filling the field and the user presses Gửi.
+  /// When ON, a FINAL speech result sends through the SAME Send path (POST
+  /// /ask). It never confirms a proposal and never touches /execute.
+  static const String voiceAutoSendStorageKey =
+      'settings_voice_auto_send_v1';
+
   /// Pre-filled in the Settings screen for the current dev tunnel (Phase 3
   /// decision: localtunnel of the gateway on port 8788). Only a suggestion —
   /// never silently applied over `--dart-define`.

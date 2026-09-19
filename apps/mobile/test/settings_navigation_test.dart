@@ -102,6 +102,13 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+    // The Settings form is a LAZY ListView taller than the default 800x600
+    // test viewport: anything below the fold is never built, so finders miss
+    // it (this test used to scroll into view and silently miss Save).
+    tester.view.physicalSize = const Size(1000, 2400);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    await tester.pumpAndSettle();
     // Before: footer shows the compiled default.
     expect(find.textContaining('COPILOT_BASE_URL:'), findsOneWidget);
     expect(
@@ -115,8 +122,6 @@ void main() {
       find.widgetWithText(TextFormField, 'Gateway URL'),
       'https://erpn8788.loca.lt',
     );
-    // The F7-2 settings section pushed Save below the test viewport — scroll
-    // it into view first or the tap silently misses (hit-test warning).
     await tester.ensureVisible(find.text('Lưu'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Lưu'));

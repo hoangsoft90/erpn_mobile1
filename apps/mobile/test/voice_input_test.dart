@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:erpn_mobile/app/providers.dart';
+import 'package:erpn_mobile/core/settings/app_settings_service.dart';
 import 'package:erpn_mobile/features/chat/data/copilot_api_client.dart';
 import 'package:erpn_mobile/features/chat/data/speech_service.dart';
 import 'package:erpn_mobile/features/chat/presentation/screens/chat_screen.dart';
@@ -165,10 +166,21 @@ class _Recorder {
       };
 }
 
+/// Minimal stand-in for the Settings screen's voice switch: `voiceAutoSend` is
+/// the only getter the chat screen reads. Persistence of the real key is
+/// covered in `settings_test.dart`.
+class _FakeSettings extends AppSettingsService {
+  _FakeSettings(this.voiceAutoSend) : super(prefs: null);
+
+  @override
+  final bool voiceAutoSend;
+}
+
 Future<void> _pumpChat(
   WidgetTester tester, {
   required _FakeSpeech speech,
   required _Recorder rec,
+  bool voiceAutoSend = false,
 }) async {
   await tester.pumpWidget(
     ProviderScope(
@@ -181,6 +193,10 @@ Future<void> _pumpChat(
           ),
         ),
         speechServiceProvider.overrideWithValue(speech),
+        // Only overridden when a test wants the switch ON — leaving the real
+        // provider in place is what proves "OFF unless the user saved it".
+        if (voiceAutoSend)
+          appSettingsServiceProvider.overrideWithValue(_FakeSettings(true)),
       ],
       child: const MaterialApp(home: ChatScreen()),
     ),
@@ -282,9 +298,11 @@ void main() {
     expect(rec.paths, isEmpty);
   });
 
+  // The real warnings must survive the P6 UX change: same phone whose list has
+  // no `vi`, now hit by a genuine refusal.
   testWidgets('refusal DURING listening is surfaced, not silent',
       (WidgetTester tester) async {
-    final speech = _FakeSpeech();
+    final speech = _FakeSpeech(locale: 'vi_VN', localeIsVerified: false);
     final rec = _Recorder();
     await _pumpChat(tester, speech: speech, rec: rec);
 
@@ -300,11 +318,13 @@ void main() {
         reason: 'the button must leave the listening state');
   });
 
-  // Bug P6: the device's locale list has no `vi` entry (Android lists only the
-  // on-device recognizer) even though the online one understands Vietnamese
-  // perfectly — Gboard did, and the app still claimed Vietnamese was missing.
-  // The mic must WORK, with a soft accuracy hint instead of a refusal.
-  testWidgets('device with no Vietnamese in the locale list → hint, not refusal',
+  // Bug P6 + UX follow-up (user 2026-09-18): the device's locale list has no
+  // `vi` entry (Android lists only the ON-DEVICE recognizer) even though the
+  // online one understands Vietnamese perfectly — Gboard did, and the app
+  // claimed Vietnamese was missing. A soft "not listed" hint was still noise
+  // the user can do nothing about, so the mic must say NOTHING about locales:
+  // it just works, and real refusals (denied / unavailable) still speak up.
+  testWidgets('locale list without vi → NO notice at all, mic just works',
       (WidgetTester tester) async {
     final speech = _FakeSpeech(locale: 'vi_VN', localeIsVerified: false);
     final rec = _Recorder();
@@ -313,12 +333,13 @@ void main() {
     await tester.tap(find.byIcon(Icons.mic_none));
     await tester.pumpAndSettle();
 
-    expect(find.textContaining('không liệt kê tiếng Việt'), findsOneWidget);
+    expect(find.textContaining('liệt kê tiếng Việt'), findsNothing,
+        reason: 'the locale list is not the user\'s business (P6 UX)');
     expect(find.textContaining('không có bộ nhận dạng tiếng Việt'), findsNothing,
-        reason: 'missing from the list ≠ unsupported — bug P6');
-    // It still listens — just hinted.
+        reason: 'missing from the list ≠ unsupported');
+    expect(find.textContaining('bộ nhận dạng tiếng Việt'), findsNothing);
+    // It still listens, and the real feedback is still shown.
     expect(speech.listenCount, 1);
-    // …and the hint must NOT hide the "listening" feedback.
     expect(find.textContaining('Đang nghe'), findsOneWidget);
 
     // The heart of the bug: dictation still fills the field and still does not
@@ -329,7 +350,7 @@ void main() {
     expect(rec.paths, isEmpty);
   });
 
-  testWidgets('a verified Vietnamese locale shows no hint at all',
+  testWidgets('a verified Vietnamese locale shows no hint either',
       (WidgetTester tester) async {
     final speech = _FakeSpeech();
     final rec = _Recorder();
@@ -338,7 +359,7 @@ void main() {
     await tester.tap(find.byIcon(Icons.mic_none));
     await tester.pumpAndSettle();
 
-    expect(find.textContaining('không liệt kê tiếng Việt'), findsNothing);
+    expect(find.textContaining('liệt kê tiếng Việt'), findsNothing);
     expect(find.textContaining('Đang nghe'), findsOneWidget);
   });
 
@@ -493,6 +514,129 @@ void main() {
     rec.gate = null;
     await tester.pumpAndSettle();
     expect(rec.paths, ['/ask']);
+  });
+
+  // ── P6 UX: "Tự gửi sau khi nói xong" — opt-in, default OFF ────────────────
+
+  testWidgets('auto-send OFF by default: a FINAL result still waits for Gửi',
+      (WidgetTester tester) async {
+    final speech = _FakeSpeech();
+    final rec = _Recorder();
+    await _pumpChat(tester, speech: speech, rec: rec);
+
+    await tester.tap(find.byIcon(Icons.mic_none));
+    await tester.pumpAndSettle();
+    speech.emit('chị Lan còn nợ bao nhiêu', isFinal: true);
+    await tester.pumpAndSettle();
+
+    expect(_fieldText(tester), 'chị Lan còn nợ bao nhiêu');
+    expect(rec.paths, isEmpty,
+        reason: 'the default must keep P6 behaviour: read it, then press Gửi');
+  });
+
+  testWidgets('auto-send ON: a final result goes through the SAME Send path',
+      (WidgetTester tester) async {
+    final speech = _FakeSpeech();
+    final rec = _Recorder();
+    await _pumpChat(tester, speech: speech, rec: rec, voiceAutoSend: true);
+
+    await tester.tap(find.byIcon(Icons.mic_none));
+    await tester.pumpAndSettle();
+    speech.emit('chị Lan còn nợ bao nhiêu', isFinal: true);
+    await tester.pumpAndSettle();
+
+    expect(rec.paths, ['/ask'], reason: 'exactly one request, /ask only');
+    expect(rec.bodies.single['text'], 'chị Lan còn nợ bao nhiêu');
+    expect(_fieldText(tester), isEmpty, reason: 'a sent message clears the field');
+  });
+
+  testWidgets('auto-send ON: partial results never send',
+      (WidgetTester tester) async {
+    final speech = _FakeSpeech();
+    final rec = _Recorder();
+    await _pumpChat(tester, speech: speech, rec: rec, voiceAutoSend: true);
+
+    await tester.tap(find.byIcon(Icons.mic_none));
+    await tester.pumpAndSettle();
+    speech.emit('chị Lan');
+    speech.emit('chị Lan còn nợ');
+    await tester.pumpAndSettle();
+
+    expect(rec.paths, isEmpty, reason: 'only a FINAL result may trigger a send');
+    expect(_fieldText(tester), 'chị Lan còn nợ');
+  });
+
+  testWidgets('auto-send ON: an empty final result sends nothing',
+      (WidgetTester tester) async {
+    final speech = _FakeSpeech();
+    final rec = _Recorder();
+    await _pumpChat(tester, speech: speech, rec: rec, voiceAutoSend: true);
+
+    // Text typed BEFORE dictation: a recognition that heard nothing (timeout /
+    // no speech) must not post it as if the user had spoken it.
+    await tester.enterText(find.byType(TextField), 'cho khách');
+    await tester.tap(find.byIcon(Icons.mic_none));
+    await tester.pumpAndSettle();
+    speech.emit('', isFinal: true);
+    await tester.pumpAndSettle();
+
+    expect(rec.paths, isEmpty);
+    expect(_fieldText(tester), 'cho khách', reason: 'the field is left untouched');
+  });
+
+  testWidgets('auto-send ON: a recognizer refusal sends nothing',
+      (WidgetTester tester) async {
+    final speech = _FakeSpeech();
+    final rec = _Recorder();
+    await _pumpChat(tester, speech: speech, rec: rec, voiceAutoSend: true);
+
+    await tester.tap(find.byIcon(Icons.mic_none));
+    await tester.pumpAndSettle();
+    // Permission revoked / recognizer died mid-session: no final result ever
+    // arrives, so nothing may be sent and the refusal must be surfaced.
+    speech.failWith(SpeechStatus.unavailable);
+    await tester.pumpAndSettle();
+
+    expect(rec.paths, isEmpty);
+    expect(find.textContaining('Không dùng được nhận dạng giọng nói'),
+        findsOneWidget);
+  });
+
+  testWidgets('auto-send ON: the only route it can reach is /ask',
+      (WidgetTester tester) async {
+    final speech = _FakeSpeech();
+    final rec = _Recorder();
+    await _pumpChat(tester, speech: speech, rec: rec, voiceAutoSend: true);
+
+    await tester.tap(find.byIcon(Icons.mic_none));
+    await tester.pumpAndSettle();
+    // A WRITE question: auto-send may post it, but it can only ever ASK; the
+    // proposal it comes back with still needs its own Xác nhận tap.
+    speech.emit('thu tiền cho chị Lan 2 triệu', isFinal: true);
+    await tester.pumpAndSettle();
+
+    expect(rec.paths, ['/ask'], reason: 'auto-send must never execute anything');
+    expect(rec.paths.any((p) => p.contains('execute')), isFalse);
+  });
+
+  testWidgets('auto-send ON: a SECOND final result cannot send twice',
+      (WidgetTester tester) async {
+    final speech = _FakeSpeech();
+    final rec = _Recorder();
+    await _pumpChat(tester, speech: speech, rec: rec, voiceAutoSend: true);
+
+    await tester.tap(find.byIcon(Icons.mic_none));
+    await tester.pumpAndSettle();
+    // Recognizers flush more than one final result while tearing down. One
+    // utterance = one request: the first final closes the session, so the
+    // second must be ignored (it would otherwise re-post the same question).
+    speech.emit('chị Lan còn nợ bao nhiêu', isFinal: true);
+    speech.emit('chị Lan còn nợ bao nhiêu', isFinal: true);
+    await tester.pumpAndSettle();
+
+    expect(rec.paths, ['/ask'], reason: 'exactly one request for one utterance');
+    expect(_fieldText(tester), isEmpty,
+        reason: 'the late duplicate must not land back in the field');
   });
 
   testWidgets('a recognizer that fails to open does not wedge the button',

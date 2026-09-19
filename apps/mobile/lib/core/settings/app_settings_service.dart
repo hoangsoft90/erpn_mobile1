@@ -58,6 +58,19 @@ class AppSettingsService {
     }
   }
 
+  /// P6 UX (user decision 2026-09-18): "Tự gửi sau khi nói xong".
+  ///
+  /// Default OFF — absence of the key, a null prefs instance, or a storage
+  /// error all read as disabled, so dictation never sends anything by accident
+  /// (same fail-safe convention as [allowSubmitPayment]).
+  bool get voiceAutoSend {
+    try {
+      return _prefs?.getBool(AppConstants.voiceAutoSendStorageKey) ?? false;
+    } catch (_) {
+      return false; // corrupted storage ⇒ behave as OFF
+    }
+  }
+
   /// The value to PRE-FILL the Settings form with on first open.
   String get gatewayBaseUrlOrDefault =>
       gatewayBaseUrl.isEmpty ? AppConstants.defaultGatewayBaseUrl : gatewayBaseUrl;
@@ -132,6 +145,20 @@ class AppSettingsService {
     }
   }
 
+  /// P6 UX: persists the voice auto-send switch. It only ever controls the
+  /// client-side Send trigger — the Safety Gateway still owns the write path.
+  /// Returns false only when storage is unavailable (caller keeps its state).
+  Future<bool> saveVoiceAutoSend(bool value) async {
+    final prefs = _prefs;
+    if (prefs == null) return false;
+    try {
+      await prefs.setBool(AppConstants.voiceAutoSendStorageKey, value);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// Forgets everything this service stores (used by tests / a future "reset to
   /// default" action). Missing prefs is a no-op.
   Future<void> clear() async {
@@ -143,6 +170,7 @@ class AppSettingsService {
       await prefs.remove(AppConstants.gatewayAuthPasswordStorageKey);
       await prefs.remove(AppConstants.maxChatItemsStorageKey);
       await prefs.remove(AppConstants.allowSubmitPaymentStorageKey);
+      await prefs.remove(AppConstants.voiceAutoSendStorageKey);
     } catch (_) {
       // ignore
     }
