@@ -3,15 +3,23 @@
 > Danh sách này chỉ chứa việc **agent không thể làm thay** (cần tay người, quyết định của chủ dự án,
 > hoặc tài khoản/thiết bị thật). Việc đã xong thì **xoá khỏi file** — không giữ lại để tránh bàn lại.
 > Trạng thái kỹ thuật của app nằm ở `next.md` / `checklist.md`; bằng chứng ở `result*.txt`.
-> Cập nhật lần cuối: **2026-09-19** (sau khi commit nhóm P6 UX `f55d557` + TTS "Đọc câu trả lời"
-> `1401f16` — xem `result55.txt` §9–§11 và `result56.txt`).
+> Cập nhật lần cuối: **2026-09-19** (sau phiên DSH final mini-sprint — `result58.txt`).
 >
-> Đã xoá các mục XONG ở những lần trước: test APK tại điểm bán · bật tunnel · diễn tập kill-switch ·
-> rotate key ERPNext · **thu 150 câu audio** (gate đã bỏ — P6 dùng STT của OS, không cần corpus).
+> Đã xoá các mục XONG ở những lần trước: test APK tại điểm bán · diễn tập kill-switch ·
+> rotate key ERPNext · **thu 150 câu audio** (gate đã bỏ — P6 dùng STT của OS, không cần corpus) ·
+> **verify `thought_signature` với Gemini thật** (agent đã chạy 1 session live 2026-09-19: 3 lượt
+> LLM, `messages:7`, trả đúng 171.800đ/4 chứng từ — `result58.txt` §4).
 
 ---
 
 ## 1. Quyết định chặn việc kỹ thuật (agent KHÔNG tự quyết)
+
+- [ ] **Duyệt commit đợt DSH** (đụng gateway + vùng chặn ghi → agent không tự commit). Hai đợt
+      đang treo, chưa stage gì:
+      **(a)** `result57` — AI mode phía Flutter + gateway DSH (`dsh-gateway.mjs`, route `/dsh/ask`)
+      **(b)** `result58` — pin runtime `@deepseek-ai/dsh@0.1.5-rc.1`, topology remote
+      (`DSH_MODE` + `scripts/dsh-remote-runner.mjs`), 6 script E2E, 7 defect review đã sửa.
+      Message đề xuất (tách 3 cụm) ở `result58.txt` §15 + phần cuối báo cáo phiên.
 
 - [ ] **Bật cài đặt "Cho phép nộp phiếu thu thật" hay không (F7-2).** Cơ chế đã có trong app:
       ⚙️ Settings → checkbox **mặc định TẮT**; bật ON phải qua dialog xác nhận riêng. Khi TẮT,
@@ -33,38 +41,40 @@
 
 ## 2. Việc tay chân (cần người + thiết bị/tài khoản thật)
 
-- [ ] **Cài APK mới nhất lên máy thật và smoke phần mic (P6).** APK đã build + đã xác minh
-      chứa bản fix locale (xem `result55.txt` §8):
-      run [`35367603981`](https://github.com/hoangsoft90/erpn_mobile1/actions/runs/35367603981)
-      · artifact `erpn-chat-debug-apk` (84.169.705 bytes, hết hạn 2026-12-17)
-      · commit `77e2b57` + `bbca7ca`.
-      Cần người làm: **bấm 🎙 trên máy có Gboard tiếng Việt** và xác nhận
-      (a) đọc tiếng Việt ra đúng chữ trong ô nhập, (b) **KHÔNG hiện dòng nào về "tiếng Việt"**
-      nữa (cả câu "không có bộ nhận dạng tiếng Việt" lẫn gợi ý "Máy không liệt kê…" đều đã bỏ),
-      nhưng khi **thu hồi quyền micro** thì vẫn phải hiện "Chưa được cấp quyền micro…",
-      (c) không có gì tự gửi / tự nộp phiếu. Checklist 7 bước: `.plan/phases2/p6-result.md`
-      mục "Human smoke" (mục 7 đã sửa theo bugfix + UX follow-up).
-      ✅ **CÓ APK MỚI HƠN — dùng bản này** thay cho run cũ ở trên: run #20
+- [ ] **Bật lại tunnel trên máy Mac** — việc này đang **chặn** phần "DSH chạy trên Mac" (topology
+      remote, `.plan/dsh_prompt_check.md` §2). Bằng chứng hiện tại (agent đo, không đoán):
+      `curl https://llm9000.loca.lt/v1/models` → **`503 Tunnel Unavailable`**; khi đó router báo
+      `all upstreams failed (tried: mac-custom)` ⇒ mọi phiên dùng `mac-custom` đều 502.
+      Cần người làm: chạy lại `lt -s llm9000 --port <cổng LLM trên Mac>` (URL phải khớp
+      `DSH_REMOTE_URL`/`mac-custom.baseUrl` — nếu localtunnel trả URL khác thì gửi lại URL mới
+      để agent cập nhật config), và tuỳ chọn chạy runner của gateway trên Mac:
+      `DSH_REMOTE_TOKEN=<random ≥16 ký tự> node scripts/dsh-remote-runner.mjs --port 8799`.
+      Sau đó agent chạy lại `bash scripts/check-dsh-topology.sh` để đóng mục BLOCKED này.
+      ⚠️ Đừng để phiên chạy ở máy khác bị hiểu là "đã verify trên Mac" — mọi response đều mang
+      `runtime: local|remote` từ giờ.
+
+- [ ] **Cài APK mới nhất lên máy thật và smoke mic + TTS (P6 + TTS).** APK hiện có = run #20
       [`35414524990`](https://github.com/hoangsoft90/erpn_mobile1/actions/runs/35414524990)
       (`8d2055c`, success, artifact `erpn-chat-debug-apk` **84.213.013 bytes**, hết hạn 2026-12-17) —
-      bản này **đã chứa** cả nhóm P6 UX (`f55d557`: bỏ gợi ý locale + switch "Tự gửi sau khi nói xong")
-      **lẫn TTS** (`1401f16`). ⇒ Test theo APK này, không cần build lại.
-      ⚠️ Lưu ý về bằng chứng: APK mới **chưa được mở ra grep binary** (tải artifact cần token, shell
-      agent không có) — mới chỉ xác minh gián tiếp (commit TTS nằm trong cây đã build + APK tăng
-      43.308 bytes). Nếu muốn chắc ở mức binary, user tự mở APK sau khi tải.
-      Thêm 2 điểm cần thử khi có switch mới: (d) để **TẮT** (mặc định) ⇒ đọc xong **không** tự gửi;
-      (e) bật **ON** trong ⚙️ Settings → đọc một câu hỏi ⇒ câu hỏi **tự được gửi** ngay, và với câu
-      "thu tiền cho…" thì **vẫn phải bấm Xác nhận** trên card (auto-send không bao giờ tự xác nhận).
-      *Đây là exit criteria còn lại của P6 — agent không có mic/thiết bị.*
+      đã chứa nhóm P6 UX (`f55d557`) + TTS (`1401f16`).
+      Cần người làm:
+      (a) **mic**: bấm 🎙 trên máy có Gboard tiếng Việt ⇒ đọc ra đúng chữ trong ô nhập, **KHÔNG**
+      hiện dòng nào về "tiếng Việt", thu hồi quyền micro thì vẫn phải hiện "Chưa được cấp quyền micro…";
+      (b) **switch "Tự gửi sau khi nói xong"**: để TẮT ⇒ đọc xong **không** tự gửi; bật ON ⇒ câu hỏi
+      **tự được gửi**, nhưng câu "thu tiền cho…" **vẫn phải bấm Xác nhận** (auto-send không bao giờ
+      tự xác nhận);
+      (c) **TTS "Đọc câu trả lời"**: ⚙️ bật ⇒ nghe được câu trả lời bằng giọng máy;
+      tắt ⇒ im. Cần xác nhận thêm: máy **không có gói tiếng Việt** ⇒ app **im lặng** (không lỗi);
+      đọc đề xuất thu tiền **không** tự bấm Xác nhận; 2 câu liên tiếp ⇒ giọng sau **ngắt** giọng
+      trước; cuộn/tắt app giữa lúc đọc ⇒ không kẹt UI.
+      Checklist 7 bước: `.plan/phases2/p6-result.md` mục "Human smoke".
+      ⚠️ Bằng chứng APK là **gián tiếp** (shell agent không có token để tải artifact ra grep binary).
 
-- [ ] **Nghe thử TTS "Đọc câu trả lời" trên máy thật** (exit criteria của `.plan/next2/tts-implementation-plan.md`,
-      đã code + test xong ở commit `1401f16`). Cần **APK mới** (build từ `1401f16` trở đi — APK cũ chưa có TTS).
-      Cách thử: ⚙️ Settings → bật **"Đọc câu trả lời"** → hỏi một câu thật qua `/ask` ⇒ phải **nghe được**
-      câu trả lời bằng giọng máy (Google Text-to-Speech `vi-VN`). Tắt switch ⇒ hết giọng đọc, mọi thứ khác
-      không đổi. Cần xác nhận thêm: (a) máy **không có gói tiếng Việt** ⇒ app **im lặng**, câu trả lời vẫn
-      hiển thị bình thường và **không** hiện lỗi nào; (b) đọc đề xuất thu tiền **không** tự bấm Xác nhận —
-      nút "Xác nhận thu tiền" vẫn nằm đó chờ bấm tay; (c) hỏi 2 câu liên tiếp ⇒ giọng sau **ngắt** giọng
-      trước, không chồng tiếng; (d) cuộn/tắt app giữa lúc đang đọc ⇒ không kẹt UI. *Agent không có loa/thiết bị.*
+- [ ] **Smoke chế độ "Phân tích bằng AI" (DSH) trên máy thật** — *chỉ làm được SAU KHI commit +
+      push đợt DSH và có APK mới*: chọn "Phân tích bằng AI" trong app → hỏi một câu đọc (vd "khách
+      … còn nợ bao nhiêu") ⇒ phải trả lời được; hỏi câu ghi ("thu tiền cho …") ⇒ phải hiện câu
+      **từ chối của gateway** (chỉ ĐỌC) và **không** có nút Xác nhận nào.
+      Agent đã verify đường HTTP thật (`result58.txt` §4/§7) nhưng **chưa** verify UI trên thiết bị.
 
 > Ghi chú: **user ERPNext thứ 2** cho P8 (multi-user thật) vẫn chưa có — P8 đã đóng kỹ thuật
 > bằng **fake principal**; chỉ cần tài khoản thật khi nào có ý định chạy nhiều người thật
@@ -78,11 +88,13 @@
 - **Dán 3 giá trị vào GitHub Settings** (COPILOT_BASE_URL / COPILOT_AUTH_USER / COPILOT_AUTH_PASSWORD):
   HOÃN theo quyết định user — không còn là việc treo. APK vẫn dùng được bằng cách nhập ngay trong
   **⚙️ Settings** của app (`https://erpn8788.loca.lt` + auth), không cần build lại.
+  *(Lưu ý: **địa chỉ `erpn8788.loca.lt` cũng do localtunnel cấp** — nếu tunnel của gateway bị tắt/đổi
+  URL thì phải nhập lại URL mới trong Settings; đừng coi là việc agent tự sửa được.)*
 - **Zen (billing-blocked)**: để sau — giữ nguyên config, không bật lại, không xử lý billing.
 - **Gemini free tier**: chấp nhận flaky (429/503 là bình thường của free tier); **không** nâng paid.
 - **Saga/compensation (phase-09 §7)**: chỉ có plan, **chưa duyệt code**. Không tự triển khai.
-- **`thought_signature` với Gemini thật**: chưa verify live (free-tier quota) — thử cơ hội khi
-  thuận tiện, **không** probe trước (bài học result19), chỉ báo khi có kết quả khác 429/503.
+- **P9 (skill WRITE mới hàng loạt)**: gate kỹ thuật đã mở (Golden 0 miss) nhưng **chờ lệnh user**.
+- **`review .project/ai-rules.md`** + **duyệt app icon** (`result43` addendum): chờ user xem.
 
 ---
 

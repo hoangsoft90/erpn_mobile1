@@ -10,27 +10,38 @@
 > Đọc kèm: `mcp-erpnext/LOCAL-TEST.md` (quy trình 3 terminal) ·
 > `docs/demo-payment-draft.md` (demo luồng ghi nháp) ·
 > `docs/device-test-checklist.md` (test APK trên máy thật) ·
-> `faq.md` (các câu hỏi dễ hiểu sai).
+> `.plan/dsh_prompt_check.md` (topology local↔Mac + pin runtime) ·
+> `human.md` (việc chỉ người thật làm được) · `faq.md` (câu hỏi dễ hiểu sai).
 
 ## 0. TL;DR — quickstart
 
 ```bash
-# Cài
-cd mcp-erpnext && npm ci
-cd ../apps/mobile && flutter pub get && dart run build_runner build --delete-conflicting-outputs
-cd ../..
+# ── Cài ──────────────────────────────────────────────────────────────────────
+cd mcp-erpnext && npm ci                                  # skill layer (@casys/mcp-erpnext@3.0.4)
+cd ../apps/mobile && flutter pub get \
+  && dart run build_runner build --delete-conflicting-outputs   # BẮT BUỘC (chưa có *.g.dart)
+cd ../.. && npm install        # (tuỳ chọn) lấy runtime dsh đúng PIN ở package.json root
 
-# Test (không cần credential, không cần mạng)
-PYTHONPATH=src python3 -m unittest discover -s tests      # Python
-cd mcp-erpnext && npm test                               # Node (mcp-erpnext)
-cd .. && node --test scripts/test/*.test.mjs             # Node (LLM router, 19 test)
-cd apps/mobile && flutter test && flutter analyze        # Flutter
+# ── Test — chạy TỪ REPO ROOT, không cần credential, không cần mạng ───────────
+PYTHONPATH=src python3 -m unittest discover -s tests      # Python  — 62 test
+(cd mcp-erpnext && npm test)                             # Node    — 307 test
+node --test scripts/test/*.test.mjs                      # Router  — 19 test
+(cd apps/mobile && flutter test && flutter analyze)      # Flutter — 150 test · analyze 0
 
-# Chạy dev (3 terminal — xem §4)
-python3 -m nlp_service.server                            # T1: nlp 8787
-cd mcp-erpnext && npm run start:ask                      # T2: http-ask 8788
-lt -s erpn8788 --port 8788                               # T3: tunnel (tuỳ chọn)
+# ── Chạy dev (các service — xem §4) ─────────────────────────────────────────
+python3 -m nlp_service.server                            # 8787  NLP tiếng Việt
+(cd mcp-erpnext && npm run start:ask)                    # 8788  gateway (http-ask)
+node scripts/llm-router.mjs --config scripts/llm-router.mock.json   # 8900  LLM router
+lt -s erpn8788 --port 8788                               # 8788  tunnel (tuỳ chọn)
+
+# ── Kiểm tra chế độ AI/DSH (chỉ khi dùng "Phân tích bằng AI") ────────────────
+npm run dsh:check          # pin + entry + version + marker cổng chặn ghi
+npm run check:topology     # phiên sẽ chạy ở đâu: LOCAL_OK | REMOTE_OK | BLOCKED
+npm run dsh:e2e:write-block   # câu lệnh ghi PHẢI bị từ chối trước khi chạy
 ```
+
+> Số test ở trên là **số đo thật** (`result58.txt`), không phải ước lượng — nếu máy bạn ra số
+> khác thì đọc tiếp: có test fail trước khi kịp khoe số.
 
 ## 1. Yêu cầu môi trường
 
@@ -42,14 +53,21 @@ lt -s erpn8788 --port 8788                               # T3: tunnel (tuỳ ch�
 | Flutter | stable (Dart >= 3.x) — chỉ cần khi build/kiểm client | 3.47.2 stable |
 | localtunnel | chỉ khi cần public endpoint cho APK (`npm i -g localtunnel`) | — |
 | Java | 21 (chỉ cho CI build APK; không cần khi dev) | 21 (CI) |
+| dsh runtime | **chỉ khi dùng chế độ "Phân tích bằng AI"** — `@deepseek-ai/dsh@0.1.5-rc.1` (pin ở `package.json` root) | 0.1.5-rc.1 |
 
-Bốn lớp của hệ thống:
+Các lớp của hệ thống (**hai đường tách biệt — đừng trộn**):
 
 ```
-Flutter app / dsh ──► http-ask (Node, 8788) ──► mcp-erpnext skill layer ──► ERPNext
-                              │
-                              └──► nlp_service (Python, 8787) = vietnamese_nlp
+Flutter app  ──►  POST /ask        (deterministic — đường CHÍNH, không bao giờ gọi dsh)
+                        └──► nlp_service (Python, 8787) ──► skill layer ──► ERPNext
+
+Flutter app (chế độ "Phân tích bằng AI", phải bật tay)
+             ──►  POST /dsh/ask     (agent)  ──► dsh runtime ──► llm-router (8900) ──► LLM
+                                     └──► CHỈ đọc; câu lệnh ghi bị TỪ CHỐI ngay ở gateway
 ```
+
+- `/ask` trả lời theo rule/contract (nhanh, tất định, không tốn LLM). `/dsh/ask` là đường
+  **agent** chỉ chạy khi người dùng chọn — và **không bao giờ** là fallback của `/ask`.
 
 - `src/vietnamese_nlp/` — chuẩn hoá tiếng Việt (số tiền, danh xưng, synonym). Thuần
   stdlib, không LLM, không mạng.
@@ -101,6 +119,22 @@ npm i -g localtunnel
 lt -s erpn8788 --port 8788
 ```
 
+### 2.5 dsh runtime — CHỈ khi dùng chế độ "Phân tích bằng AI"
+
+Gateway spawn runtime này cho mỗi phiên agent. Version **được pin** ở `package.json` root
+(trước đây không pin ở đâu cả, và entry bị hardcode vào một máy ⇒ máy khác báo "khả dụng"
+mà không chạy được gì).
+
+```bash
+npm install            # ở REPO ROOT — lấy đúng @deepseek-ai/dsh@0.1.5-rc.1
+npm run dsh:check      # phải in RESULT: PASS và exit 0
+```
+
+`dsh:check` kiểm 6 thứ và **fail rõ ràng** (exit ≠ 0) nếu thiếu: node ≥ 20 · pin trong
+`package.json` · entry tồn tại · version khớp pin · entry **chạy được** (`--version`) ·
+patch có cờ `COPILOT_DSH_CONTEXT=1`. Entry được resolve từ package đã cài, không phải
+đường dẫn cứng; muốn trỏ tay thì set `DSH_ENTRY`.
+
 ## 3. Cấu hình
 
 ### 3.1 `.env` ở repo root (git-ignored)
@@ -124,6 +158,25 @@ Tạo file `.env` tại **repo root** với các **tên biến** sau (giá trị
 | | `ERPN_IDEM_DIR` | không | Đổi thư mục idempotency store |
 | | `LLM_ROUTER_CONFIG` / `LLM_ROUTER_DEBUG` / `LLM_ROUTER_AUDIT_DIR` | không | Cấu hình router |
 | | `GH_REPO_URL` / `GH_TOKEN` | không | Cho tooling GitHub của máy dev — **không** đoạn code nào của app đọc 2 biến này |
+
+Các nhóm biến **chỉ có tác dụng khi bật tính năng tương ứng** (bỏ trống = mặc định an toàn):
+
+| Nhóm | Tên biến | Mặc định khi bỏ trống | Ý nghĩa |
+|---|---|---|---|
+| Chế độ AI (DSH) | `DSH_MODE` | `local` | `local` = spawn trên máy gateway; `remote` = gọi runner trên Mac |
+| | `DSH_ENTRY` / `DSH_PATCH` / `DSH_CWD` | resolve từ package / `mcp-erpnext/dsh-e2e.patch.yml` / repo root | Chỉ định tay runtime + patch + cwd |
+| | `DSH_TIMEOUT_MS` / `DSH_MAX_TEXT` / `DSH_MAX_CONCURRENT` | 180000 / 2000 / 1 | Chặn phiên treo, câu quá dài, chạy chồng |
+| | `DSH_SESSION_TTL_MS` / `DSH_MAX_SESSIONS` / `DSH_HOME_BASE` | 30 phút / 200 / tmpdir | Nhớ ngữ cảnh hội thoại + chặn phình bộ nhớ |
+| | `DSH_REMOTE_URL` / `DSH_REMOTE_TOKEN_ENV` | — / `DSH_REMOTE_TOKEN` | Chỉ dùng khi `DSH_MODE=remote` |
+| E2E (chỉ để test) | `E2E_TARGET` | mock | `real` mới cho phiên dsh chạm ERPNext thật (mặc định **mock** để không ai vô tình đọc dữ liệu thật) |
+| | `E2E_LLM_MODEL` | `gemini/gemini-3.6-flash` → `mac-custom` | `real-gemini` ⇒ chọn `gemini-openai` (provider thật) |
+| Phân quyền (P8) | `COPILOT_USERS` / `COPILOT_DEFAULT_PERMISSIONS` / `COPILOT_COMPANY` | chế độ single-tenant | Nhiều người dùng: JSON quyền tường minh; thiếu company ⇒ TỪ CHỐI khi đa người dùng |
+| Vận hành | `COPILOT_GLOBAL_READ_ONLY` | tắt | Bật `1` ⇒ toàn hệ chuyển read-only (503 `SYSTEM_MAINTENANCE`) |
+| | `COPILOT_RATE_LIMIT` | `on` | `off` để tắt giới hạn tần suất (chỉ khi debug) |
+| | `LEARNING_LOG` / `LEARNING_LOG_DIR` | `on` / `learning-log/` trong repo | Nhật ký học (JSONL) — đặt trong repo, **không** dùng `/tmp` (bị dọn định kỳ) |
+| | `JOB_QUEUE` / `JOB_QUEUE_DIR` / `JOB_QUEUE_*_MS` / `JOB_QUEUE_MAX_ATTEMPTS` | `on` / `job-queue/` trong repo | Hàng đợi retry cho lệnh ghi đã xác nhận khi ERPNext tạm hỏng |
+| Classifier (P3) | `COPILOT_CLASSIFIER` / `_URL` / `_MODEL` / `_API_KEY_ENV` / `_MIN_CONFIDENCE` / `_TIMEOUT_MS` | tắt | Phân loại câu chưa route được (chỉ dùng khi bật rõ) |
+| Mock ERPNext (test) | `MOCK_ERP_STATE` / `MOCK_ERP_FAIL_*` | — | Giả lập lỗi ghi/submit cho test — **không** đặt trong `.env` khi chạy thật |
 
 \* **Quy tắc chọn target (fail-closed, không fallback âm thầm):**
 
@@ -157,9 +210,14 @@ set -a; source ../.env; set +a     # KHÔNG echo giá trị ra màn hình/log
 
 Vai trò 2 upstream chính (xem `_note` trong config):
 
-- **`mac-custom`** (`oc/big-pickle`, key `MAC_LLM_API_KEY`) — **dev/test hàng ngày**,
-  không tốn quota provider. ⚠️ Router **lọc chain theo `model`** ⇒ request phải xin
-  đúng tên model mới tới được upstream này.
+- **`mac-custom`** (`gemini/gemini-3.6-flash`, key `MAC_LLM_API_KEY`) — **dev/test hàng
+  ngày**, không tốn quota provider. ⚠️ Router **lọc chain theo `model`** nên request
+  phải xin đúng tên model mới tới được upstream này.
+  ⚠️ **DRIFT 2026-09-19**: tên model cũ `oc/big-pickle` **đã bị Mac khai tử** (403
+  model-not-found — kiểm bằng `curl /v1/models`). `gemini/gemini-3.6-flash` là id đã
+  verify sống trên endpoint đó VÀ có `tool_calls` thật. Giữ **tiền tố** `gemini/`:
+  router so khớp model CHÍNH XÁC (`llm-router.mjs` `candidates()`), nên nó không bao
+  giờ nhầm với `gemini-3.6-flash` (trần) của `gemini-openai`.
 - **`gemini-openai`** (key `GEMINI_API_KEY`) — **verify tương thích provider thật**
   trước production (`thought_signature`…). Free tier **RPD=20** ⇒ KHÔNG dùng để dev
   hàng ngày; 429/503 trong free tier là bình thường, không phải bug.
@@ -171,6 +229,40 @@ node scripts/llm-router.mjs                      # 127.0.0.1:8900, config mặc 
 node scripts/llm-router.mjs --config scripts/llm-router.e2e.json
 node --test scripts/test/*.test.mjs              # unit test router (19 test)
 ```
+
+### 3.3b DSH agent runtime — PIN + topology (`result58.txt` §3)
+
+Runtime này là **agent** (dsh) mà route `/dsh/ask` spawn; nó KHÔNG nằm trên đường
+`/ask` thường. Version được **PIN ở `package.json` repo root** — đổi version là một
+thay đổi có chủ ý, không phải hệ quả của `npm i`:
+
+```bash
+npm run dsh:check        # bash scripts/check-dsh-runtime.sh — exit code là nguồn sự thật
+npm run check:topology   # LOCAL_OK | REMOTE_OK | BLOCKED (nơi phiên sẽ thật sự chạy)
+```
+
+Entry được resolve từ package ĐÃ CÀI (`resolveDshEntry()`), không hardcode một máy;
+`DSH_ENTRY` luôn thắng khi cần chỉ định tay. `/dsh/health` trả `runtime` + `version`
++ `detail` — đọc được là biết máy này có chạy được hay không.
+
+**Topology local vs remote** (`DSH_MODE`):
+
+| Mode | Cấu hình | Chạy ở đâu |
+|---|---|---|
+| `local` (mặc định) | `DSH_ENTRY`/`DSH_PATCH` (+ pin) | ngay trên máy gateway |
+| `remote` | `DSH_MODE=remote` `DSH_REMOTE_URL=https://…` `DSH_REMOTE_TOKEN=<random>` | trên máy Mac qua tunnel, qua `scripts/dsh-remote-runner.mjs` |
+
+Trên máy Mac (máy sở hữu runtime):
+
+```bash
+DSH_REMOTE_TOKEN=<random ≥16 ký tự> node scripts/dsh-remote-runner.mjs --port 8799
+lt -s dsh8799 --port 8799      # expose ra ngoài
+```
+
+Luật cứng: remote **không bao giờ** hạ cấp về local. Tunnel chết ⇒ từ chối
+(`DSH_REMOTE_ERROR`), KHÔNG chạy local thay — để một lần chạy local không thể bị báo
+cáo nhầm là “đã verify trên Mac”. Mọi response (thành công **và** thất bại) đều mang
+field `runtime: local|remote`.
 
 ### 3.4 Flutter — `--dart-define`
 
@@ -199,26 +291,54 @@ Kiểm tra app đang trỏ đâu: footer trên màn hình chat hiển thị `COP
 | T1 | `python3 -m nlp_service.server` (từ repo root) | 8787 | `{"ready": true, "port": 8787}` |
 | T2 | `cd mcp-erpnext && npm run start:ask` | 8788 | `{"ready":true,"port":8788,"host":"127.0.0.1","auth":false}` |
 | T3 | `lt -s erpn8788 --port 8788` (tuỳ chọn) | — | `your url is: https://erpn8788.loca.lt` |
+| T4 | `node scripts/llm-router.mjs --config scripts/llm-router.mock.json` (tuỳ chọn — chỉ khi dùng chế độ AI) | 8900 | `{"ready":true,"port":8900,...}` |
+| T5 | `node scripts/mock-llm.mjs` (tuỳ chọn — LLM giả 0 quota cho T4) | 8899 | log khởi động |
 
 Thứ tự: **T1 sẵn sàng → T2 sẵn sàng → curl local OK → mở tunnel → curl tunnel OK →
-mới chạy Flutter**. (Chi tiết + biến thể: `mcp-erpnext/LOCAL-TEST.md`.)
+mới chạy Flutter**; chế độ AI thì thêm **T4 (router) sẵn sàng trước khi hỏi**. (Chi tiết:
+`mcp-erpnext/LOCAL-TEST.md`.)
+
+Nạp `.env` cho gateway (nhớ bỏ `ASK_*` khi bind loopback — server **từ chối start** nếu thấy
+chúng trên loopback):
+
+```bash
+set -a; source .env; set +a
+unset ASK_USER ASK_PASSWORD            # chỉ khi bind 127.0.0.1
+cd mcp-erpnext && npm run start:ask
+```
+
+Giữ service sống giữa các block lệnh (bài học: process nền của một block có thể bị dọn khi
+block kết thúc — "nlp_service chết giữa 2 lệnh" trong §6):
+
+```bash
+(setsid nohup python3 -m nlp_service.server > /tmp/nlp.log 2>&1 < /dev/null &)
+(setsid nohup node mcp-erpnext/src/http-ask.mjs --port 8788 > /tmp/gw.log 2>&1 < /dev/null &)
+```
 
 ## 5. Test
 
 ### 5.1 Unit — 4 bộ (không cần credential, không cần mạng)
 
 ```bash
-# Python — vietnamese_nlp (60 test)
+# Python — vietnamese_nlp (62 test)
 PYTHONPATH=src python3 -m unittest discover -s tests     # chạy từ REPO ROOT
 
-# Node — skill layer + http-ask + idempotency (120 test)
+# Node — skill layer + http-ask + idempotency + gateway DSH (307 test / 30 file)
 cd mcp-erpnext && npm test
 
 # Node — LLM router (19 test)
 node --test scripts/test/*.test.mjs      # hoặc: cd scripts && node --test
 
-# Flutter — widget/model/controller (34 test)
+# Flutter — widget/model/controller (150 test) + analyze
 cd apps/mobile && flutter test && flutter analyze
+```
+
+Chạy **một phần** khi đang sửa hẹp (nhanh hơn nhiều so với cả suite):
+
+```bash
+cd mcp-erpnext && node --test test/dsh-gateway.test.mjs     # 38 test của gateway
+cd mcp-erpnext && node --test test/http-ask.test.mjs        # 4 test route + CLI
+cd mcp-erpnext && node --test test/p5-dsh-optin.test.mjs    # bất biến "/ask không gọi dsh"
 ```
 
 > ⚠️ **Python phải chạy từ repo root** với `PYTHONPATH=src`. Chạy từ `apps/mobile`
@@ -260,6 +380,29 @@ curl -s -X POST http://127.0.0.1:8788/execute/cancel \
   -H "Content-Type: application/json" -d "{\"command_id\":\"$CID\"}"
 ```
 
+Hai endpoint của **chế độ AI (DSH)** — đường agent tách biệt, chỉ đọc:
+
+```bash
+# Runtime có chạy được không + đang ở topology nào (không tốn LLM)
+curl -s http://127.0.0.1:8788/dsh/health
+# → {"ok":true,"available":true,"runtime":"local","version":"0.1.5-rc.1","detail":"..."}
+
+# Hỏi bằng agent (tốn 1 phiên LLM; mặc định cần T4 router chạy)
+curl -s -X POST http://127.0.0.1:8788/dsh/ask \
+  -H "Content-Type: application/json" \
+  -d '{"message":"Khách smoke 2026-09-15-p1b-wf1-2 còn nợ bao nhiêu?"}'
+# → {"ok":true,"mode":"dsh","runtime":"local","erpnext_target":"REAL","result":{...}}
+
+# Câu lệnh GHI gửi qua đường AI phải bị TỪ CHỐI NGAY (không spawn phiên nào)
+curl -s -X POST http://127.0.0.1:8788/dsh/ask \
+  -H "Content-Type: application/json" \
+  -d '{"message":"thu tiền cho chị Lan 50 nghìn"}'
+# → {"ok":false,"code":"DSH_WRITE_BLOCKED","refused":true}   (trả về trong ~100ms)
+```
+
+Đọc kết quả cho đúng: `runtime` nói phiên **chạy ở máy nào** (`local`/`remote`), `erpnext_target`
+nói nó **chạm ERPNext thật hay mock** — hai field này là bằng chứng, đừng suy từ tên lệnh.
+
 Qua tunnel thì thêm header `bypass-tunnel-reminder: 1` (không có → localtunnel trả
 trang reminder/502, dễ nhầm là service chết).
 
@@ -286,6 +429,20 @@ node scripts/ask-copilot.mjs --raw "..."              # kèm dòng JSON-RPC thô
 
 LLM mock để smoke 0-quota: `node scripts/mock-llm.mjs` (port `MOCK_LLM_PORT`, mặc định 8899).
 
+**6 script E2E/kiểm tra (exit code = nguồn sự thật, không cần đọc prose):**
+
+| Lệnh | Việc |
+|---|---|
+| `npm run dsh:check` | pin + entry + version + chạy được + marker cổng chặn ghi |
+| `npm run check:topology` | nơi phiên sẽ chạy (local/remote) + cross-check `/dsh/health` |
+| `npm run dsh:e2e:read ["câu hỏi"]` | DSH READ thật qua gateway (mặc định câu smoke; thêm câu thứ 2 làm đối số) |
+| `npm run dsh:e2e:write-block` | câu lệnh ghi phải bị TỪ CHỐI + đo thời gian (chứng minh không spawn) |
+| `npm run check:ask-normal ["câu hỏi"]` | `/ask` không chạm dsh (audit delta = 0) |
+| `COPILOT_BASE_URL=… bash scripts/check-dsh-topology.sh` | kiểm topology của gateway KHÁC (vd cổng remote) |
+
+Env dùng chung cho script: `COPILOT_BASE_URL` (mặc định `http://127.0.0.1:8788`),
+`ASK_USER`/`ASK_PASSWORD` (chỉ khi bind non-loopback), `DSH_E2E_TIMEOUT` (mặc định 240s).
+
 ### 5.5 APK trên máy thật
 
 1. CI: push lên branch → workflow `android-debug-apk` → tải artifact
@@ -303,7 +460,16 @@ LLM mock để smoke 0-quota: `node scripts/mock-llm.mjs` (port `MOCK_LLM_PORT`,
 | `flutter test` fail shader `ink_sparkle.frag` | hết dung lượng đĩa (ENOSPC) làm hỏng build cache | `flutter clean && flutter pub get`; kiểm `df -h` |
 | Python unittest lỗi import | chạy sai cwd | chạy từ repo root với `PYTHONPATH=src` |
 | nlp_service "chết" giữa 2 lệnh | process nền không sống qua block lệnh mới | `curl health` ở đầu block, restart trong **cùng** block, hoặc `setsid` |
-| Request qua router trả 502 `all upstreams failed` | chain bị lọc theo `model` không khớp / upstream đang cooldown | xin đúng tên model (vd `oc/big-pickle`) và thử lại sau cooldown |
+| Request qua router trả 502 `all upstreams failed` | chain bị lọc theo `model` không khớp / upstream đang cooldown | xin đúng tên model (dev: `gemini/gemini-3.6-flash`) và thử lại sau cooldown |
+| Request qua `mac-custom` trả **403 model-not-found** | model đã bị đổi/khai tử ở phía Mac (drift, đã xảy ra 2026-09-19 với `oc/big-pickle`) | gọi `GET https://llm9000.loca.lt/v1/models` xem id thật, rồi sửa `model` trong `llm-router*.json` + patch dsh |
+| `curl https://<tunnel>.loca.lt/v1/models` trả **`503 Tunnel Unavailable`** | tunnel trên máy Mac đã tắt/hết hạn (localtunnel cấp URL động) | người thật phải bật lại `lt` trên Mac; đây là **BLOCKED_EXTERNAL**, không phải lỗi code — không tự đổi config để "chạy tạm" |
+| Phiên `/dsh/ask` trả 502 kèm `all upstreams failed (tried: mac-custom)` | LLM upstream chết (tunnel/model drift/quota) — gateway vẫn đúng | xem dòng audit của router (`llm-router-audit/audit-*.jsonl`): `attempts` + `status` cho biết upstream nào hỏng thật |
+| `/dsh/health` báo `available:false` dù có entry | patch thiếu `COPILOT_DSH_CONTEXT=1` (cổng chặn ghi của child sẽ không bao giờ chạy) | giữ nguyên — **đúng** thiết kế từ chối; thêm cờ vào patch hoặc dùng patch chuẩn |
+| `/dsh/ask` trả `DSH_WRITE_BLOCKED` cho một câu bạn nghĩ là ĐỌC | câu đó bị `routeIntent` xếp vào nhóm ghi (vd có "thu tiền") | đọc lại câu hỏi; nếu thật sự là câu đọc thì đây là bug routing → báo, **đừng** nới cổng chặn |
+| `npm run dsh:check` báo lệch version pin | runtime cài khác `package.json` | `npm install` ở repo root, hoặc set `DSH_ENTRY` trỏ đúng entry |
+| Gateway **từ chối start** với `ASK_USER/ASK_PASSWORD make no sense on a loopback bind` | `.env` có `ASK_*` nhưng đang bind `127.0.0.1` | `unset ASK_USER ASK_PASSWORD` trước khi start (hoặc bind host non-loopback thật) |
+| Script E2E báo `FAIL audit file missing` | `LEARNING_LOG_DIR` sai hoặc service chưa từng chạy | trỏ đúng thư mục (`learning-log/` trong repo) — script **cố ý** fail thay vì in PASS rỗng cho delta `0 → 0` |
+| `curl` tới `mac-custom` lần đầu trả **408/502** | localtunnel chập chờn (đặc tính, có từ 2026-09-15) | gọi lại — audit sẽ ghi `attempts=['mac-custom'] status=408`, không phải lỗi code |
 | Gemini 429/503 | free tier RPD=20 (thiết kế, không phải bug) | dev hàng ngày dùng `mac-custom`; verify provider thật thì chạy 1 lần/ngày |
 | `node --test` treo lâu | socket/timer giữ event loop | chờ dứt điểm; test phải tự đóng server (đã xử lý trong repo) |
 | Idempotency mất sau reboot | `ERPN_IDEM_DIR` trỏ vào `/tmp` (ephemeral) | để mặc định trong repo (`mcp-erpnext/idempotency-store`, gitignored) |
@@ -321,6 +487,12 @@ LLM mock để smoke 0-quota: `node scripts/mock-llm.mjs` (port `MOCK_LLM_PORT`,
   unattended khi đang có dữ liệu thật.
 - **Không lộ secret**: check `.gitignore` (`.env`, `*.g.dart`, `idempotency-store/`,
   `llm-router-audit/`) trước khi commit; tài liệu chỉ ghi **tên biến**.
+- **Chế độ AI (DSH) CHỬ ĐỌC**: câu lệnh ghi bị từ chối ở **gateway, trước khi spawn** (đo
+  được ~100ms so với ~20s của một phiên thật) — không đề xuất, không nút xác nhận, không `/execute`.
+- **Remote không bao giờ hạ cấp về local**: tunnel Mac chết ⇒ trả lỗi, **không** chạy trên
+  máy gateway thay; mọi response (kể cả lỗi) đều mang `runtime` để biết phiên chạy ở đâu.
+- **Không tự ký duyệt vùng tiền/gateway**: agent sửa xong thì **báo + chờ duyệt**, không tự
+  commit (kể cả khi test xanh 100%).
 
 ## 8. Tham chiếu chéo
 
@@ -331,5 +503,7 @@ LLM mock để smoke 0-quota: `node scripts/mock-llm.mjs` (port `MOCK_LLM_PORT`,
 | Test APK tại điểm bán | `docs/device-test-checklist.md` |
 | Câu hỏi dễ hiểu sai / hiểu nhầm | `faq.md` |
 | Quyết định pháp lý Phase 5 (không PII scrub) | `SIGNOFF-phase5-pii.md` |
+| Topology DSH (local↔Mac), pin runtime, 6 script kiểm tra | `.plan/dsh_prompt_check.md` · `result58.txt` |
+| Việc chỉ người thật làm được (tunnel, APK, submit, quyết định) | `human.md` |
 | Bài học lỗi đã trải qua (đọc trước khi sửa) | `.agents/skills/erpn-verify-first/SKILL.md` · `LESSONS_LEARNED.md` |
 | Trạng thái hiện tại + việc tiếp theo | `working.md` · `next.md` · `checklist.md` |

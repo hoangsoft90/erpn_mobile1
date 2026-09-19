@@ -278,8 +278,66 @@ Trạng thái roadmap chi tiết nằm ở `next.md` — file này KHÔNG nhân 
 
 ---
 
+## DSH END-TO-END (`.plan/dsh_end_to_end.md`) — 2026-09-19, ⏳ CHỜ DUYỆT COMMIT
+
+Bảng task + bằng chứng: `.plan/dsh_e2e_tasks.md`; log đầy đủ: **`result57.txt`**.
+
+- [x] **A1/A2 — Audit code DSH + gap** (`result57.txt` §1/§2)
+- [x] **B1–B5 — Gateway backend** (`src/dsh-gateway.mjs` + `POST /dsh/ask`, 23 test):
+      pre-screen WRITE, NLP down ⇒ fail closed, guard patch thiếu `COPILOT_DSH_CONTEXT`
+      (LỖ HỔNG THẬT đã đóng), session TTL/concurrency, error map có copy, audit
+      `request_id`/`conversation_id`/`mode=dsh`
+- [x] **C1–C3 — Flutter AI mode** (`_ModeBar`/`SegmentedButton` default `Chat thường`,
+      không auto, không persist → `dshAsk()`; không card, không `/execute`), 8 test +
+      6 falsify (battery A–F; B/C phải tháo TOÀN BỘ 9 lớp mới đỏ — bài học result47 §6)
+- [x] **D1–D6 — Test & E2E**: D2 mock (`attempts=['mock']`) · **D3 real E2E XANH**
+      (`attempts=['mac-custom']` ×3×200; trả 171.800đ/4 khớp ground truth live) · D4 real
+      WRITE BLOCK (`DSH_WRITE_BLOCKED`, 0.0105s, `has_proposal=false`) · D5 `/ask` tạo 0
+      entry DSH (43→43) · D6 suite **Python 62 · Node 290 · Flutter 150 · analyze 0**
+- [x] **E1–E3 — Tài liệu + FINAL REPORT** (`result57.txt` §12/§13 theo format plan §32)
+- [ ] **Duyệt commit đợt DSH** (đụng gateway + Flutter client — chưa tự commit)
+
+### DSH pin + topology + review fixes + REAL GEMINI — 2026-09-19 (`result58.txt`)
+
+- [x] **6 defect review đã sửa + falsify** (gỡ → đỏ → khôi phục): F1 parser giữ NGUYÊN VĂN
+      câu trả lời nhiều dòng (trước đó chỉ lấy dòng cuối ⇒ mất số tiền) · F2 store bị chặn
+      `maxSessions` · F3 `conversation_id` validate tại biên (400, có test HTTP thật) ·
+      F4 gỡ marker CHẾT `COPILOT_GATEWAY_DSH` + sửa doc sai + đổi test xanh-vô-nghĩa ·
+      F5 `/dsh/health` nói THẬT (entry + patch + marker + version) ·
+      **F6 (LỖI THẬT, test HTTP bắt được): route map TỪ CHỐI an toàn thành 502** ⇒ giám sát
+      hiểu nhầm là lỗi hạ tầng; nay 200 + `refused:true` · F7 token runner lọt tail chẩn đoán
+      ⇒ `redactToken()` (che theo GIÁ TRỊ đang giữ, không theo mẫu)
+- [x] **§3 PIN**: `package.json` root pin `@deepseek-ai/dsh@0.1.5-rc.1` · `resolveDshEntry()`
+      (resolve từ package đã cài, KHÔNG hardcode /tmp của 1 máy) · `dshRuntimeInfo()` ·
+      `scripts/check-dsh-runtime.sh` (`npm run dsh:check`) → PASS, exit code là nguồn sự thật
+- [x] **§2 TOPOLOGY remote**: `DSH_MODE=remote` + `scripts/dsh-remote-runner.mjs` (token bắt buộc,
+      fail-closed, so bằng `timingSafeEqual`, dùng LẠI `buildDshChildEnv`) · remote **không bao giờ**
+      hạ cấp về local (test + falsify) · mọi response (kể cả THẤT BẠI) mang `runtime: local|remote`
+- [x] **E2E remote THẬT (loopback stand-in)**: gateway remote-mode → runner thật qua HTTP → dsh →
+      router → **ERPNext THẬT** ⇒ 171.800đ/4 chứng từ; log runner `run ok in 4390ms`; WRITE block 83ms
+- [ ] **BLOCKED_EXTERNAL §2 hop thật (backend → Mac qua tunnel)**: localtunnel trả
+      `503 Tunnel Unavailable` ⇒ cần người bật lại `lt` trên Mac (KHÔNG phải lỗi code)
+- [x] **§4 REAL GEMINI — PASS**: 1 session duy nhất qua `gemini-openai`, KHÔNG probe trước;
+      `messages:7` (≥2 vòng tool-call), 200 ×3, trả **171.800đ/4** khớp ground truth live
+      ⇒ đây cũng là verify sống đường đa-lượt mà `thought_signature` từng làm gãy
+- [x] **§5/§12 audit bypass** 6 invariant (greps + lệnh thật: `result58.txt` §5) ·
+      **§6 regression A–K** PASS · **§9** 6 script reproducible (exit code thật)
+- [x] Suite cuối: **Python 62 · Node 306** (290→306) **· Flutter 150 · analyze 0**
+- [x] **Drift model mac-custom**: `oc/big-pickle` đã chết (403) → `gemini/gemini-3.6-flash`
+      ở 2 router config + patch dsh + default classifier; docs (`setup-test.md`,
+      `features.md`) đã cập nhật + 2 hàng troubleshooting mới
+- [ ] **Còn treo (không phải DSH)**: verify `gemini-openai` + `thought_signature` live
+      (provider thật, 1 lần/ngày khi thuận tiện) — KHÔNG được tính PASS thay D3
+- [ ] **Việc người thật**: cài APK → bật thử chế độ "Phân tích bằng AI" trên máy thật
+      (UI test dùng envelope 502 mô phỏng; envelope thật đã verify bằng curl)
+
+---
+
 ## Note
 
+- **DSH END-TO-END (2026-09-19) KỸ THUẬT XONG — chờ duyệt commit**; bảng task
+  `.plan/dsh_e2e_tasks.md`, bằng chứng `result57.txt`. Suite mới nhất: **Python 62 ·
+  Node 290 · Flutter 150 · analyze 0**.
 - **Phases2 P0–P8 ĐÃ ĐÓNG (đều đã commit + push)** — suite tham chiếu: Python 62 · Node 267 · **Flutter 107** (bugfix P6 `77e2b57`) · analyze 0. Bước kỹ thuật tiếp = P9 (chờ lệnh user); P10 full + saga §7 chờ duyệt riêng.
 - Đừng báo "xong" bằng lời — mọi claim cần lệnh + output thật (`erpn-verify-first` skill).
 - **Vùng tiền/số/phân quyền: AI KHÔNG tự ký duyệt, KHÔNG tự commit** — chờ user review.

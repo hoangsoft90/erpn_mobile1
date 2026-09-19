@@ -76,6 +76,48 @@ Lộ trình production trong `.plan/phases2/` (nguồn kiến trúc: `.plan/plan
 - `docs/dsh-optin.md` (2 chế độ + lệnh smoke); review vòng 2 fix 2 lỗi (`DSH_WRITE_BLOCKED` thiếu trong taxonomy P2; bị xếp nhầm bucket `error`)
 - Suite: **Node 212** · `result49.txt`
 
+### DSH END-TO-END (plan `.plan/dsh_end_to_end.md`) ✅ KỸ THUẬT XONG — CHỜ DUYỆT COMMIT
+
+- Checklist thi hành: `.plan/dsh_e2e_tasks.md` (A–E, mỗi mục [x] kèm bằng chứng) ·
+  toàn bộ log: `result57.txt` (§1–§13).
+- **Backend**: `src/dsh-gateway.mjs` + route `POST /dsh/ask` — pre-screen WRITE ở cổng
+  (NLP down ⇒ fail closed), guard chống patch thiếu `COPILOT_DSH_CONTEXT` (LỖ HỔNG THẬT
+  tìm thấy khi chạy thật), session TTL, concurrency, error map có copy tiếng Việt.
+  23 test (`test/dsh-gateway.test.mjs`).
+- **Flutter (AI mode)**: `_ModeBar` + `SegmentedButton` (default `Chat thường`, KHÔNG auto,
+  KHÔNG persist) → `dshAsk()`; trạng thái đang phân tích; câu từ chối của gateway hiện
+  nguyên văn; không card, không `/execute`. 8 test.
+- **Real E2E XANH**: `/dsh/ask` → dsh runtime thật → router → **mac-custom (LLM thật)** →
+  `copilot_ask` → NLP → **ERPNext THẬT**: trả **171.800đ/4 chứng từ**, khớp ground truth
+  lấy live; audit `attempts=['mac-custom'] status=200` ×3.
+- **DRIFT môi trường 2026-09-19**: model `oc/big-pickle` của mac-custom **đã bị Mac khai
+  tử** (403) → đổi sang `gemini/gemini-3.6-flash` (verify live + `tool_calls` thật) ở
+  cả 2 router config + patch dsh + default classifier. Chi tiết `result57.txt` §8.
+- **BUG THẬT sửa được (có sẵn từ Phase 3, không phải của DSH)**: ghi `state` sau khi
+  provider bị dispose ⇒ `UnmountedRefException` (user rời màn hình giữa lúc chờ) — đã
+  thêm 9 guard `ref.mounted` + test hồi quy cho cả 2 đường. `result57.txt` §10.
+- Suite: **Python 62 · Node 290 · Flutter 150 · analyze 0** (mốc 2026-09-19).
+
+### DSH FINAL MINI-SPRINT (plan `.plan/dsh_prompt_check.md`) ✅ KỸ THUẬT XONG — CHỜ DUYỆT COMMIT
+
+- Bằng chứng đầy đủ: **`result58.txt`** (§1 audit → §15 final verdict, bảng PASS/BLOCKED).
+- **§3 PIN runtime**: `package.json` root pin `@deepseek-ai/dsh@0.1.5-rc.1`;
+  `resolveDshEntry()` resolve từ package đã cài (trước đó HARDCODE `/tmp/dsh-run/...`
+  của một máy ⇒ máy khác "khả dụng" mà không chạy được gì); `npm run dsh:check`.
+- **§2 TOPOLOGY** `DSH_MODE=local|remote` + `scripts/dsh-remote-runner.mjs` (chạy trên
+  Mac): token bắt buộc/fail-closed, dùng lại `buildDshChildEnv`; remote **không bao giờ**
+  hạ cấp về local; response (kể cả thất bại) mang `runtime`.
+- **§4 REAL GEMINI PASS**: 1 session qua `gemini-openai` ⇒ **171.800đ/4 chứng từ**,
+  audit `messages:7` + `status 200` ×3 (≥2 vòng tool-call) ⇒ verify sống đường đa-lượt
+  mà `thought_signature` từng làm gãy.
+- **6 defect review đã sửa + 4 falsify**, nặng nhất: **F6 route map từ chối an toàn thành
+  502** (giám sát hiểu nhầm thành lỗi hạ tầng) và **F1 parser cắt mất câu trả lời nhiều dòng**.
+- **6 script E2E** (`dsh:check` · `check:topology` · `dsh:e2e:read` · `dsh:e2e:write-block`
+  · `check:ask-normal`) — exit code là nguồn sự thật.
+- ⚠️ **BLOCKED_EXTERNAL**: hop thật backend → Mac qua tunnel không verify được
+  (`503 Tunnel Unavailable`) — **việc người thật**: bật lại `lt` trên Mac.
+- Suite: **Python 62 · Node 306 · Flutter 150 · analyze 0** (mốc 2026-09-19).
+
 ### P7 (phases2) — Background job queue ✅ ĐÃ COMMIT `3e6240a` (đã push)
 
 - `src/job-queue.mjs`: WRITE đã confirm mà ERP tạm down (verdict `retry_same_command_id`) → QUEUED; replay qua ĐÚNG `runExecute` (không có write path thứ hai); bounded retry; crash-recovery `RUNNING → RETRYING`; `release()` khi cancel; `completed()` cho report

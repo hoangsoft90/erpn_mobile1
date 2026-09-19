@@ -72,6 +72,59 @@
    (hình dạng dữ liệu vào), không chỉ **giá trị cuối đã bị lọc**, và falsify TỪNG lớp
    ĐỘC LẬP.
 
+8. **Từ chối chính sách bị báo nhầm thành lỗi hạ tầng** — result58 §1-F6: `dshGatewayAsk`
+   khai báo từ chối cổng AN TOÀN là `httpStatus:200` (đó là CÂU TRẢ LỜI, gateway chưa
+   chạm runtime), nhưng route chỉ biết 400/429 rồi `else → 502` ⇒ `DSH_WRITE_BLOCKED`
+   đi ra với **502**, giám sát/retry không phân biệt được với tunnel chết. Đọc code
+   từng nhánh riêng thì cả hai đều "hợp lý"; chỉ **gọi thật** rồi đọc `http_code` mới
+   thấy. Luật: quyết định chính sách mang **đúng status của nó**, và mọi route phải được
+   kiểm bằng 1 request THẬT ở tầng HTTP, không chỉ bằng unit test hàm.
+
+9. **"Chạy ở đâu" không phải field máy đọc được ⇒ dễ báo cáo sai máy** — result58 §2:
+   trước đợt này response không có `runtime`; hop thật sang Mac BLOCKED (tunnel 503)
+   trong khi topology remote vẫn chạy được với runner THẬT trên loopback ⇒ nguy cơ
+   một lần chạy local/stand-in bị kể lại thành "đã verify trên Mac". Đã thêm
+   `runtime: local|remote` vào CẢ response thành công VÀ thất bại + runner ghi log
+   riêng + `check-dsh-topology.sh` in `LOCAL_OK|REMOTE_OK|BLOCKED`. Luật: khi hệ có
+   nhiều nơi thực thi, mỗi kết quả phải tự khai nơi đã chạy (kể cả khi lỗi); hop không
+   chạy được thì ghi **BLOCKED_EXTERNAL + bằng chứng nguyên nhân** và nói rõ cái gì
+   ĐÃ được chứng minh (đường code/auth/parse), không đẩy thành "PASS".
+
+10. **Xanh vô nghĩa ở tầng thấp + state toàn cục giữa các test** — result58: (a) test
+   session-continuity gọi thẳng `runDshAsk` (store rỗng) trong khi store được ghi ở
+   `dshGatewayAsk` ⇒ không kiểm gì; (b) biến module-level `NLP_SERVICE_PORT` đọc một
+   lần lúc import, test sau nói chuyện với cổng đã chết ⇒ cổng fail-closed trả **SAI
+   mã lỗi**. Luật: test hành vi phải gọi đúng tầng ghi state (hoặc seed tường minh),
+   và khi thêm test sau vào file đã import module giữ config thì **re-point seam** +
+   restore trong `finally`; đọc đúng `code` trả về trước khi kết luận đỏ vì gì.
+
+11. **Hardcode đường dẫn runtime của một máy ⇒ máy khác "khả dụng" mà không chạy được** —
+   result58 §3: entry dsh nằm ở `/tmp/dsh-run/...` và `/dsh/health` chỉ `existsSync`.
+   Luật: resolve theo cách node vẫn resolve (`createRequire` → `pkg.bin`), PIN version
+   vào manifest, báo version ra health, và mọi script kiểm tra phải trả **exit code**.
+
+12. **Secret mình ĐANG GIỮ thì che theo GIÁ TRỊ, không theo mẫu** — result58 §1-F7: bộ
+   scrub generic không nhận ra token runner nên nó lọt vào tail chẩn đoán. Luật: che
+   bằng cách thay chính giá trị đã biết (`redactToken`) rồi mới scrub theo mẫu như lớp 2.
+
+13. **Một route thiếu lưới bắt lỗi ⇒ chết cả process** — result58 §16 (review vòng 2):
+   `/dsh/health` là route DUY NHẤT không `try/catch` trong `http-ask.mjs`; throw trong
+   async listener = unhandled rejection = Node exit (lỗi cùng dạng đã giết gateway ở
+   result44 §3). Falsify: gỡ `try/catch` ⇒ **cả 4 test trong file ĐỎ** (process chết),
+   khôi phục ⇒ 4/4 xanh. Luật: sau khi thêm/bọc route, `grep 'req.method ==='` kiểm
+   **TOÀN BỘ** nhánh có cùng lớp bảo vệ; fault-injection qua seam hợp lệ (`env`,
+   `fetchImpl`, `principal`) để chứng minh — ĐỎ phải là process/file test chết.
+
+14. **Nhân bản cơ chế mà quên nhân bản GIỚI HẠN của nó** — result58 §16: spawn local đã
+   cap `stdout`/`stderr`, runner từ xa thì không ⇒ session hoang ăn hết RAM máy Mac.
+   Luật: khi sao chép một cơ chế sang chỗ thứ hai, **đối chiếu hai bản có chủ đích**
+   (cap · timeout · refusal · dọn temp), không chỉ đối chiếu phần "chạy được".
+
+15. **Bằng chứng có thể VẮNG ⇒ delta trở thành oracle rỗng** — result58 §16:
+   `check-ask-normal.sh` in `RESULT: PASS` khi file audit không tồn tại ("0 → 0").
+   Luật: mọi khẳng định dạng "không tăng/không xuất hiện" phải khẳng định **NGUỒN
+   BẰNG CHỨNG TỒN TẠI** trước, và đã từng chứng minh nó CÓ THỂ tăng.
+
 ## Top bài học theo thiệt hại (mỗi cái tốn ≥ 1 phiên hoặc chạm tiền)
 
 - **Đọc source trước khi đoán API/tool name** — 3 lần viết lại guard/skill chỉ vì
@@ -346,3 +399,20 @@ Bối cảnh: user yêu cầu "review code những gì vừa làm" cho tính nă
   1–3s) nghĩa là khi switch BẬT, **ngập ngừng giữa câu** = "đọc xong" ⇒ gửi câu nửa vời. Hành vi
   đúng đặc tả ("final ⇒ gửi") nhưng hậu quả có thể ngoài ý user ⇒ ghi vào `human.md` §1 kèm 3 lựa
   chọn (a/b/c) và **không tự đổi**.
+
+## Đợt DSH END-TO-END (2026-09-19) — 3 bài học mới
+
+- **"Không thấy trong log tôi đang xem" ≠ "không xảy ra".** `/dsh/ask` trả 502; tôi đọc stdout của
+  router (chỉ có dòng `ready`) và kết luận sai "router không nhận request". File audit JSONL
+  (đường dẫn in ngay ở dòng `ready`) mới là nơi ghi request — và nó ghi **có**: `attempts=['mac-custom']
+  status=408` (localtunnel timeout). Luật: đọc dòng `ready` để lấy **đường dẫn audit thật**, đối
+  chiếu ở đó trước khi phát biểu về luồng request.
+- **Falsify một lớp trong hệ nhiều lớp guard ⇒ XANH là kết quả ĐÚNG, không phải test hỏng.** Gỡ 1
+  guard `ref.mounted` vẫn xanh vì còn lớp sâu hơn (`_append`/`_recordFailure`). Muốn chứng minh
+  tập hợp guard có tác dụng: đếm số lớp, tháo **hết** ⇒ 2 test dispose ĐỎ (`UnmountedRefException`)
+  ⇒ khôi phục xanh lại. Ghi cả hai vế vào bằng chứng.
+- **Ghi `state` sau async gap khi provider auto-dispose = crash thật, dễ trúng hơn khi phiên dài.**
+  `chatControllerProvider` (`@riverpod`) bị dispose khi user rời màn hình; response về sau ghi
+  `state` ⇒ `UnmountedRefException`. Lỗi có sẵn ở đường `/ask` từ Phase 3, DSH chỉ mở rộng cửa sổ
+  (~20s). Sửa: `if (!ref.mounted) return false;` sau mọi await + test dispose cho **cả hai** đường
+  (đừng chỉ sửa đường mình đang làm).

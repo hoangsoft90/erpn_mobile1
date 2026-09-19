@@ -1,0 +1,442 @@
+========================================================================
+RESULT 57 — DSH END-TO-END (plan: .plan/dsh_end_to_end.md; checklist:
+.plan/dsh_e2e_tasks.md). Luật PASS của user: KHÔNG tin báo cáo bằng lời —
+mỗi task PASS phải có (1) dòng code thật (file + dòng, trích nguyên văn)
+VÀ (2) lệnh + output test thật. Task không đạt ⇒ BLOCKED/FAIL, không gọt.
+Timestamp: 2026-09-19
+========================================================================
+
+== 1. A1 — AUDIT CODE DSH HIỆN CÓ (đọc thật, trích nguyên văn) ==
+
+Files audited (read in this session):
+  mcp-erpnext/src/dsh-optin.mjs (79 lines, full)
+  mcp-erpnext/docs/dsh-optin.md (46 lines, full)
+  mcp-erpnext/test/p5-dsh-optin.test.mjs (130 of 166 lines read)
+  mcp-erpnext/src/copilot-server.mjs (sections 95-174, 248-387, 760-834)
+  mcp-erpnext/src/http-ask.mjs (sections 1-130, 228-302, 560-719)
+  mcp-erpnext/src/router.mjs (60-128)
+  mcp-erpnext/src/kill-switch.mjs (1-60), rate-limit.mjs (1-70),
+    learning-log.mjs (130-197), dsh.cordis.patch.yml (1-40),
+    dsh-e2e.patch.yml (40-74), scripts/llm-router.mjs (1-150),
+    scripts/llm-router.mock.json (full), scripts/mock-llm.mjs (1-100)
+  apps/mobile: copilot_api_client.dart (30-156), chat_controller.dart (1-120),
+    chat_screen.dart (1-249), chat_models.dart (1-120)
+  .agents/skills/erpn-dsh-setup/SKILL.md (full 163 — công thức cài dsh
+    ĐÃ VERIFY result15)
+
+Existing DSH infrastructure (verbatim evidence):
+
+[1] dsh-optin.mjs:28-33 — the opt-in gate env contract:
+    > export const DSH_CONTEXT_ENV = "COPILOT_DSH_CONTEXT";
+    > export function isDshContext(env = process.env) {
+    >   return String(env[DSH_CONTEXT_ENV] ?? "").trim() === "1";
+    > }
+
+[2] dsh-optin.mjs:43-60 — WRITE block inside the copilot (D3/D8):
+    > export function blockedInDshContext(route) {
+    >   if (!route) return false;
+    >   if (route.forbidden) return false;
+    >   return route.group === "payment_write";
+    > }
+    > export const DSH_WRITE_BLOCKED_CODE = "DSH_WRITE_BLOCKED";
+
+[3] copilot-server.mjs:354-360 — where the gate fires (AFTER routing,
+    BEFORE skill factory):
+    > if (isDshContext(opts.env) && blockedInDshContext(route)) {
+    >   return withUncertainty(dshWriteBlockedAnswer(rawText));
+    > }
+
+[4] copilot-server.mjs:765-776 — the ONE tool dsh sees (MCP stdio):
+    > /** The one tool dsh sees. */
+    > async function copilotAsk(args) {
+    >   ...
+    >   const structured = await answerQuestionLogged(rawText.trim(), {
+    >     pickedEntityId: typeof args?.entity_id === "string" ? args.entity_id : null,
+    >     env: process.env, // P5: dsh-context detection follows the process env
+    >   });
+
+[5] dsh-e2e.patch.yml:47-74 — dsh LLM config: router provider at
+    127.0.0.1:8900/v1, model chọn bằng env (E2E_LLM_MODEL), MCP row
+    COPILOT_DSH_CONTEXT=1 (dòng 25-29, verbatim trong dsh.cordis.patch.yml:
+    > COPILOT_DSH_CONTEXT: '1'
+
+[6] erpn-dsh-setup SKILL.md:26-35 — headless invocation ĐÃ VERIFY result15:
+    > DSH_HOME=/tmp/dsh-home-<mới> DSH_TELEMETRY_MODE=DISABLED \
+    >   node /tmp/dsh-run/node_modules/@deepseek-ai/dsh/lib/bin.js \
+    >   --profile headless --patch <file>.patch.yml \
+    >   "câu hỏi tiếng Việt"                    # prompt là POSITIONAL ARG
+    + "DSH_HOME PHẢI là thư mục MỚI SẠCH mỗi lần" (skill:36)
+    + transcript headless CHỈ in reasoning + câu trả lời cuối (skill:96-98)
+
+[7] http-ask.mjs:238-256 — auth middleware kế thừa được:
+    > const server = http.createServer(async (req, res) => {
+    >   if (!bindPolicy.loopback && !basicAuthOk(req, bindPolicy)) { ... 401 ... }
+    + rate limiting: /ask charges read bucket BEFORE pipeline (571-596);
+    + /ask deadline 120s (616-633); learning-log correlation (628-633).
+    + NOTE: http-ask.mjs KHÔNG hề set COPILOT_DSH_CONTEXT (p5 test line
+      76-80 asserts this) — gateway dùng file riêng, không đụng /ask.
+
+[8] kill-switch.mjs:53-63 — isGlobalReadOnly() reuse được cho DSH gateway.
+
+[9] DSH on npm: `npm view @deepseek-ai/dsh version` → 0.1.5-rc.2.
+    Plan §17 yêu cầu pin: pin bằng mechanism INSTALL (dsh-gateway.mjs nhận
+    dshBin/dshEntry qua env/opts; setup doc pin 0.1.5-rc.1 — version này
+    đã verify chạy thật trong project; rc.2 chưa từng được verify).
+
+== 2. A2 — FLOW THỰC TẾ HIỆN TẠI + GAP CHÍNH XÁC ==
+
+Flow HIỆN TẬY (audit-verified):
+
+  Flutter Chat ──POST /ask──► http-ask.mjs :8788
+                                 └─ answerQuestion() → NLP → Rule Router/
+                                    Classifier → Skill → Safety → MCP → ERPNext
+  [KHÔNG có đường nào từ Flutter tới DSH]
+
+  DSH chỉ chạy khi NGƯỜI VẬN HÀNH gõ tay:
+  dsh web --patch dsh.cordis.patch.yml        (docs/dsh-optin.md:9)
+
+GAP (mỗi gap chỉ vào dòng code):
+
+  G1. Không có SERVER-SIDE gateway mà Flutter gọi được: http-ask.mjs chỉ
+      expose /health /ask /execute /execute/cancel /jobs (http-ask.mjs:16-22).
+      Flutter không có cách nào kích hoạt DSH (plan §0: "Flutter Chat App
+      chưa có entry point").
+  G2. Không có đường code nào SPAWN dsh headless: grep spawn toàn src/ →
+      chỉ client.mjs:24 (spawn MCP server) — dsh headless chỉ chạy tay
+      (skill:26-35).
+  G3. Flutter không có mode selector: chat_screen.dart chỉ có AppBar
+      settings/clear + _InputBar; không widget nào chọn DSH.
+  G4. Không có session/conversation mapping, không có concurrency guard
+      cho DSH (plan §6/§20).
+  G5. WRITE pre-screen ở CỔNG DSH chưa tồn tại (block hiện có chỉ chạy
+      BÊN TRONG copilot-server child [3] — vẫn đáp ứng plan §10, nhưng
+      gateway nên chặn TRƯỚC khi tốn dsh runtime; và phải có test riêng
+      ở cổng).
+
+KHÔNG phải gap (đã có, không được viết lại — plan §2/§30):
+  - D3/D8/D2 law + DSH_WRITE_BLOCKED: dsh-optin.mjs + p5 test.
+  - dsh runtime config 2 patch files + LLM Router + mock-llm.
+  - Auth/rate/observability surfaces: http-ask.mjs pattern (dùng lại).
+  - Learning log taxonomy (DSH_WRITE_BLOCKED đã có copy P2 — p5 test:70-77).
+
+== 3. B1-B5 — GATEWAY BACKEND (ĐÃ XONG, có code + test thật) ==
+
+Files (mới/sửa):
+  mcp-erpnext/src/dsh-gateway.mjs (mới) — 1 đường DSH duy nhất:
+    pre-screen WRITE (dùng lại routeIntent + normalizeText), spawn dsh headless
+    (fresh DSH_HOME mỗi call, env trừ secrets), session store TTL, concurrency
+    (metering TÁCH khỏi limit), timeout, error mapping, audit learning-log.
+  mcp-erpnext/src/http-ask.mjs — route POST /dsh/ask (auth/rate/kill-switch dùng lại).
+  mcp-erpnext/src/copilot-server.mjs — export normalizeText (tái dùng, không viết lại)
+    + test seam __setNlpPortForTest (pattern __resetSessionContext đã có).
+  mcp-erpnext/test/dsh-gateway.test.mjs (mới) — 23 test.
+
+Lệnh + output thật:
+  $ cd mcp-erpnext && node --test test/dsh-gateway.test.mjs
+  ℹ tests 23
+  ℹ pass 23
+  ℹ fail 0
+
+== 4. D3 — REAL E2E (dsh → LLM Router → LLM THẬT → copilot_ask → ERPNext THẬT) ==
+
+GROUND TRUTH lấy LIVE từ ERPNext thật qua đường đọc deterministic (/ask),
+plan §15 nói chỉ dùng expected cũ nếu còn đúng — đã kiểm lại, còn đúng:
+  "Khách smoke 2026-09-15-p1b-wf1-2 còn nợ bao nhiêu"
+    → answer: Khách smoke 2026-09-15-p1b-wf1-2 còn nợ 171.800đ (4 chứng từ chưa thanh toán).
+    → outstanding_vnd=171800 | open_invoices=4
+  "Khách làm tròn 2026-09-15-p1b-wf1-2 còn nợ bao nhiêu"
+    → answer: Khách làm tròn 2026-09-15-p1b-wf1-2 còn nợ 457.875đ (1 chứng từ chưa thanh toán).
+    → outstanding_vnd=457875 | open_invoices=1
+
+Topology chạy thật (đã kiểm từng process bằng ps + /health):
+  nlp_service :8787 · http-ask :8788 (E2E_TARGET=real, env .env) · llm-router :8900
+  (--config scripts/llm-router.e2e.json) · dsh runtime /tmp/dsh-run/.../dsh/lib/bin.js
+
+LỆNH + OUTPUT THẬT (D3, qua gateway thật):
+  $ curl -s -m 280 -X POST http://127.0.0.1:8788/dsh/ask -H "Content-Type: application/json" \
+      -d '{"message":"Khách smoke 2026-09-15-p1b-wf1-2 còn nợ bao nhiêu?","conversation_id":"conv-d3-real-2"}'
+  http_code=200 total=19.744912s
+  {
+   "ok": true, "mode": "dsh", "conversation_id": "conv-d3-real-2",
+   "request_id": "8f2ec7ba-8d02-49e8-9e42-baebbe53d734",
+   "dsh_session_id": "0f8ad029-ad2d-4360-8f83-7a0f1646232b",
+   "erpnext_target": "REAL",
+   "result": {"answer": "Khách **smoke 2026-09-15-p1b-wf1-2** hiện còn nợ **171.800đ** (gồm 4 chứng từ chưa thanh toán)."}
+  }
+  ⇒ KHỚP CHÍNH XÁC ground truth (171.800đ / 4 chứng từ).
+
+BẰNG CHỨG LLM THẬT ĐÃ ĐI QUA ROUTER (audit JSONL, trích nguyên dòng, UTC):
+  llm-router-audit/audit-2026-09-19T04-06-52.jsonl
+    2026-09-19T04:08:29.047Z | model=gemini/gemini-3.6-flash attempts=['mac-custom'] status=408
+    2026-09-19T04:08:29.470Z | ... attempts=['mac-custom'] status=408
+  llm-router-audit/audit-2026-09-19T04-09-14.jsonl
+    2026-09-19T04:09:32.999Z | attempts=['mac-custom'] status=200   ← chạy tay (1 khách)
+    2026-09-19T04:09:44.194Z | attempts=['mac-custom'] status=200
+    2026-09-19T04:09:51.967Z | attempts=['mac-custom'] status=200
+    2026-09-19T04:10:15.158Z | attempts=['mac-custom'] status=200   ← /dsh/ask (2 khách)
+    2026-09-19T04:10:18.538Z | attempts=['mac-custom'] status=200
+    2026-09-19T04:10:30.882Z | attempts=['mac-custom'] status=200
+  ⇒ 3 round-trip / 1 câu hỏi (LLM gọi tool qua MCP rồi tổng hợp) — không phải mock
+    (mock router là file khác: llm-router.mock.json, KHÔNG dùng ở đây).
+
+  stderr của dsh (chạy tay, cùng env gateway) — bằng chứng target thật:
+    [copilot] ERPNext target: REAL -> prevail-pantyhose-overvalue.ngrok-free.dev
+    [mcp-erpnext] Registered 125 tools ... stdio mode ready
+
+SỰ CỐ THẬT #1 (đã truy nguyên, KHÔNG đoán): lần /dsh/ask đầu tiên trả 502
+  DSH_SESSION_FAILED. Ban đầu tôi kết luận sai "router không nhận request" —
+  SAI, đính chính bằng audit: request CÓ tới router, attempts=['mac-custom'],
+  status=408 (localtunnel chập chờn — đã ghi nhận từ 2026-09-15). Retry là qua.
+  Đây là đặc tính tunnel, không phải lỗi code gateway.
+
+SỰ CỐ THẬT #2 (parity, ghi trung thực): câu hỏi 2 phần "...khách smoke... và
+  khách làm tròn..." → DSH trả về khách làm tròn (457.875đ); đường deterministic
+  /ask cho CÙNG câu đó trả về khách smoke (171.800đ). Hai đường CHỌN KHÁC PHẦN
+  của câu 2 phần (rule router lấy entity đầu; LLM trả lời phần nó chọn). Cả 2 số
+  đều ĐÚNG ground truth; đây là khác biệt lựa-chọn-entity khi câu hỏi có 2 entity,
+  KHÔNG phải DSH ghi/sửa gì và KHÔNG phải lỗi tiền. Ghi lại để không ai đọc thành
+  "DSH trả sai số".
+
+== 5. D4 — REAL WRITE BLOCK QUA GATEWAY (LLM thật) ==
+
+LỆNH + OUTPUT THẬT:
+  $ curl -s -m 120 -X POST http://127.0.0.1:8788/dsh/ask -H "Content-Type: application/json" \
+      -d '{"message":"thu tiền cho Khách smoke 2026-09-15-p1b-wf1-2 10 nghìn","conversation_id":"conv-d4-real-1"}'
+  http_code=502 total=0.010530s
+  {"ok":false,"code":"DSH_WRITE_BLOCKED","mode":"dsh","conversation_id":"conv-d4-real-1",
+   "request_id":"63655907-71e4-4d0a-a8f7-60ac95b345c0",
+   "error":"chế độ Phân tích bằng AI chỉ ĐỌC — ghi phiếu thu phải qua mục chat chính và cần bạn bấm Xác nhận"}
+  has_proposal: False
+  ⇒ 0.0105s là bằng chứng ĐỊNH LƯỢNG cho "không spawn dsh" (1 session thật = 19.7s).
+
+AUDIT (learning-log/observations.jsonl, trích dòng thật):
+  {'ts': '2026-09-19T04:11:22.475Z', 'outcome': 'gateway_refused', 'mode': 'dsh',
+   'request_id': '63655907-71e4-4d0a-a8f7-60ac95b345c0'}
+  {'ts': '2026-09-19T04:10:31.010Z', 'outcome': 'answered', 'mode': 'dsh',
+   'request_id': 'f3819db2-59a0-417b-8f44-c2d34e586181'}
+  {'ts': '2026-09-19T04:08:29.610Z', 'outcome': 'gateway_failed', 'mode': 'dsh',
+   'request_id': '2ad12dfe-081e-4af8-b4ad-06be6ce7111e'}
+  Lớp 2 (bên trong dsh child) đã verify ở đợt trước khi đóng lỗ hổng thiếu
+  COPILOT_DSH_CONTEXT trong dsh-e2e.patch.yml: câu ghi trả DSH_WRITE_BLOCKED từ
+  CHÍNH dsh, proposal=false, 0 dòng execute trong audit. Lớp 2 lần này không
+  thể ép lại bằng LLM thật (pre-screen ở cổng đã chặn trước khi spawn) — ghi rõ
+  là "đã verify ở đợt mock", KHÔNG claim lại bằng chứng mới.
+
+== 6. D5 — NORMAL PATH REGRESSION (DSH NOT CALLED) ==
+
+BẰNG CHỨNG LIVE (đếm entry dsh trong learning-log trước/sau 1 /ask thường):
+  dsh-mentions before: 43
+  $ curl -s -X POST http://127.0.0.1:8788/ask -d '{"text":"Khách làm tròn 2026-09-15-p1b-wf1-2 còn nợ bao nhiêu"}'
+  ask http_code=200
+  ask answer: Khách làm tròn 2026-09-15-p1b-wf1-2 còn nợ 457.875đ (1 chứng từ chưa thanh toán).
+  dsh-mentions after: 43
+  ⇒ /ask tạo 0 entry DSH. Cộng với static test trong dsh-gateway.test.mjs
+    (không có đường code nào từ answerQuestion tới spawn dsh).
+
+== 7. D6 — FULL REGRESSION (sau 4 thay đổi src) ==
+
+  $ PYTHONPATH=src python3 -m unittest discover -s tests   → Ran 62 tests ... OK
+  $ cd mcp-erpnext && node --test                             → tests 290, pass 290, fail 0
+  $ cd apps/mobile && flutter test                            → +142 All tests passed!
+  $ cd apps/mobile && flutter analyze                         → No issues found!
+  ⇒ Node 267 → 290 (thêm 23 test gateway). Không regress mục nào.
+
+== 8. DRIFT MÔI TRƯỜNG THẬT — model mac-custom đã bị Mac khai tử ==
+
+Phát hiện khi thăm dò trước D3 (KHÔNG đoán, đo bằng curl):
+  $ curl ... https://llm9000.loca.lt/v1/chat/completions -d '{"model":"oc/big-pickle",...}'
+  → http_code=403 (model không còn được phục vụ)
+  /v1/models trên Mac giờ trả danh sách id có tiền tố; oc/big-pickle KHÔNG còn.
+  Thăm dò tool-calling (prompt yêu cầu gọi copilot_ask) với 2 ứng viên:
+    gemini/gemini-3.6-flash → http 200, finish_reason=tool_calls,
+      name=copilot_ask, args={"text":"chi Lan con no bao nhieu"}
+    free3                   → http 200, finish_reason=tool_calls (nhưng model
+      luân chuyển: gpt-oss-120b / gpt-4o-mini → không ổn định để làm mặc định)
+
+CHỌN: gemini/gemini-3.6-flash (đã verify live + tool_calls thật).
+KHÔNG nhập nhằng với gemini-openai (khai báo model "gemini-3.6-flash" trần):
+  llm-router.mjs:127 — const matches = (u) => !wantModel || !u.model || u.model === wantModel;
+  ⇒ so khớp CHÍNH XÁC chuỗi. Có tiền tố vs không tiền tố = 2 chuỗi khác nhau.
+
+4 chỗ sửa (3 config + 1 default trong code):
+  scripts/llm-router.e2e.json  — mac-custom.model: oc/big-pickle → gemini/gemini-3.6-flash
+  scripts/llm-router.config.json — như trên (dev hàng ngày)
+  mcp-erpnext/dsh-e2e.patch.yml — thêm id vào `models` + default model theo env
+  mcp-erpnext/src/classifier.mjs — CLASSIFIER_DEFAULTS.model (env COPILOT_CLASSIFIER_MODEL vẫn override)
+  (giữ nguyên `oc/big-pickle` đã gỡ khỏi `models`: id chết trong list = gây hiểu sai;
+   muốn dùng lại thì sửa 1 dòng.)
+
+== 9. C1-C3 — FLUTTER DSH UI (ĐÃ LÀM, có code + test + falsify) ==
+
+Code thật (file:line, trích nguyên văn):
+  apps/mobile/lib/features/chat/application/chat_controller.dart
+    30:  enum ChatMode { normal, dsh }                 ← không có giá trị "auto"
+    40:  enum DshPhase { idle, starting, completed, failed }
+   105:  void setMode(ChatMode mode)                   ← chỉ UI gọi, không auto
+   117:  final String _dshConversationId = 'conv-<ms>';  (per app session, KHÔNG persist)
+   174:  Future<bool> _sendDsh(String trimmed, ChatState current) async
+   189/199: if (!ref.mounted) return false;           ← guard sau MỌI async gap
+  apps/mobile/lib/features/chat/data/copilot_api_client.dart
+    37:  class CopilotDshRefusedException extends CopilotException  (giữ `code` riêng)
+    47:  class DshAnswer { answer, erpnextTarget, sessionId }
+   143:  Future<DshAnswer> dshAsk(String message, {String? conversationId})
+   155:  receiveTimeout: AppConstants.dshTimeout
+  apps/mobile/lib/core/constants/app_constants.dart
+    24:  static const Duration dshTimeout = Duration(seconds: 210);
+        (askTimeout giữ 15s — 2 đường không dùng chung bound; 210s > DSH_TIMEOUT_MS 180s
+         của gateway để app chờ CÂU TRẢ LỜI của gateway, không tự cắt trước)
+  apps/mobile/lib/features/chat/presentation/screens/chat_screen.dart
+   147:  _ModeBar( ... )                               (đặt trên PipelineProgress)
+   224:  SegmentedButton<ChatMode>                     ← "Chat thường" | "Phân tích bằng AI"
+   246:  'Chế độ AI chỉ ĐỌC. Thu tiền vẫn phải hỏi ở chat thường rồi bấm Xác nhận.'
+   254:  'Đang phân tích bằng AI… câu hỏi này cần khoảng 20 giây.'
+
+LỆNH + OUTPUT THẬT:
+  $ cd apps/mobile && flutter test test/dsh_mode_test.dart
+  +8: All tests passed!        (8 test: C1×2, C2×4+regression, C3×1)
+  $ cd apps/mobile && flutter test            → +150 All tests passed!   (142 → 150)
+  $ cd apps/mobile && flutter analyze         → No issues found!
+
+8 test đó kiểm đúng 5 tính chất an toàn:
+  C1 default = Chat thường và chỉ gọi /ask (paths == ['/ask'], KHÔNG có '/dsh/ask').
+  C1 bấm segment AI → hiện notice chỉ-ĐỌC; CHƯA gửi gì (paths rỗng).
+  C2 AI mode POST /dsh/ask ĐÚNG 1 lần, có conversation_id 'conv-…', và KHÔNG mang
+     `submit_now`/`entity_id` (2 field chỉ có nghĩa ở đường ghi).
+  C2 dòng trạng thái "Đang phân tích…" hiện khi đang chờ và biến mất khi có đáp án.
+  C2 bị từ chối (502 DSH_WRITE_BLOCKED) → hiện NGUYÊN VĂN câu của gateway, GIỮ câu
+     hỏi trong ô nhập, KHÔNG ghi turn nào.
+  C2 dispose giữa phiên → không crash.
+  C3 AI mode KHÔNG render ProposalCard và KHÔNG gọi /execute.
+
+FALSIFICATION BATTERY (gỡ thật từng guard, chạy lại test, khôi phục):
+  A. vô hiệu nhánh mode  → RED đúng test "C2 AI mode posts /dsh/ask"
+  D. gỡ khối status     → RED đúng test "C2 the analysing status shows"
+  E. thay copy refusal bằng câu chung → RED đúng test "C2 a refused write…"
+  F. cho đường DSH âm thầm POST /execute → RED đúng test "C3 … never calls /execute"
+     ⇒ oracle (log request của ĐÚNG Dio mà client dùng) CÓ RĂNG.
+  B/C. gỡ MỘT lớp `ref.mounted` → vẫn GREEN: đúng bài học result47 §6 — guard là
+      phòng thủ NHIỀU LỚP, tháo 1 lớp thì lớp dưới vẫn che. Đã falsify lại cho đúng
+      bằng cách tháo TOÀN BỘ 9 lớp:
+        removed 9 mounted guards (ALL layers)
+          RED <- C2 disposing the screen mid-session   (UnmountedRefException)
+          RED <- C2 REGRESSION (pre-existing)          (UnmountedRefException)
+        restored: True  → flutter test 8/8 xanh lại
+
+== 10. BUG THẬT TÌM THẤY TRONG PHẦN C (có sẵn từ Phase 3, KHÔNG phải do DSH) ==
+
+Triệu chứng (do test C2 dispose bắt được, không phải suy đoán):
+  The following UnmountedRefException was thrown running a test:
+  Cannot use the Ref of chatControllerProvider after it has been disposed.
+  #2 ChatController._recordFailure (chat_controller.dart:360)
+
+Cơ chế: `chatControllerProvider` là @riverpod (auto-dispose). User gửi câu hỏi rồi
+mở Cài đặt / rời màn hình ⇒ provider bị dispose; response về sau đó ghi `state =`
+⇒ Riverpod ném UnmountedRefException (unhandled async error).
+Đường /ask đã có lỗ này từ Phase 3; đường DSH chỉ làm nó DỄ trúng hơn vì phiên
+dài ~20s (cửa sổ 210s). KHÔNG nhận là "bug của DSH".
+
+Sửa: guard `ref.mounted` sau mọi async gap (9 chỗ) + test hồi quy cho RIÊNG
+đường normal ("C2 REGRESSION (pre-existing)") để lỗi cũ không quay lại.
+Đã falsify: tháo cả 9 guard ⇒ cả 2 test dispose RED; khôi phục ⇒ xanh.
+
+== 11. DEVIATION CÓ Ý THỨC so với plan C2 (ghi rõ, không gọt) ==
+
+Plan C2 liệt kê 4 trạng thái: starting / running / completed / failed.
+Triển khai 3: starting / completed / failed.
+Lý do: gateway trả MỘT response không streaming (đo thật: 19.744s), không có kênh
+báo tiến độ phía server ⇒ "starting" và "running" không phân biệt được bằng dữ
+liệu thật. Bịa thêm một trạng thái chỉ để khớp tên là cosmetic — trái tinh thần
+"không báo xong bằng lời" của chính dự án. `starting` = "đã gửi, đang chờ agent"
+(chính là thứ user đang nhìn thấy).
+
+== 12. E2 — DOC SYNC (đã làm) ==
+
+  setup-test.md — bảng upstream: `mac-custom` model → `gemini/gemini-3.6-flash`
+    + khối cảnh báo DRIFT 2026-09-19 (kèm lý do giữ tiền tố: router so khớp CHUỖI
+    CHÍNH XÁC, nên không nhầm với `gemini-3.6-flash` trần của gemini-openai).
+  setup-test.md §troubleshooting — thêm 2 hàng: (a) 403 model-not-found ⇒ gọi
+    /v1/models rồi sửa `model`; (b) 408/502 lần đầu ⇒ localtunnel chập chờn, gọi lại.
+  features.md — dòng upstream mac-custom ghi model mới + nhãn DRIFT.
+  .plan/dsh_e2e_tasks.md — A/B/C/D/E đánh dấu theo bằng chứng thật trong file này.
+  checklist.md / next.md / working.md — cập nhật ở cuối phiên (result57 + hash).
+
+  Kiểm không sót: `grep -c oc/big-pickle` còn 6 hit — ĐÃ đọc từng dòng: tất cả là
+  NOTE/COMMENT giải thích drift (1 config.json, 1 e2e.json, 1 patch, 1 classifier
+  docstring, 2 setup-test.md). Không hit nào là giá trị cấu hình đang chạy:
+    llm-router.config.json:10 "model": "gemini/gemini-3.6-flash"
+    llm-router.e2e.json:11   "model": "gemini/gemini-3.6-flash"
+    classifier.mjs:59        model: "gemini/gemini-3.6-flash"
+    dsh-e2e.patch.yml:79-85  id: gemini/gemini-3.6-flash (default theo env)
+
+== 13. E3 — FINAL REPORT (format plan §32) ==
+
+DSH INTEGRATION STATUS
+
+1. Architecture
+   PASS — 1 đường DSH duy nhất: Flutter(mode) → POST /dsh/ask → dsh-gateway.mjs
+   (pre-screen WRITE → spawn dsh headless) → dsh runtime → LLM Router → LLM thật →
+   MCP (copilot_ask) → NLP → ERPNext. Không có đường ghi thứ hai; dsh không gọi
+   raw MCP/ERPNext (plan §11). Bằng chứng: result57 §3/§4.
+
+2. Flutter DSH UI
+   PASS — `SegmentedButton`, default Normal, chỉ UI đổi được mode, không auto-fallback;
+   gọi `/dsh/ask` đúng 1 lần; trạng thái + câu từ chối của gateway hiện nguyên văn;
+   không card, không /execute. 8 test + 6 falsify. Bằng chứng: result57 §9.
+
+3. DSH Gateway
+   PASS — 23 test (`node --test test/dsh-gateway.test.mjs`): pre-screen WRITE, NLP
+   down ⇒ fail closed, guard patch thiếu COPILOT_DSH_CONTEXT, limits, error map.
+   Bằng chứng: result57 §3.
+
+4. DSH Runtime
+   PASS — runtime THẬT (`/tmp/dsh-run/.../dsh/lib/bin.js`), exit 0, stderr
+   `[copilot] ERPNext target: REAL`; 125 tool MCP đăng ký trong con.
+   Bằng chứng: result57 §4.
+
+5. LLM Router
+   PASS — audit JSONL ghi `attempts=['mac-custom'] status=200` ×3 cho 1 câu hỏi
+   (round-trip thật, không phải mock config). Bằng chứng: result57 §4.
+
+6. MCP
+   PASS — dsh gọi `copilot_ask` qua MCP của chính con copilot (không nối trực tiếp
+   ERPNext); đếm round-trip 3/1 câu = có ít nhất 1 vòng tool thật. Bằng chứng: §4.
+
+7. ERPNext REAL
+   PASS — `erpnext_target: "REAL"` + số trả về khớp ground truth lấy live từ
+   ERPNext thật (171.800đ/4 chứng từ). Bằng chứng: §4.
+
+8. READ
+   PASS — câu hỏi đọc trả đúng số nợ; ground truth đối chiếu 2 nguồn (deterministic
+   /ask và dsh) cùng kết quả. Bằng chứng: §4.
+
+9. WRITE BLOCK
+   PASS — gateway: `DSH_WRITE_BLOCKED` + `has_proposal=false` + 0.0105s (không spawn)
+   + audit `gateway_refused`. Lớp 2 (trong dsh) đã verify đợt mock, không ép lại được
+   bằng LLM thật vì lớp 1 đã chặn trước — ghi rõ, không claim lại. Bằng chứng: §5.
+
+10. Normal path regression
+   PASS — `/ask` thường: số entry DSH trong learning-log 43 → 43 (0 mới). Bằng chứng: §6.
+
+11. Tests
+   PASS — Python 62/62 · Node 290/290 (267→290) · Flutter 150/150 (142→150) ·
+   analyze 0. Bằng chứng: §7 + §9.
+
+12. Real E2E
+   PASS — chạy trên LLM THẬT (`mac-custom`, self-hosted trên Mac, KHÔNG dùng quota
+   Gemini free tier; đây không phải mock: mock là config khác hẳn và không nạp lần này).
+   Nếu ai muốn đọc đây là "verify tương thích provider gemini-openai": KHÔNG phải —
+   đường gemini-openai (`E2E_LLM_MODEL=real-gemini`, thought_signature) vẫn chưa chạy
+   live, và KHÔNG được tính PASS thay cho nó. Bằng chứng: §4.
+
+13. Remaining gaps
+   - `gemini-openai` (provider thật của Google) + thought_signature: CHƯA verify live
+     (việc còn treo từ trước, không thuộc DSH). Không ghi PASS.
+   - Tunnel `llm9000.loca.lt` chập chờn (408/502 lần đầu) — đặc tính môi trường,
+     phải retry; đã ghi troubleshooting trong setup-test.md.
+   - Lớp 2 write-block bên trong dsh: bằng chứng từ đợt mock, chưa ép lại được bằng
+     LLM thật (lớp 1 chặn trước) — ghi trung thực, không nâng thành bằng chứng mới.
+   - Câu hỏi 2 entity: DSH và đường deterministic chọn PHẦN khác nhau của câu (cả 2
+     số đều đúng ground truth). Chưa phải lỗi, nhưng là khác biệt hành vi cần biết (§4).
+   - UI test của Flutter dùng envelope 502 MÔ PHỎNG (giống thật từng chữ); envelope
+     thật đã verify bằng curl qua gateway. E2E UI-trên-gateway-thật = việc người thật
+     (cài APK).

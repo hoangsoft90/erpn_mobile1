@@ -88,11 +88,31 @@ Lớp chuẩn hóa chạy **TRƯỚC** LLM, cố định bằng code chứ khôn
 - **Gateway mang `thought_signature` của Gemini 3.x (result17 §L)**: mọi function-call replay cần `tool_calls[].extra_content.google.thought_signature`; dsh (OpenAI-shaped) drops field này → turn thứ hai 400 *"Function call is missing a thought_signature"*. `ThoughtSignatureCache` + capture stream (SSE/JSON) + inject lại theo tool_call id; bật theo upstream `geminiThoughtSignatures`. **Router 19/19** (gồm integration test: SSE trả signature → turn sau upstream NHẬN được).
 - **Harness E2E durable trong repo** (trước ở /tmp, mất mỗi reboot): `mcp-erpnext/dsh-e2e.patch.yml` (default MOCK · `E2E_TARGET=real` mới chạm ERPNext thật) + `scripts/llm-router.e2e.json` (1 upstream)
 - **E2E dsh → router → Gemini:** flaky do **free tier 20 req/phút** (1 session dsh tốn 2–3 calls: session-title + agent) — 429 quota + 503 high demand là THIẾT KẾ free tier, nguyên văn trong result15 §6
-- **Upstream `mac-custom` — LLM tự host trên máy Mac, KHÔNG quota (result20)**: `https://llm9000.loca.lt/v1` model `oc/big-pickle`, đặt **ĐẦU chain ở cả 2 config** (dev hàng ngày); `timeoutMs: 120000` (model reasoning chậm) + `cooldownMs: 15000` (tunnel flaky); KHÔNG bật `geminiThoughtSignatures` (khác giao thức). `gemini-openai` GIỮ NGUYÊN trong chain chỉ để verify tương thích provider thật; patch dsh chọn model qua env `E2E_LLM_MODEL` (router route theo TÊN MODEL nên không có cách nào khác nếu không sửa file). E2E thật: dsh exit 0. ⚠️ **ĐÍNH CHÍNH (result22 §9B)**: phần audit của phiên đó ("5 req, 2 turn replay đều 200") **không còn kiểm chứng được** — bằng chứng mac-custom hợp lệ duy nhất là **result22** (4×200, `attempts=['mac-custom']`).
+- **Upstream `mac-custom` — LLM tự host trên máy Mac, KHÔNG quota (result20)**: `https://llm9000.loca.lt/v1` model `gemini/gemini-3.6-flash` (**DRIFT 2026-09-19**: tên cũ `oc/big-pickle` đã bị Mac khai tử — 403; id mới đã verify sống + có `tool_calls` thật; giữ tiền tố `gemini/` vì router so khớp model CHÍNH XÁC), đặt **ĐẦU chain ở cả 2 config** (dev hàng ngày); `timeoutMs: 120000` (model reasoning chậm) + `cooldownMs: 15000` (tunnel flaky); KHÔNG bật `geminiThoughtSignatures` (khác giao thức). `gemini-openai` GIỮ NGUYÊN trong chain chỉ để verify tương thích provider thật; patch dsh chọn model qua env `E2E_LLM_MODEL` (router route theo TÊN MODEL nên không có cách nào khác nếu không sửa file). E2E thật: dsh exit 0. ⚠️ **ĐÍNH CHÍNH (result22 §9B)**: phần audit của phiên đó ("5 req, 2 turn replay đều 200") **không còn kiểm chứng được** — bằng chứng mac-custom hợp lệ duy nhất là **result22** (4×200, `attempts=['mac-custom']`).
 - **Số tiền là NET, credit note phải được tính (result21)**: `listUnpaidInvoices` lọc `outstanding_amount !== 0` (KHÔNG phải `> 0`) — credit note (`is_return`) mang outstanding ÂM, lọc `> 0` biến "còn nợ" thành công nợ GỘP. Ca thật: khách có credit note −97.200đ → trước fix báo 269.000đ/3, sau fix **171.800đ/4 ✓**. Câu trả lời đổi nhãn "hóa đơn chưa trả" → "**chứng từ** chưa thanh toán" + có nhánh "hiện dư X" khi outstanding âm; nhánh liệt kê in từng dòng kèm số có dấu. Test hồi quy: `copilot.test.mjs` + mock có SINV-0004 (−320.000 → CUST-00002 = 7.180.000đ/2).
 - **Unit suite phải hermetic + không được tự chạy batch thật (result21)**: `node --test` discover MỌI file trong `test/` ⇒ 2 batch runner (18 câu + dump khách/hóa đơn THẬT) bị chạy như unit test; trong shell đã `source .env` chúng sẽ bắn vào ERPNext THẬT và in tên khách/số tiền thật. Đã thêm guard theo `NODE_TEST_CONTEXT` (chạy trực tiếp vẫn nguyên đường dẫn tài liệu: `node test/batch-accuracy.mjs`). Test cũng strip `ASK_*` cùng `ERPNEXT_*` và đặt mọi setup trong try/finally — trước đó leak `ASK_USER/ASK_PASSWORD` làm file test throw trong SETUP, rò child Python và **treo cả suite >120s** thay vì fail nhanh.
 
 ---
+
+### DSH final mini-sprint: pin + topology Mac↔backend + real Gemini — 2026-09-19 (`result58.txt`)
+
+- **Chế độ "Phân tích bằng AI" (DSH opt-in)** đã có đường ĐẦY ĐỦ từ gateway tới ERPNext, kèm bằng chứng
+  có mã định danh: `/dsh/ask` → dsh runtime → LLM Router → `copilot_ask` → NLP → ERPNext.
+- **Runtime được PIN** (`@deepseek-ai/dsh@0.1.5-rc.1` trong `package.json` root) và **resolve từ package
+  đã cài**, không hardcode đường dẫn của một máy ⇒ máy mới chỉ cần `npm run dsh:check` là biết chạy được hay không.
+- **Hai topology** (`DSH_MODE`): `local` (spawn trên máy gateway) và `remote` (gọi runner trên Mac qua
+  tunnel, `scripts/dsh-remote-runner.mjs`). Remote **không bao giờ** tự hạ cấp về local, và mọi response
+  (kể cả thất bại) đều nói rõ `runtime: local|remote` — một lần chạy ở máy này không thể bị báo cáo nhầm
+  thành "đã verify trên Mac".
+- **Provider thật đã verify sống**: 1 session qua `gemini-openai` trả **171.800đ / 4 chứng từ** khớp ground
+  truth, với 3 lượt LLM (≥2 vòng tool-call) — tức đường đa-lượt mà cơ chế `thought_signature` từng làm gãy
+  đã chạy xanh.
+- **6 script kiểm tra/E2E có exit code thật** (`dsh:check`, `check:topology`, `dsh:e2e:read`,
+  `dsh:e2e:write-block`, `check:ask-normal`) — thay cho việc đọc log bằng mắt.
+- **Chưa verify được (BLOCKED_EXTERNAL, không phải lỗi code)**: hop thật `backend → Mac qua tunnel` —
+  localtunnel của Mac đang tắt (`503 Tunnel Unavailable`). Cần người bật lại `lt` trên Mac.
+- **Giới hạn cố ý**: đường DSH CHỈ đọc — câu lệnh ghi bị từ chối ở gateway **trước khi spawn** (đo được:
+  ~100ms so với ~20s của một session thật), không sinh proposal, không có nút xác nhận.
 
 ## Chưa làm / Tương lai
 
