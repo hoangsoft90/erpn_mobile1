@@ -49,7 +49,14 @@ const ID_LIKE_KEY = /(^|_)(id|ids|docname|erpnext_id|name_id|ref_id|pk)$/i;
 export const CLASSIFIER_DEFAULTS = Object.freeze({
   /** LLM Router (Phase 5) OpenAI-compatible endpoint. */
   url: "http://127.0.0.1:8900",
-  model: "oc/big-pickle",
+  /**
+   * MODEL DRIFT 2026-09-19: the self-hosted Mac upstream (mac-custom) retired
+   * `oc/big-pickle` (403 model-not-found). This is the prefixed id verified on
+   * that endpoint with real tool_calls, and it is what llm-router.config.json
+   * now declares — so the default reaches a live upstream. Override per-machine
+   * with COPILOT_CLASSIFIER_MODEL (the env var is read below).
+   */
+  model: "gemini/gemini-3.6-flash",
   /** Bounded so an unknown sentence never blocks the answer for long (spec §15
    * "không block 2.5s im lặng"): the request is capped, then we fall back. */
   timeoutMs: 2500,

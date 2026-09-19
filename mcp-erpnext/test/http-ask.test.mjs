@@ -154,6 +154,112 @@ test("/ask wrapper: health, happy path, and error contracts", async () => {
   }
 });
 
+test("/dsh/ask route: health truth, malformed conversation_id, and a WRITE question refused at the edge", async () => {
+  const nlp = await startNlpService();
+  // The NLP port is captured when copilot-server.mjs is first imported, so a
+  // later test in the SAME process must re-point the in-process seam — setting
+  // the env var alone would leave the client talking to the previous test's
+  // (now dead) port and the gate would fail closed with a DIFFERENT code.
+  const { __setNlpServicePortForTest } = await import("../src/copilot-server.mjs");
+  const previousPort = process.env.NLP_SERVICE_PORT;
+  let server = null;
+  try {
+    process.env.NLP_SERVICE_PORT = String(nlp.port);
+    __setNlpServicePortForTest(nlp.port);
+    const { createAskServer } = await import("../src/http-ask.mjs");
+    server = createAskServer({ port: 0, host: "127.0.0.1" });
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const base = `http://127.0.0.1:${server.address().port}`;
+
+    // /dsh/health now reports what a REAL run needs (review F5): runtime kind,
+    // the pinned version, and whether the write-gate marker is present — not
+    // merely "two files exist".
+    const health = await fetch(`${base}/dsh/health`);
+    assert.equal(health.status, 200);
+    const healthBody = await health.json();
+    assert.equal(healthBody.service, "dsh-gateway");
+    assert.equal(healthBody.runtime, "local");
+    assert.equal(typeof healthBody.available, "boolean");
+    assert.equal(healthBody.version, "0.1.5-rc.1", "the pinned runtime version is reported (plan §3)");
+
+    // A client-supplied conversation_id becomes a Map key and a log field, so a
+    // malformed one is refused at the boundary (review F3) — 400, no session.
+    const badConv = await fetch(`${base}/dsh/ask`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: "chị Lan còn nợ bao nhiêu", conversation_id: "../../etc/passwd" }),
+    });
+    assert.equal(badConv.status, 400);
+    const badConvBody = await badConv.json();
+    assert.equal(badConvBody.code, "DSH_GATEWAY_BAD_REQUEST");
+
+    // The safety edge of the whole agent path: a write question is refused
+    // BEFORE the runtime is touched. Asserted by timing too — a spawned session
+    // takes seconds-to-minutes, a pre-screen refusal is immediate.
+    const startedAt = Date.now();
+    const write = await fetch(`${base}/dsh/ask`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: "thu tiền cho Nguyễn Thị Lan 10000" }),
+    });
+    const elapsedMs = Date.now() - startedAt;
+    assert.equal(write.status, 200, "a refusal is a 200 with a code, not a transport error");
+    const writeBody = await write.json();
+    assert.equal(writeBody.ok, false);
+    assert.equal(writeBody.code, "DSH_WRITE_BLOCKED");
+    assert.equal(writeBody.mode, "dsh");
+    assert.equal(writeBody.refused, true, "marked as a deliberate refusal, not a failure");
+    assert.ok(elapsedMs < 5000, `refused in ${elapsedMs}ms — too slow to be a pre-screen refusal`);
+
+    // Missing message and an oversized one are both clean 400s.
+    const noMsg = await fetch(`${base}/dsh/ask`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    assert.equal(noMsg.status, 400);
+    assert.equal((await noMsg.json()).code, "DSH_GATEWAY_BAD_REQUEST");
+  } finally {
+    server?.close();
+    nlp.child.kill();
+    __setNlpServicePortForTest(previousPort ?? "8787");
+  }
+});
+
+test("/dsh/health cannot take the gateway down: a throwing probe answers 503", async () => {
+  // The fault is injected through a legal seam: `env.DSH_ENTRY` is read only by
+  // the dsh branch, so a throwing getter there breaks the probe and nothing else
+  // (authz/rate-limit read different keys). Without the route's try/catch the
+  // rejection escapes the async listener, Node exits, and this whole test file
+  // dies — which is the evidence, not the assertion.
+  const env = new Proxy(
+    {},
+    {
+      get(target, key) {
+        if (key === "DSH_ENTRY") throw new Error("boom from env");
+        return target[key];
+      },
+    },
+  );
+  const { createAskServer } = await import("../src/http-ask.mjs");
+  const server = createAskServer({ port: 0, host: "127.0.0.1", env });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const health = await fetch(`${base}/dsh/health`);
+    assert.equal(health.status, 503);
+    const body = await health.json();
+    assert.equal(body.available, false);
+    assert.match(body.detail, /health probe failed/);
+
+    // The process is still serving — a broken probe is contained.
+    const alive = await fetch(`${base}/health`);
+    assert.equal(alive.status, 200);
+  } finally {
+    server.close();
+  }
+});
+
 test("/ask CLI main(): ready line on stdout then exit on close", async () => {
   const nlp = await startNlpService();
   const child = spawn(process.execPath, [path.join(ROOT, "src", "http-ask.mjs"), "--port", "0"], {

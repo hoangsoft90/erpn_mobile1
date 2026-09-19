@@ -7,11 +7,11 @@
     {
       "name": "mac-custom",
       "baseUrl": "https://llm9000.loca.lt/v1",
-      "model": "oc/big-pickle",
+      "model": "gemini/gemini-3.6-flash",
       "apiKeyEnv": "MAC_LLM_API_KEY",
       "timeoutMs": 120000,
       "cooldownMs": 15000,
-      "_note": "Self-hosted OpenCode LLM on the user's Mac via localtunnel — NO provider quota, first in chain for daily dev/test. The router routes by model name, so sessions must request oc/big-pickle to reach it. Tunnel is flaky (502/408 on first attempts, verified 2026-09-15) — retrying the request usually succeeds. Not a real-provider-compat proxy: no geminiThoughtSignatures here (different protocol)."
+      "_note": "Self-hosted OpenCode LLM on the user's Mac via localtunnel — NO provider quota, first in chain for daily dev/test. The router routes by model name, so sessions must request gemini/gemini-3.6-flash to reach it. Tunnel is flaky (502/408 on first attempts, verified 2026-09-15) — retrying the request usually succeeds. Not a real-provider-compat proxy: no geminiThoughtSignatures here (different protocol). MODEL DRIFT 2026-09-19: oc/big-pickle was retired on the Mac (403 model-not-found); the prefixed id is verified there WITH real tool_calls. Exact-match filtering keeps it distinct from gemini-openai's bare gemini-3.6-flash."
     },
     {
       "name": "mock",

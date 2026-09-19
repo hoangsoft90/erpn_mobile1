@@ -104,8 +104,17 @@ export function pickServerScript(env = process.env) {
   return realServerScript();
 }
 
-const NLP_PORT = process.env.NLP_SERVICE_PORT || "8787";
-const NLP_URL = `http://127.0.0.1:${NLP_PORT}/normalize`;
+let NLP_PORT = process.env.NLP_SERVICE_PORT || "8787";
+let NLP_URL = `http://127.0.0.1:${NLP_PORT}/normalize`;
+
+/** Test seam — the NLP port is read from env at module load, but in-process
+ * tests (dsh-gateway.test.mjs) start their fake NLP on an ephemeral port
+ * afterwards. Same pattern as __resetSessionContext. Production code must
+ * NEVER call this. */
+export function __setNlpServicePortForTest(port) {
+  NLP_PORT = String(port);
+  NLP_URL = `http://127.0.0.1:${NLP_PORT}/normalize`;
+}
 
 /** Wait for the Python bridge (dsh may start us before the service is up). */
 async function waitForNlpService(timeoutMs = 3000) {
@@ -122,8 +131,10 @@ async function waitForNlpService(timeoutMs = 3000) {
   return false;
 }
 
-/** Call the Python normalize bridge; throws when the service is unreachable. */
-async function normalizeText(text) {
+/** Call the Python normalize bridge; throws when the service is unreachable.
+ * Exported for the DSH gateway's WRITE pre-screen (dsh-gateway.mjs) — the SAME
+ * seam, not a second normalizer. */
+export async function normalizeText(text) {
   // AbortSignal timeout: Node's undici fetch can hang past TCP connect when
   // the peer accepts but never answers (half-open socket) — without an
   // AbortSignal the /ask request would hang forever (no Node default).

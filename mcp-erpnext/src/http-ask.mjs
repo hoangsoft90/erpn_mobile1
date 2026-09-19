@@ -49,6 +49,7 @@
 
 import http from "node:http";
 import { timingSafeEqual, createHash, randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import { answerQuestion, answerQuestionLogged, pickServerScript } from "./copilot-server.mjs";
 import { logEvent, writeOutcomeFor } from "./learning-log.mjs";
 import { AUTHZ_CODES, AUTHZ_MODES, checkPermissions, describeAuthorization, resolvePrincipal } from "./authorization.mjs";
@@ -60,6 +61,11 @@ import { reconcilePaymentEntry } from "./skills/payment-write.mjs";
 import { createMcpClient } from "./client.mjs";
 import { runExecute } from "./safety-gateway.mjs";
 import { JobQueue } from "./job-queue.mjs";
+// DSH gateway (plan .plan/dsh_end_to_end.md): the EXPLICIT opt-in agent path.
+// Imported here (and ONLY here) so the /ask pipeline itself never touches dsh —
+// p5-dsh-optin.test.mjs keeps the static "no dsh spawn in the /ask pipeline"
+// assertion, and the gateway lives behind its own route below.
+import { dshGatewayAsk, DSH_IN_FLIGHT, isValidConversationId } from "./dsh-gateway.mjs";
 
 const MAX_BODY = 1_000_000; // one utterance is ~200 chars; 1MB is generous
 
@@ -257,6 +263,176 @@ export function createAskServer({
     const path = (req.url ?? "/").split("?")[0];
     if (req.method === "GET" && path === "/health") {
       sendJson(res, 200, { ok: true, service: "copilot-ask", port });
+      return;
+    }
+    if (req.method === "GET" && path === "/dsh/health") {
+      // DSH opt-in health: separate from /health so the client can offer the
+      // mode selector state ("DSH hiện không khả dụng") without probing the
+      // deterministic pipeline. Reveals availability ONLY — no paths, no env.
+      //
+      // REPORTED TRUTHFULLY (review F5): the check now mirrors what a real run
+      // requires — the local mode must also have the write-gate marker in its
+      // patch, and the remote mode must actually reach the Mac runner. The old
+      // "two files exist" answer could report available=true on a topology that
+      // cannot serve a single question.
+      //
+      // Same last-resort law as /execute and /dsh/ask (review 2026-09-19): an
+      // unexpected throw inside an async listener is an UNHANDLED REJECTION and
+      // Node exits — the process dies (result44 §3 killed the gateway exactly
+      // this way, from a config error). A health probe must be the LEAST
+      // dangerous route in the service; unwrapped, it was the only one that
+      // could take the whole thing down.
+      try {
+        const { dshGatewayHealth } = await import("./dsh-gateway.mjs");
+        const health = await dshGatewayHealth({ env });
+        sendJson(res, 200, {
+          ok: true,
+          service: "dsh-gateway",
+          available: health.available,
+          runtime: health.mode,
+          version: health.version ?? null,
+          detail: health.detail,
+          mode: "dsh",
+        });
+      } catch (err) {
+        // 503 = the probe itself is broken; "unavailable" is the honest answer
+        // and monitoring can tell it apart from a healthy-but-disabled runtime.
+        sendJson(res, 503, {
+          ok: false,
+          service: "dsh-gateway",
+          available: false,
+          runtime: null,
+          version: null,
+          detail: `health probe failed: ${err?.message ?? err}`,
+          mode: "dsh",
+        });
+      }
+      return;
+    }
+    if (req.method === "POST" && path === "/dsh/ask") {
+      // Explicit DSH opt-in (plan §1/§4): a SEPARATE route — /ask never gains a
+      // dsh branch (D2), and this route never routes to the deterministic
+      // answerQuestion. Same security boundary as every other route here: the
+      // basic-auth gate above already applied, the principal is the same one,
+      // and the write_proposal-style per-user READ bucket is charged first so
+      // an agent session cannot be cheaper than a normal question.
+      let message;
+      let conversationId = null;
+      try {
+        const raw = await readBody(req);
+        const parsed = raw ? JSON.parse(raw) : {};
+        message = parsed?.message;
+        conversationId = typeof parsed?.conversation_id === "string" && parsed.conversation_id.trim()
+          ? parsed.conversation_id.trim()
+          : null;
+        // Review F3: a client-supplied id becomes a Map key and a log field.
+        // Shape-check it at the boundary (uuid-ish, bounded) instead of trusting
+        // it — the gateway is not the place to discover a malformed id later.
+        if (conversationId && !isValidConversationId(conversationId)) {
+          sendJson(res, 400, { ok: false, code: "DSH_GATEWAY_BAD_REQUEST", error: "conversation_id không hợp lệ" });
+          return;
+        }
+      } catch (err) {
+        sendJson(res, 400, { ok: false, error: `invalid request body: ${err.message}` });
+        return;
+      }
+      const dshRequestId = randomUUID();
+      const dshStartedAt = Date.now();
+      const dshVerdict = rateLimiter.chargeUser("read", userId);
+      if (!dshVerdict.ok) {
+        logEvent({
+          phase: "dsh_ask",
+          outcome: "rate_limited",
+          error_code: "RATE_LIMITED",
+          request_id: dshRequestId,
+          user_id: userId,
+          mode: "dsh",
+          text: String(message ?? "").slice(0, 200),
+          latency_ms: Date.now() - dshStartedAt,
+        });
+        sendRateLimited(res, dshVerdict);
+        return;
+      }
+      try {
+        const outcome = await dshGatewayAsk(message, {
+          env,
+          conversationId,
+          requestId: dshRequestId,
+        });
+        if (!outcome.ok) {
+          const payload = {
+            ok: false,
+            error: outcome.reason,
+            code: outcome.code,
+            mode: "dsh",
+            // A FAILED session must still say WHERE it ran: "DSH failed" is not
+            // evidence, and a remote failure has a different remedy than a
+            // local one (restart the tunnel vs. install the runtime).
+            runtime: outcome.runtime ?? null,
+            conversation_id: outcome.conversationId,
+            request_id: outcome.requestId,
+          };
+          if (outcome.code === DSH_IN_FLIGHT) {
+            sendJson(res, 429, { ...payload, error: payload.error, retryable: true });
+            return;
+          }
+          if (outcome.httpStatus === 400) {
+            sendJson(res, 400, payload);
+            return;
+          }
+          // A GATE refusal (WRITE pre-screen, or NLP unavailable so safety could
+          // not be judged) is a deliberate ANSWER about the question — the
+          // gateway never touched the runtime. `dshGatewayAsk` declares 200 for
+          // exactly this case; mapping it to 502 would tell monitoring and any
+          // retry logic that the infrastructure broke, and would make a safety
+          // refusal indistinguishable from a dead tunnel.
+          if (outcome.httpStatus === 200) {
+            sendJson(res, 200, { ...payload, refused: true });
+            return;
+          }
+          // 502: dsh ran (or failed to start) — the client shows the actionable
+          // message verbatim; the code carries the machine-readable cause.
+          sendJson(res, 502, payload);
+          return;
+        }
+        // Response envelope (plan §5): mode/conversation_id/request_id are
+        // first-class so the Flutter client can render the DSH state truthfully.
+        sendJson(res, 200, {
+          ok: true,
+          mode: "dsh",
+          // Which machine actually ran the session (local | remote). A remote
+          // result must never be indistinguishable from a local one — the E2E
+          // script asserts this field exists on success AND failure.
+          runtime: outcome.runtime ?? null,
+          conversation_id: outcome.conversationId,
+          request_id: outcome.requestId,
+          dsh_session_id: outcome.dsh_session_id,
+          // Audit evidence (plan §23/§24): the copilot child reported which
+          // ERPNext target the session could reach — REAL vs mock. No host, no key.
+          erpnext_target: outcome.erpnext_target ?? null,
+          result: {
+            question: message,
+            answer: outcome.answer?.content ?? outcome.answer?.text ?? null,
+            answer_structured: outcome.answer,
+            mode: "dsh",
+            runtime: outcome.runtime ?? null,
+            erpnext_target: outcome.erpnext_target ?? null,
+            conversation_id: outcome.conversationId,
+            request_id: outcome.requestId,
+          },
+        });
+      } catch (err) {
+        // Same last-resort law as /execute: an unexpected throw inside the async
+        // handler is an unhandled rejection and kills the gateway. Never leak a
+        // stack — message only.
+        sendJson(res, 500, {
+          ok: false,
+          error: `dsh gateway failed: ${err?.message ?? err}`,
+          code: "DSH_GATEWAY_UNEXPECTED_ERROR",
+          mode: "dsh",
+          request_id: dshRequestId,
+        });
+      }
       return;
     }
     if (req.method === "POST" && path === "/execute/cancel") {

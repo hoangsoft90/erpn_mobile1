@@ -36,6 +36,14 @@
         cwd: !!js process.cwd()
         env:
           NLP_SERVICE_PORT: '8787'
+          # P5 (plan2_final §2 D8) — the SAME flag dsh.cordis.patch.yml sets.
+          # SAFETY-CRITICAL: without it the copilot child is NOT in dsh context,
+          # so the WRITE gate (dsh-optin.mjs) never fires and a write question
+          # falls through to the skill/entity layer (observed 2026-09-19: the
+          # write question was stopped only by an ambiguous-customer error, not
+          # by the DSH gate). The gateway now refuses to spawn a patch that
+          # lacks this flag (dsh-gateway.mjs dshPatchMarksDshContext).
+          COPILOT_DSH_CONTEXT: '1'
           # Block scalar (`>-`) is REQUIRED here: an inline `!!js` expression
           # containing ": " is parsed by YAML as a nested mapping, not a string
           # (result17: env became {"[object Object]": ""} and dsh refused to boot).
@@ -51,10 +59,13 @@
 #
 # The ROUTER routes by model name, so the model requested here selects the
 # upstream chain (see scripts/llm-router.e2e.json):
-#   E2E_LLM_MODEL unset / anything else → oc/big-pickle  → mac-custom (default:
-#       self-hosted, NO provider quota — daily dev/test)
+#   E2E_LLM_MODEL unset / anything else → gemini/gemini-3.6-flash → mac-custom
+#       (default: self-hosted, NO provider quota — daily dev/test)
 #   E2E_LLM_MODEL=real-gemini           → gemini-3.6-flash → gemini-openai (real
 #       provider compat verify: thought_signature; free tier RPD=20)
+# MODEL DRIFT 2026-09-19: mac-custom used to be oc/big-pickle, which the Mac
+# endpoint no longer serves (403). The prefixed id is the one verified live
+# there with real tool_calls; keep the prefix — the router matches exactly.
 # The router provider's apiKeyEnv stays GEMINI_API_KEY — it is never sent to
 # mac-custom (the router replaces Authorization per-upstream from MAC_LLM_API_KEY).
 - id: llm-pi-ai
@@ -65,10 +76,10 @@
         api: openai-completions
         baseURL: http://127.0.0.1:8900/v1
         models:
-          - id: oc/big-pickle
+          - id: gemini/gemini-3.6-flash
           - id: gemini-3.6-flash
 - id: agent-default-model
   config:
     provider: router
     model: !!js >-
-      process.env.E2E_LLM_MODEL === 'real-gemini' ? 'gemini-3.6-flash' : 'oc/big-pickle'
+      process.env.E2E_LLM_MODEL === 'real-gemini' ? 'gemini-3.6-flash' : 'gemini/gemini-3.6-flash'
