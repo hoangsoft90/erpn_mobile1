@@ -438,6 +438,13 @@ Bối cảnh: user yêu cầu "review code những gì vừa làm" cho tính nă
 - **Health phải CHỨNG MINH, không suy luận từ sự tồn tại của file.** Cùng họ với bài học result58
   (`existsSync ≠ chạy được`): `dshGatewayHealth()` nay chạy `--version` thật qua đúng spawn plan,
   fail ⇒ `available:false` kèm lý do. Falsify: thay bằng object giả ⇒ 2 test health ĐỎ.
+- **Kiểm chuỗi trong APK: phải tìm trên file ĐÃ GIẢI NÉN, và AXML string pool là UTF-16LE.**
+  Hai lần dò label `Nghiệp Vụ AI` trả 0 hit *giả*: lần đầu grep thẳng bytes của `app-debug.apk`
+  (nội dung `resources.arsc` bị deflate ⇒ không đọc được), lần sau `strings -el` nhưng trên
+  `resources.arsc` chứ không phải `AndroidManifest.xml`. Chỉ khi unzip ra rồi đếm cả UTF-8 và
+  UTF-16LE mới ra: `AndroidManifest.xml | utf-16-le | 1 hit | '…Nghiệp Vụ AI·…'`. Luật: 0 hit
+  là **kết quả đáng nghi trước tiên**, không phải bằng chứng "không có" — đổi cách tìm trước
+  khi kết luận về artifact.
 - **Tách khái niệm theo câu hỏi, đừng gộp field.** `runtime` (topology local/remote — chạy Ở ĐÂU)
   và `source` (cách resolve — CHẠY BẰNG GÌ: npx/pin/entry/legacy) là 2 câu hỏi khác nhau; gộp lại
   thì ca "máy Mac báo available mà không chạy được" không chẩn đoán nổi. Tách ra ⇒ đọc 1 dòng
