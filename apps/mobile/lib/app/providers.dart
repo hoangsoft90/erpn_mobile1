@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/constants/app_constants.dart';
 import '../core/settings/app_settings_service.dart';
+import '../core/tts/tts_service.dart';
 import '../features/chat/data/chat_history_service.dart';
 import '../features/chat/data/copilot_api_client.dart';
 import '../features/chat/data/speech_service.dart';
@@ -76,4 +77,12 @@ final chatHistoryServiceProvider = Provider<ChatHistoryService>(
 /// `features/chat/data/speech_service.dart` for the contract.
 final speechServiceProvider = Provider<SpeechService>(
   (ref) => SystemSpeechService(),
+);
+
+/// TTS (plan2 next2): reads a NEW answer aloud when the user enabled it.
+/// Overridden with a fake in tests (CI has no speech engine) — see
+/// `core/tts/tts_service.dart`. This is output only: it can never confirm or
+/// execute anything.
+final ttsServiceProvider = Provider<TtsService>(
+  (ref) => FlutterTtsService(),
 );

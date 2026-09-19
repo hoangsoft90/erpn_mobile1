@@ -51,5 +51,13 @@
         <intent>
             <action android:name="android.speech.RecognitionService"/>
         </intent>
+        <!-- TTS (plan2 next2): reading an answer aloud uses the ON-DEVICE TTS
+             engine (flutter_tts → Google Text-to-Speech). Android 11+ hides
+             that service without this declaration, and speak() then silently
+             does nothing. Text stays on screen either way; the app never
+             executes anything from a spoken answer. -->
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE"/>
+        </intent>
     </queries>
 </manifest>

@@ -180,6 +180,37 @@ void main() {
       expect(AppSettingsService(prefs: prefs).voiceAutoSend, isFalse);
     });
 
+    test('ttsEnabled defaults OFF (absent key / null prefs / corrupted storage)',
+        () async {
+      expect(AppSettingsService(prefs: _FakePrefs()).ttsEnabled, isFalse,
+          reason: 'answers are silent unless the user asked otherwise');
+      expect(AppSettingsService(prefs: null).ttsEnabled, isFalse);
+      final prefs = _FakePrefs();
+      prefs.store[AppConstants.ttsEnabledStorageKey] = 'yes'; // wrong type
+      expect(AppSettingsService(prefs: prefs).ttsEnabled, isFalse,
+          reason: 'a corrupted value must not read as ON');
+    });
+
+    test('ttsEnabled round-trips ON and back OFF', () async {
+      final prefs = _FakePrefs();
+      final s = AppSettingsService(prefs: prefs);
+      expect(await s.saveTtsEnabled(true), isTrue);
+      expect(prefs.store[AppConstants.ttsEnabledStorageKey], true);
+      expect(AppSettingsService(prefs: prefs).ttsEnabled, isTrue,
+          reason: 'a NEW instance reads it back (screen recreate)');
+      expect(await s.saveTtsEnabled(false), isTrue);
+      expect(AppSettingsService(prefs: prefs).ttsEnabled, isFalse);
+    });
+
+    test('clear() forgets the TTS switch too', () async {
+      final prefs = _FakePrefs();
+      final s = AppSettingsService(prefs: prefs);
+      await s.saveTtsEnabled(true);
+      await s.clear();
+      expect(prefs.store.containsKey(AppConstants.ttsEnabledStorageKey), isFalse);
+      expect(AppSettingsService(prefs: prefs).ttsEnabled, isFalse);
+    });
+
     test('isValidGatewayUrl', () {
       expect(AppSettingsService.isValidGatewayUrl('https://x.example'), isTrue);
       expect(AppSettingsService.isValidGatewayUrl('http://127.0.0.1:8788'), isTrue);
@@ -424,7 +455,10 @@ void main() {
       await pump(tester, prefs);
       await scrollTo(tester, find.text('Tự gửi sau khi nói xong'));
       expect(find.text('Tự gửi sau khi nói xong'), findsOneWidget);
-      final sw = tester.widget<SwitchListTile>(find.byType(SwitchListTile));
+      // Anchored on the title: the screen now has more than one SwitchListTile
+      // (voice auto-send + "Đọc câu trả lời"), so find.byType would be ambiguous.
+      final sw = tester.widget<SwitchListTile>(
+          find.widgetWithText(SwitchListTile, 'Tự gửi sau khi nói xong'));
       expect(sw.value, isFalse);
       expect(find.textContaining('TẮT: đọc xong'), findsOneWidget);
       expect(prefs.store.containsKey(AppConstants.voiceAutoSendStorageKey),
@@ -443,7 +477,10 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.byType(AlertDialog), findsNothing);
       expect(
-        tester.widget<SwitchListTile>(find.byType(SwitchListTile)).value,
+        tester
+            .widget<SwitchListTile>(find.widgetWithText(
+                SwitchListTile, 'Tự gửi sau khi nói xong'))
+            .value,
         isTrue,
       );
       expect(find.textContaining('ĐANG BẬT: đọc xong'), findsOneWidget);
@@ -483,6 +520,60 @@ void main() {
       expect(find.textContaining('Đã lưu —'), findsNothing);
       expect(AppSettingsService(prefs: prefs).voiceAutoSend, isFalse,
           reason: 'nothing was stored ⇒ the app must not behave as ON');
+    });
+
+    testWidgets('TTS: the read-aloud switch exists, defaults OFF, nothing saved yet',
+        (tester) async {
+      final prefs = _FakePrefs();
+      await pump(tester, prefs);
+      await scrollTo(tester, find.text('Đọc câu trả lời'));
+      expect(find.text('Đọc câu trả lời'), findsOneWidget);
+      final sw = tester.widget<SwitchListTile>(
+          find.widgetWithText(SwitchListTile, 'Đọc câu trả lời'));
+      expect(sw.value, isFalse);
+      expect(find.textContaining('TẮT: chỉ hiển thị'), findsOneWidget);
+      expect(find.textContaining('gói tiếng Việt'), findsOneWidget,
+          reason: 'the note explains why nothing is read on a bare device');
+      expect(prefs.store.containsKey(AppConstants.ttsEnabledStorageKey), isFalse,
+          reason: 'nothing persisted until Save');
+    });
+
+    testWidgets('TTS: turning it ON needs no dialog and Save persists it',
+        (tester) async {
+      final prefs = _FakePrefs();
+      await pump(tester, prefs);
+      await scrollTo(tester, find.text('Đọc câu trả lời'));
+      await tester.pumpAndSettle();
+      // No confirmation dialog: reading an answer aloud cannot confirm or
+      // execute anything (unlike the submit switch, which does).
+      await tester.tap(find.text('Đọc câu trả lời'));
+      await tester.pumpAndSettle();
+      expect(find.byType(AlertDialog), findsNothing);
+      expect(
+        tester
+            .widget<SwitchListTile>(
+                find.widgetWithText(SwitchListTile, 'Đọc câu trả lời'))
+            .value,
+        isTrue,
+      );
+      // Anchored on the TTS-ONLY sentence. The tempting phrase "vẫn phải bấm
+      // Xác nhận khi thu tiền" is NOT unique: the voice switch's ON copy uses it
+      // too, so asserting findsOneWidget on it only passes while that other
+      // switch happens to be OFF (measured: 2 matches once both are ON). A test
+      // whose uniqueness depends on another control's state is a latent flake.
+      expect(
+        find.textContaining('ĐANG BẬT: câu trả lời mới sẽ được đọc to'),
+        findsOneWidget,
+        reason: 'reading a proposal aloud must not look like confirming it',
+      );
+
+      await scrollTo(tester, find.text('Lưu'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Lưu'));
+      await tester.pumpAndSettle();
+      expect(prefs.store[AppConstants.ttsEnabledStorageKey], true);
+      expect(AppSettingsService(prefs: prefs).ttsEnabled, isTrue,
+          reason: 'the controller reads it live on the next new turn');
     });
 
     testWidgets('invalid URL blocks save; the field shows the error',

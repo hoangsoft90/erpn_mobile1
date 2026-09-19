@@ -41,6 +41,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   /// spoke; it cannot confirm a proposal or reach /execute.
   bool _voiceAutoSend = false;
 
+  /// TTS (plan2 next2): "Đọc câu trả lời" — default OFF. No dialog needed: it
+  /// only reads the answer aloud through the on-device engine; it can never
+  /// confirm a proposal or reach /execute.
+  bool _ttsEnabled = false;
+
   AppSettingsService get _settings => ref.read(appSettingsServiceProvider);
 
   @override
@@ -56,6 +61,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         TextEditingController(text: s.maxChatItems.toString());
     _allowSubmit = s.allowSubmitPayment;
     _voiceAutoSend = s.voiceAutoSend;
+    _ttsEnabled = s.ttsEnabled;
   }
 
   @override
@@ -140,7 +146,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     // not" class of bug the footer URL once had.
     final okSubmit = await settings.saveAllowSubmitPayment(_allowSubmit);
     final okVoice = await settings.saveVoiceAutoSend(_voiceAutoSend);
-    final ok = okGateway && okSubmit && okVoice;
+    final okTts = await settings.saveTtsEnabled(_ttsEnabled);
+    final ok = okGateway && okSubmit && okVoice && okTts;
     // Reactivity (review 2026-09-17, found via the chat footer): the service's
     // getters read prefs live, but a plain Provider does NOT notify its
     // watchers when only the underlying values change. Invalidate so every
@@ -291,6 +298,39 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                   style: TextStyle(
                     color: Theme.of(context).colorScheme.onSurfaceVariant,
                     fontSize: 12,
+                  ),
+                ),
+              ),
+              const Divider(height: AppSpacing.lg),
+              // TTS (plan2 next2): reads a NEW answer aloud with the phone's own
+              // voice engine. ON ⇒ the answer to a new question (and a payment
+              // proposal's summary) is spoken; a proposal STILL needs its own
+              // Xác nhận — reading it out is an announcement, not an action.
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                value: _ttsEnabled,
+                onChanged: (on) => setState(() => _ttsEnabled = on),
+                title: const Text('Đọc câu trả lời'),
+                subtitle: Text(
+                  _ttsEnabled
+                      ? 'ĐANG BẬT: câu trả lời mới sẽ được đọc to — vẫn phải bấm Xác nhận khi thu tiền.'
+                      : 'TẮT: chỉ hiển thị câu trả lời, không đọc.',
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    fontSize: 12,
+                  ),
+                ),
+              ),
+              // Only a note, not a warning: a device without a Vietnamese voice
+              // simply stays silent (the answer is still on screen), so there
+              // is nothing here the user must fix before using the app.
+              Padding(
+                padding: const EdgeInsets.only(left: AppSpacing.xs),
+                child: Text(
+                  'Cần máy đã cài gói tiếng Việt cho Google Text-to-Speech.',
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    fontSize: 11,
                   ),
                 ),
               ),

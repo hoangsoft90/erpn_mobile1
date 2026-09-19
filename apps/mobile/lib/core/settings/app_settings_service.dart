@@ -71,6 +71,21 @@ class AppSettingsService {
     }
   }
 
+  /// TTS (plan2 next2): whether a NEW answer is read aloud by the on-device
+  /// engine. Default OFF — absence of the key, a null prefs instance, or a
+  /// storage error all read as disabled (same fail-safe convention as
+  /// [allowSubmitPayment]/[voiceAutoSend]).
+  ///
+  /// This only gates the client-side read-aloud; it is unrelated to any write
+  /// path and can never influence whether a payment is confirmed.
+  bool get ttsEnabled {
+    try {
+      return _prefs?.getBool(AppConstants.ttsEnabledStorageKey) ?? false;
+    } catch (_) {
+      return false; // corrupted storage ⇒ behave as OFF
+    }
+  }
+
   /// The value to PRE-FILL the Settings form with on first open.
   String get gatewayBaseUrlOrDefault =>
       gatewayBaseUrl.isEmpty ? AppConstants.defaultGatewayBaseUrl : gatewayBaseUrl;
@@ -159,6 +174,19 @@ class AppSettingsService {
     }
   }
 
+  /// TTS (plan2 next2): persists the read-aloud switch. Returns false only
+  /// when storage is unavailable (the caller keeps its previous state).
+  Future<bool> saveTtsEnabled(bool value) async {
+    final prefs = _prefs;
+    if (prefs == null) return false;
+    try {
+      await prefs.setBool(AppConstants.ttsEnabledStorageKey, value);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// Forgets everything this service stores (used by tests / a future "reset to
   /// default" action). Missing prefs is a no-op.
   Future<void> clear() async {
@@ -171,6 +199,7 @@ class AppSettingsService {
       await prefs.remove(AppConstants.maxChatItemsStorageKey);
       await prefs.remove(AppConstants.allowSubmitPaymentStorageKey);
       await prefs.remove(AppConstants.voiceAutoSendStorageKey);
+      await prefs.remove(AppConstants.ttsEnabledStorageKey);
     } catch (_) {
       // ignore
     }

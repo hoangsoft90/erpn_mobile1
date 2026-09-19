@@ -42,6 +42,13 @@ class AppConstants {
   static const String voiceAutoSendStorageKey =
       'settings_voice_auto_send_v1';
 
+  /// TTS (plan2 next2): "Đọc câu trả lời" — default OFF, i.e. answers stay
+  /// silent. When ON, a NEW answer/proposal is read aloud by the ON-DEVICE
+  /// engine (flutter_tts, vi-VN). Purely an accessibility/attention aid: it
+  /// cannot confirm a proposal, reach /execute, or influence any safety flag
+  /// (see `TtsService`), and it is independent of [voiceAutoSendStorageKey].
+  static const String ttsEnabledStorageKey = 'settings_tts_enabled_v1';
+
   /// Pre-filled in the Settings screen for the current dev tunnel (Phase 3
   /// decision: localtunnel of the gateway on port 8788). Only a suggestion —
   /// never silently applied over `--dart-define`.

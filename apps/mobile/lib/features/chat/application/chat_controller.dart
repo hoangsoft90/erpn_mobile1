@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
 
@@ -7,6 +9,14 @@ import '../data/chat_models.dart';
 import '../data/copilot_api_client.dart';
 
 part 'chat_controller.g.dart';
+
+/// Markdown noise: an engine reads `*`/`` ` ``/`#` as literal characters.
+final RegExp _markdownNoise = RegExp(r'[*_`#>~]');
+
+/// Identifier-shaped tokens (UUID / command_id / proposal_id) — never spoken.
+final RegExp _uuidLike = RegExp(
+  r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}',
+);
 
 /// Immutable UI state of the chat screen.
 @immutable
@@ -170,6 +180,70 @@ class ChatController extends _$ChatController {
     await ref
         .read(chatHistoryServiceProvider)
         .save(turns, maxItems: maxItems);
+
+    // TTS (plan2 next2): read the turn that JUST arrived, if the user asked for
+    // it. This method is the ONLY place a NEW turn enters the list — build()
+    // (history restore) and attachRejection() (stamping a refusal onto an
+    // existing card) return above and must never speak. `pickEntity` reaches
+    // here through send(), because that is genuinely a new answer.
+    //
+    // NOT awaited (review 2026-09-19 — deliberate deviation from the plan's §4
+    // snippet, which used `await ...speak(...)`): the chat screen clears its
+    // input field only once send() returns, so awaiting audio lets an engine
+    // that never answers its own init (dead TTS binder, no engine installed)
+    // hold send() open forever and leave the typed text in the box after a
+    // question that actually succeeded. Proven by the "engine that never
+    // answers" test — it timed out before this change. Reading aloud is a
+    // courtesy; the chat must never wait on it.
+    unawaited(_maybeSpeak(turn));
+  }
+
+  /// Reads [turn] aloud when the setting is ON.
+  ///
+  /// Fire-and-forget with a TOTAL try/catch, gate included: the answer is
+  /// already recorded and saved by the time we get here, so nothing about
+  /// reading aloud — not the engine, not even this method's own bookkeeping —
+  /// may change the chat result or surface as an error. An async failure here
+  /// would otherwise escape as an unhandled zone error, because the caller no
+  /// longer awaits us.
+  Future<void> _maybeSpeak(ChatTurn turn) async {
+    try {
+      if (!ref.read(appSettingsServiceProvider).ttsEnabled) return;
+      final spoken = spokenTextFor(turn);
+      if (spoken.isEmpty) return;
+      await ref.read(ttsServiceProvider).speak(spoken);
+    } catch (_) {
+      // Never let an audio problem touch the chat result.
+    }
+  }
+
+  /// The sanitised text to read aloud for [turn] (plan §5).
+  ///
+  /// Takes ONLY user-facing prose — [ChatTurn.answer] plus, when present, the
+  /// proposal's human [ActionProposal.summary]. It deliberately never touches
+  /// `commandId`, `proposalId`, `params`, or any other internal field: those are
+  /// machine identifiers, and an engine handed one spells it out letter by
+  /// letter (`action_id` dài ngoằng — the plan's own warning).
+  ///
+  /// Kept as a static so a test can pin the invariant directly instead of only
+  /// through a fake engine.
+  static String spokenTextFor(ChatTurn turn) {
+    final summary = turn.proposal?.summary;
+    final joined = [
+      turn.answer,
+      if (summary != null && summary.trim().isNotEmpty) summary.trim(),
+    ].where((part) => part.trim().isNotEmpty).join('. ');
+    return sanitizeForSpeech(joined);
+  }
+
+  /// Defensive clean-up before anything reaches the engine: strips raw markdown
+  /// punctuation (answers are plain prose today — this guards a future backend
+  /// format change) and any leftover identifier-shaped token, so an internal id
+  /// can never be read out even if one slips into a summary.
+  static String sanitizeForSpeech(String text) {
+    final withoutMarkup =
+        text.replaceAll(_markdownNoise, '').replaceAll(_uuidLike, '');
+    return withoutMarkup.replaceAll(RegExp(r'\s+'), ' ').trim();
   }
 
   Future<void> _recordFailure(String question, String message) async {
