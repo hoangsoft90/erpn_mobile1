@@ -3,9 +3,37 @@
 Đường đi tính năng đã hoàn thành và sắp tới. Bằng chứng từng phase: `result*.txt`.
 Trạng thái tóm tắt (đã làm/chưa làm/chờ ai): `checklist.md` — hai file này không nhân bản nhau.
 
-## Trạng thái mới nhất (2026-09-26)
+## Trạng thái mới nhất (2026-09-26 — đợt PUSH + APK ✅)
 
-> **2 commit phiên này (branch `change/flutter-chat-mvp`, KHÔNG push):** `17d6f9b` feat(ops)
+> **PUSH xong (branch `change/flutter-chat-mvp`) — ACK tới repo `hoangsoft90/erpn_mobile1`.**
+> User chốt "KHÔNG clone từ GitHub, cloud shell = nguồn sự thật" ⇒ **force-push** cây local.
+> Remote tip keo: **`6bb4d76`** — chuỗi `0ef6334` (Prompt-5) → `50c3aaf` (full snapshot) → `6bb4d76` (xoá probe).
+> **CI APK: run `36241021427` = SUCCESS**, artifact `erpn-chat-debug-apk` (~81,5 MB).
+> (Lưu ý: 2 commit `17d6f9b`/`ed79f77` của máy khác KHÔNG còn là tip — nội dung next5 của chúng ĐÃ
+> nằm trong cây `50c3aaf` ta push.)
+
+**NEXT6 Prompt-5 — REAL-only · API contract `/dsh/ask` · Observability — ✅ COMMIT `0ef6334`**: audit tìm ra
+**2 gap thật** ⇒ (1) `dsh-gateway.mjs` 3 `logEvent` `dsh_ask` thiếu correlation (đã thêm `request_id` · `user_id`
+· `conversation_id` · `dsh_in_flight` · `outcome` · `latency_ms` — không thêm log line, không đổi HTTP shape);
+(2) Flutter **adopt `conversation_id` server cấp** (`DshAnswer.conversationId` + `ConversationIdService.save()`
++ controller; cùng id ⇒ no-op). OpenSpec change `next6-real-contract-observability` (validate valid).
+**Node 19/19 · Flutter 17/17**. Chi tiết: `.plan/next6-result5.md`.
+
+**NEXT6 Prompt-6 — REGRESSION GATE toàn NEXT6 — ✅ PASS 26/26 criterion**: focused **99/99** · full Node
+**847/845/2** (2 fail dsh-env B0) · `flutter analyze` **0** · **REAL E2E site THẬT** (`probe-p4-smoke-real.mjs
+--dry-run` PASS + fresh REST `ACC-PAY-2026-00749` **docstatus=1**). **Chỉ sửa 1 blocker**: xoá probe tạm
+`apps/mobile/test/_probe_review_test.dart` (chặn CI `Test` step — render card ngoài ListView ⇒ overflow
+~6400px; findings đã phủ bởi `proposal_card_test.dart`) ⇒ Flutter **343/343**. Chi tiết: `.plan/next6-final-report.md`.
+
+**⚠️ CÒN TREO — APK chưa có endpoint**: repo **Variables = 0, Secrets = 0** ⇒ build rơi về default loopback
+(`127.0.0.1:8788`). Muốn APK dùng thật: thêm `vars: COPILOT_BASE_URL, COPILOT_AUTH_USER` +
+`secret: COPILOT_AUTH_PASSWORD` rồi chạy lại `android-debug-apk.yml` (dispatch).
+
+**⚠️ CÒN TREO — M1/M2 (vùng SỐ TIỀN)**: refresh/retry "Hôm qua" reload HÔM NAY — CHỜ USER.
+
+## Trạng thái 2026-09-26 (đợt next5 + audit NEXT6, trước PUSH)
+
+> **2 commit phiên đó (branch `change/flutter-chat-mvp`):** `17d6f9b` feat(ops)
 > drawer READ REAL-only + provenance, hoàn tất next5 (D0–D5) (39 file) · `ed79f77` fix(ops)
 > Tóm tắt ngày "Hôm qua" hiện ĐÚNG số của ngày đó **[VÙNG SỐ TIỀN]** (8 file).
 > Suite: **Node 820/818/2** (2 fail `dsh-env` từ B0) · **Flutter 333/333** · analyze **0** ·

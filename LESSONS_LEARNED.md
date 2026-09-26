@@ -1246,3 +1246,33 @@ cũ, nhóm 25) — đã quy trách nhiệm bằng bằng chứng trước khi co
 | Bẫy project (analyze giả · anchor falsify · refresh/retry · scope phương án · falsify fail-closed) | `.agents/skills/erpn-verify-first` | +5 dòng (nay 519 dòng) |
 | Cross-project (Simplenote) | — | ⚠️ **Simplenote MCP + AgentMemory không khả dụng phiên này** ⇒ chưa ghi được, phải ghi lại ở phiên có công cụ |
 
+## Đợt next6 (Prompt-5 + Prompt-6) + PUSH/CI APK (2026-09-26, `result75.txt`)
+
+> Phiên này commit `0ef6334` (Prompt-5) · `50c3aaf` (full snapshot) · `6bb4d76` (xoá probe) — ĐÃ PUSH.
+> **6 lỗi/bài học của chính AI** — đã ghi vào `.agents/skills/erpn-verify-first/SKILL.md` (+6 hàng).
+
+- **Checkbox tick `[x]` nhưng ARTIFACT không tồn tại.** `tasks.md` của change đã tick "viết `next6-result5.md` + cập nhật `working.md`",
+  nhưng `ls .plan/next6-result5.md` = không có + `grep Prompt-5 working.md` = 0 hit (phiên trước định làm rồi bị cắt).
+  *Luật: mỗi `[x]` phải kèm 1 lệnh `ls`/`grep` chứng minh artifact TỒN TẠI; phiên sau không tin checkbox, tự kiểm lại.*
+- **Test spawn server con: seam đọc LÚC LOAD + thiếu `finally` ⇒ treo suite 120s.** `__setNlpServicePortForTest` phải set TRƯỚC `import`;
+  server/child phải đóng trong `try/finally` (nếu không, `node --test` treo tới hết timeout thay vì fail nhanh).
+  *Luật: đọc shape seam trong test có sẵn (`http-ask.test.mjs`) trước khi tự dựng fake; mọi setup trong `try`, cleanup trong `finally`.*
+- **`node --test` trần thiếu env ⇒ fail GIẢ.** `scripts.test` = `COPILOT_MOCK_OK=1 node --test`; chạy lệnh trần ⇒ **10 fail đồng loạt** không liên quan code.
+  *Luật: chạy qua `npm test` (hoặc đọc `scripts.test` để biết env); nhiều file cùng fail ở dòng setup = nghi THIẾU ENV, không phải regression.*
+- **`flutter analyze` với `package_config.json` cũ ⇒ 1480 issue "undefined" GIẢ.**
+  *Luật: `flutter pub get` TRƯỚC analyze/test; "undefined" hàng loạt = package_config cũ, không sửa code theo lỗi giả.*
+  (Trùng nhóm với bài học next5 — đã có hàng trong SKILL, ghi lại để nhấn tần suất ≥2.)
+- **A/B revert proof tự gây rác.** Gỡ code bằng script `indexOf(anchor)` (anchor xuất hiện nhiều lần) ⇒ cắt sai; `cp a b c path` dồn
+  nhiều nguồn ⇒ tạo file rác `data/chat_controller.dart` ⇒ `flutter analyze` 50 issue do chính mình.
+  *Luật: backup `cp` TỪNG file + verify sha256; gỡ code bằng neo DUY NHẤT; sau gỡ phải `git status`/`find` xác nhận không rác rồi mới chạy.*
+- **Force-push với lịch sử không liên quan KHÔNG kích hoạt workflow path-filter.** Push đè lên `change/flutter-chat-mvp` xong
+  KHÔNG thấy CI chạy dù `apps/mobile/**` có đổi ⇒ phải `workflow_dispatch` mới có run. Push fast-forward sau đó TỰ trigger bình thường.
+  *Luật: sau force-push, đừng chờ CI — kiểm `actions/runs` theo sha, không có thì dispatch tay.*
+
+### Nơi đã lưu (đối chiếu, để lần sau không ghi trùng)
+
+| Nhóm | Nơi sở hữu | Hình thức |
+|---|---|---|
+| Bẫy project (checkbox artifact · seam test treo · env test trần · analyze giả · A/B revert rác · force-push CI) | `.agents/skills/erpn-verify-first` | +6 hàng |
+| Cross-project (Simplenote) | — | ⚠️ **Simplenote MCP + AgentMemory không khả dụng phiên này** ⇒ chưa ghi được, phải ghi lại ở phiên có công cụ |
+

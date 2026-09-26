@@ -737,3 +737,15 @@ A: Không. Sửa xong thẻ (số tiền) + test xanh + review thủ công, rồ
 
 **H: Sao phiên này không có bằng chứng chạy công cụ review tự động (OCR / AgentMemory)?**
 A: Đúng — phiên này **không tool review nào khả dụng** (OCR `open-code-review` · AgentMemory · `codebase-memory-mcp` · `cocoindex-code` · Simplenote MCP đều không gọi được). Vì vậy Code Review chạy **thủ công** qua `git diff`/grep, và không ghi được bài học cross-project vào Simplenote/AgentMemory. Đã ghi rõ trong `result74.txt` §3 + handoff để phiên sau biết.
+
+## §17 — Build APK (CI) — những chỗ dễ hiểu sai (2026-09-26)
+
+**H: CI báo build "xanh" rồi, vậy cài APK là chạy được ngay à?**
+A: **Không hẳn.** APK build thành công (`erpn-chat-debug-apk` ~81,5 MB) nhưng repo **Variables/Secrets đang TRỐNG (0/0)** ⇒ endpoint nhúng vào app rơi về **mặc định loopback `127.0.0.1:8788`** — chỉ dùng được khi chạy cùng máy có gateway. Muốn APK trỏ tới gateway/tunnel thật, cần thêm: biến `COPILOT_BASE_URL`, `COPILOT_AUTH_USER` + secret `COPILOT_AUTH_PASSWORD`, rồi chạy lại workflow.
+
+**H: Vì sao phải xóa một file test để build được APK?**
+A: File đó (`_probe_review_test.dart`) là **harness probe TẠM** (tự ghi trong header: *"temporary... deleted once the findings are confirmed"*). Nó render thẻ đề xuất **ngoài khung ListView** thật (production) ⇒ thẻ tràn ~6400px, nút [Xác nhận] bị đẩy ra ngoài màn ⇒ tap không tới server ⇒ 3 fail GIẢ. Các findings của nó (unmount-khi-đang-gửi, giữ `command_id` qua recycle, retry 503) **đã được test thật `proposal_card_test.dart` phủ** ⇒ xóa probe không mất độ phủ. Sau khi xóa: `flutter test` **343/343 PASS**.
+
+**H: Push có "clone repo GitHub về" không?**
+A: **Không.** Theo yêu cầu, **nguồn sự thật là môi trường cloud shell** ⇒ push **đè** (force) cây local lên branch `change/flutter-chat-mvp`, không clone/merge ngược về. Hệ quả cần biết: lịch sử branch trên remote nay là chuỗi commit của cây cloud shell (`0ef6334` → `50c3aaf` → `6bb4d76`), không phải lịch sử cũ.
+

@@ -1,0 +1,181 @@
+========================================================================
+result75.txt — ERPNext Vietnamese Voice Copilot (erpn_mobile1)
+Phiên 2026-09-26 (bổ sung sau result74): NEXT6 Prompt-5 + Prompt-6 + PUSH + CI APK
+========================================================================
+
+Máy: /home/hoangsoft90/htdocs_apps/erpn_mobile1 (cloud shell — NGUỒN SỰ THẬT)
+Branch local: master → push thẳng lên remote branch change/flutter-chat-mvp
+Tool KHÔNG khả dụng phiên này: OCR open-code-review · AgentMemory · codebase-memory-mcp
+  · cocoindex-code · Simplenote MCP ⇒ Code Review chạy dạng FALLBACK (thủ công), tự khai.
+
+------------------------------------------------------------------------
+§1. PROMPT-5 — REAL-only · API contract /dsh/ask · Observability
+------------------------------------------------------------------------
+OpenSpec change MỚI: openspec/changes/next6-real-contract-observability/
+  ⇒ `openspec validate next6-real-contract-observability` = "is valid".
+
+Audit code trước khi sửa ⇒ 2 GAP THẬT (đã vá):
+  (1) mcp-erpnext/src/dsh-gateway.mjs — 3 logEvent phase "dsh_ask"
+      (refused L1308 · failed L1337 · answered L1402) thiếu correlation.
+      ĐÃ THÊM: request_id · user_id (principalId server-side) · conversation_id
+      · dsh_in_flight (dshInFlight() lúc log) · outcome · latency_ms.
+      KHÔNG thêm log line mới, KHÔNG đổi HTTP shape.
+  (2) Flutter không adopt conversation_id server cấp.
+      apps/mobile/lib/features/chat/data/copilot_api_client.dart: DshAnswer += conversationId (additive)
+      apps/mobile/lib/features/chat/data/conversation_id_service.dart: += save(id,{server,user})
+      apps/mobile/lib/features/chat/application/chat_controller.dart L284-297: adopt + persist
+      (cùng id ⇒ no-op; giữ nguyên thread khi follow-up).
+
+REAL-only audit — grep `mock|smock|fake|dummy|fixture|stub|sample|demo|fallback|testData`
+trong mcp-erpnext/src = 324 match (kể cả comment) ⇒ KHÔNG runtime data path nào tự
+fallback sang mock:
+  · copilot-server.mjs:557 pickServerScript — REAL khi ERPNEXT_* set; mock CHỈ khi
+    COPILOT_MOCK_OK=1; else THROW ERPNEXT_NOT_CONFIGURED.
+  · ocr/ocr-provider.mjs:256 — OCR_PROVIDER thiếu config ⇒ TỪ CHỐI fallback mock âm thầm.
+  · ocr/ocr-slots.mjs:138 — provenance.mock ⇒ từ chối dựng đề xuất từ mock.
+  · mock-server.mjs / mock-ocr.mjs — fixture opt-in test boundary.
+  · envMs/envInt fallbackMs — default THỜI GIAN, không phải mock data.
+
+Tests THẬT:
+  $ node --test test/next6-session-isolation.test.mjs
+  ℹ tests 19 · pass 19 · fail 0
+    ✔ Prompt5 observability — dsh_ask log line carries request_id, user_id,
+      conversation_id, dsh_in_flight, outcome, latency (no secret)
+    ✔ Prompt5 observability — a WRITE refusal line ALSO carries principal + conversation
+    ✔ Prompt5 contract — a body user_id cannot cross into another principal's namespace
+
+  $ node --test test/target.test.mjs test/mock-optin.test.mjs
+    ✔ no ERPNEXT_* and no COPILOT_MOCK_OK -> refuses with ERPNEXT_NOT_CONFIGURED
+
+  $ node --test test/http-ask.test.mjs
+    ✔ /dsh/ask route: health truth, malformed conversation_id, and a WRITE question refused at the edge
+
+  $ flutter test test/dsh_mode_test.dart test/conversation_id_service_test.dart
+    +17 All tests passed!
+    ✔ Prompt5 the server-issued conversation id is adopted for the NEXT call
+    ✔ Prompt5 an echoed (same) conversation id changes nothing
+
+BÀI HỌC điều tra: 3 fail `_probe_review_test.dart` (RenderFlex overflow 5787px)
+KHÔNG do Prompt-5 ⇒ CHỨNG MINH bằng A/B: backup 3 file lib (sha256 khớp) → gỡ hết
+3 edit Prompt-5 → probe VẪN fail đúng 3 test → restore (sha256 khớp). KHÔNG phải regression.
+
+Docs: .plan/next6-result5.md (MỚI) · working.md entry Prompt-5.
+
+------------------------------------------------------------------------
+§2. COMMIT Prompt-5 (theo yêu cầu user)
+------------------------------------------------------------------------
+0ef6334  feat(next6): dsh_ask correlation + adopt server conversation_id (Prompt-5)
+  13 file (7 code/test + OpenSpec change 4 file + working.md). 4281 insertions.
+  Secret scan: GH_TOKEN / ERPNEXT_API_SECRET / ghp_ / BEGIN PRIVATE KEY = KHÔNG xuất hiện.
+  LƯU Ý: repo local CHƯA có commit nào trước đó ⇒ đây là ROOT commit (mọi file khác untracked).
+
+------------------------------------------------------------------------
+§3. PROMPT-6 — Regression gate toàn NEXT 6 (chỉ sửa blocker FAIL)
+------------------------------------------------------------------------
+Báo cáo: .plan/next6-final-report.md (+ .plan/next6-result6.md pointer).
+Đối chiếu next6_final.md §11 = PASS toàn bộ 26 dòng criterion
+  (Identity 3 · Session 3 · Isolation 4 · DSH 4 · WRITE 4 · REAL-only 3 · Quality 5).
+
+Focused suites:
+  next6-session-isolation 19/19 · safety-gateway 10/10 · http-execute 18/18
+  command-store-persistence 4/4 · payment-write 44/44 · correlation-field 4/4
+  ⇒ gộp 6 file = 99 tests · 99 pass · 0 fail.
+
+Full:
+  npm test        = 847 tests · 845 pass · 2 fail
+                    (2 fail = dshGatewayHealth + verifyDshRuntime — DSH runtime thật, timeout 30s, môi trường B0)
+  flutter analyze = No issues found!
+  flutter test    = 344 pass · 3 fail  (3 fail = _probe_review_test.dart — A/B đã chứng minh có sẵn)
+
+REAL E2E trên SITE THẬT (ERPNEXT_URL trong .env, KHÔNG COPILOT_MOCK_OK):
+  ( set -a; . ./.env; set +a; node .plan/probe-p4-smoke-real.mjs --dry-run )
+    mcp: REAL server child spawned (pickServerScript → real)
+    target customer P1F-ACCEPT T3 · invoice ACC-SINV-2026-01239 outstanding=199000
+    open DRAFT Payment Entries of target (before): 0
+    Payment Entry list BEFORE: count=100, newest ACC-PAY-2026-00749
+    DRY-RUN complete — chưa ghi gì.
+  Fresh REST read phiếu (Prompt-4 smoke) — chứng minh §9.7:
+    ACC-PAY-2026-00749 · docstatus=1 · party=P1F-ACCEPT T3 · paid_amount=1000.0
+    reference_no=1f1bdd2a-527b-4b7b-83cf-b71ceea1483f
+    custom_ai_action_id=act_317a820c-9e96-4863-ae1f-2ff6d41f5203
+
+Definition of Done = PASS: 6 test chứng minh cách ly principal/conversation
+  (§9.3 · §3.1 clear-only-caller · §9.6 proposal-other-principal-refused ·
+   §9.6 B-cannot-replay-A · G3 sessionContext · Prompt5 body-user_id-cannot-cross)
+  + DSH_MAX_CONCURRENT default = 1 (dsh-gateway.mjs:384) + test Prompt3 global=1.
+
+------------------------------------------------------------------------
+§4. PUSH + CI APK
+------------------------------------------------------------------------
+Repo: hoangsoft90/erpn_mobile1 · remote branch DUY NHẤT: change/flutter-chat-mvp
+  ls-remote trước push: change/flutter-chat-mvp @ d498ceb
+User chốt: "tuyệt đối ko clone từ github repo về, trust source mới nhất luôn là cloud shell".
+  ⇒ KHÔNG clone/merge; PUSH ĐÈ (force) cây local.
+
+Commit #2 (full snapshot để CI có đủ cây):
+  50c3aaf  chore: sync full source tree to GitHub (cloud shell = source of truth)
+  532 file tracked. Secret scan sạch. .gitignore chặn .env/.agents/.plan/...
+
+Push #1 (force-with-lease, an toàn theo sha đã biết):
+  + d498ceb...50c3aaf HEAD -> change/flutter-chat-mvp (forced update)
+  ⚠️ Force-push với lịch sử KHÔNG liên quan KHÔNG kích hoạt workflow có path-filter.
+
+CI lần 1 (dispatch tay): run 36240691434 @ 50c3aaf
+  Step 7 Analyze: success
+  Step 8 Test:    FAILURE  ← _probe_review_test.dart (3 test RenderFlex overflow 5787px)
+  Step 9 Build APK: skipped ⇒ KHÔNG có APK.
+
+FIX BLOCKER (chỉ sửa blocker): xoá file PROBE TẠM
+  apps/mobile/test/_probe_review_test.dart
+  Căn cứ: header file tự ghi "PROBE ONLY — temporary review harness (result40).
+    Deleted/converted once the findings are confirmed".
+  Findings ĐÃ được phủ bởi test THẬT proposal_card_test.dart:
+    · L641 "result40 F1: unmount while /execute is in flight — success path must not setState after dispose"
+    · L367 P4: 503 retry_same_command_id — stable command_id
+    · L415/457 network-error retry → ONE stable command_id
+  Probe render ProposalCard NGOÀI ListView host (production) ⇒ overflow ~6387px đẩy
+    nút [Xác nhận] ra ngoài màn ⇒ tap không tới server (P2b keys=[], P2 calls=0)
+    ⇒ 3 fail GIẢ, không phải bug production.
+  grep: KHÔNG ai tham chiếu _probe_review. proposal_card_test 41/41 PASS.
+
+  $ flutter test (sau xoá)  → +343 All tests passed!  (0 fail)
+
+Commit #3 + push #2 (fast-forward, TỰ kích hoạt CI):
+  6bb4d76  test: remove stale _probe_review harness that blocks CI
+  To https://github.com/hoangsoft90/erpn_mobile1.git  50c3aaf..6bb4d76  HEAD -> change/flutter-chat-mvp
+
+CI lần 2 (push tự động): run 36241021427 @ 6bb4d76 — COMPLETED **SUCCESS**
+  1 Set up job ✅  2 Checkout ✅  3 Java 21 ✅  4 Flutter ✅  5 Pub get ✅
+  6 build_runner ✅  7 Analyze ✅  8 Test ✅  9 Build debug APK ✅  10 Upload APK ✅
+  Artifact: erpn-chat-debug-apk — 85.415.289 bytes (~81,5 MB) — expired=False
+
+⚠️ CẢNH BÁO cấu hình: repo VARIABLES = 0, SECRETS = 0.
+  ⇒ APK build với COPILOT_BASE_URL/COPILOT_AUTH_USER/COPILOT_AUTH_PASSWORD TRỐNG
+    ⇒ rơi về default trong app (loopback 127.0.0.1:8788). APK CHẠY nhưng KHÔNG trỏ
+    tới gateway/tunnel thật. Muốn dùng thật: user thêm
+      vars:   COPILOT_BASE_URL, COPILOT_AUTH_USER
+      secret: COPILOT_AUTH_PASSWORD
+    rồi chạy lại CI.
+
+------------------------------------------------------------------------
+§5. BÀI HỌC → SKILL (đã ghi)
+------------------------------------------------------------------------
+.agents/skills/erpn-verify-first/SKILL.md — thêm 6 hàng vào bảng "Đoán vs Thực tế":
+  1) tasks.md tick [x] nhưng artifact (result5.md/working.md) KHÔNG tồn tại — tin checkbox.
+  2) Test spawn server con: seam đọc LÚC LOAD (set sau import vô hiệu) + thiếu finally
+     ⇒ node --test treo 120s.
+  3) node --test trần thiếu COPILOT_MOCK_OK=1 ⇒ 10 fail GIẢ.
+  4) flutter analyze --no-pub với package_config cũ ⇒ 1480 issue "undefined" GIẢ.
+  5) A/B revert: indexOf(anchor) xuất hiện nhiều lần ⇒ cắt sai; cp dồn nhiều nguồn ⇒
+     file rác → analyze 50 issue do chính mình.
+  6) write_file/edit thiếu tham số bắt buộc ⇒ tool error.
+
+------------------------------------------------------------------------
+§6. TRẠNG THÁI CUỐI
+------------------------------------------------------------------------
+- Commit: 0ef6334 (Prompt-5) · 50c3aaf (full snapshot) · 6bb4d76 (xoá probe) — ĐÃ PUSH.
+- CI APK: run 36241021427 SUCCESS · artifact 81,5 MB.
+- CHƯA có Variables/Secrets ⇒ APK chưa có endpoint thật.
+- CHỜ USER: (a) M1/M2 refresh "Hôm qua" (vùng số tiền) · (b) revoke token ghp_… đã từng
+  lộ chat · (c) thêm Variables/Secrets rồi build lại nếu cần APK có endpoint.
+=EOF=

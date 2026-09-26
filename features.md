@@ -306,3 +306,19 @@ Số tiền ở màn này **COPY từ ERPNext**, không chỗ nào tự tính; *
 - **Trước Phase 14:** Phase 9 (race condition/saga) + PII scrubbing (Phase 5) phải pass audit thủ công — nghĩa vụ pháp lý, không phải chất lượng sản phẩm.
 - Quyết định kiến trúc đã chốt (khác khuyến nghị 5 review gốc): dùng **dsh** làm runtime thay vì tự viết agent loop; **không tách MCP skill layer riêng** ngay từ đầu (YAGNI), có 2 trigger rõ ràng để tách.
 - **Chốt với user 2026-09-13:** client đích = **Flutter** · cầu nối Python↔Flutter/dsh = **HTTP service nội bộ** · `"công nợ"` → `receivable` · **an toàn số tiền > độ phủ** · monetization **có làm** (`phase-15`).
+
+## NEXT 6 (2026-09-26) — Session Isolation · WRITE Idempotency · REAL-only · Observability (✅ code+test+commit+PUSH)
+
+- **Session isolation theo `principal + conversation`:** key DSH dùng `${principalId}\0${conversationId}` (`dsh-gateway.mjs:485`) —
+  KHÔNG còn lấy `conversation_id` đơn độc làm định danh; principal do **server resolve** (body `user_id` KHÔNG phải authority).
+  LRU eviction + bảo vệ session đang xử lý + hard cap deterministic (`SESSION_LIMIT_EXCEEDED`).
+- **WRITE isolation + idempotency:** proposal/command gắn principal — **proposal của người khác bị từ chối** (`PROPOSAL_PRINCIPAL_MISMATCH`),
+  B **không replay** được `command_id` đã hoàn tất của A; retry cùng `command_id` **không** sinh phiếu thứ hai. Payment Entry chỉ
+  báo thành công khi **verify `docstatus=1`** (REAL smoke: `ACC-PAY-2026-00749` docstatus=1).
+- **DSH global concurrency giữ = 1** (default `DSH_MAX_CONCURRENT`), mỗi request có scratch `DSH_HOME` riêng + cleanup an toàn.
+- **Observability:** log `dsh_ask` mang đủ `request_id`/`user_id`/`conversation_id`/`dsh_in_flight`/`outcome`/`latency_ms`
+  (không lộ secret); Flutter **adopt `conversation_id`** server cấp để giữ đúng thread khi hỏi tiếp.
+- **REAL-only:** audit 324 match ⇒ **0 runtime fallback mock**; ERPNext là source of truth.
+- **CI APK:** push `change/flutter-chat-mvp` ⇒ run `36241021427` SUCCESS, artifact `erpn-chat-debug-apk` (~81,5 MB).
+  ⚠️ **Chưa cấu hình Variables/Secrets** ⇒ APK chưa có endpoint thật (loopback default).
+

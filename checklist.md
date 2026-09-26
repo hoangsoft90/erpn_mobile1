@@ -1,8 +1,53 @@
 # checklist.md — ERPNext Vietnamese Voice Copilot (erpn_mobile1)
 
 Danh sách kiểm tra nhanh: **đã làm / chưa làm / cần hỏi lại**.
-Bằng chứng chi tiết: `result*.txt` (mới nhất = result74) + `.plan/phases3/*-result.md`.
+Bằng chứng chi tiết: `result*.txt` (mới nhất = result75) + `.plan/phases3/*-result.md`.
 Trạng thái roadmap chi tiết nằm ở `next.md` — file này KHÔNG nhân bản, chỉ tóm tắt.
+
+## PHIÊN 2026-09-26 (2) — NEXT6 Prompt-5/Prompt-6 + PUSH + CI APK ✅
+
+| Việc | Trạng thái |
+|---|---|
+| Prompt-5 (obs `dsh_ask` + Flutter adopt conversation_id) | ✅ commit `0ef6334` |
+| Prompt-6 regression gate toàn NEXT6 | ✅ PASS 26/26 criterion — `.plan/next6-final-report.md` (+ `next6-result6.md`) |
+| Push lên GitHub (`change/flutter-chat-mvp`) | ✅ `50c3aaf` (full snapshot) + `6bb4d76` (xoá probe) — force-push `d498ceb...50c3aaf` |
+| CI build APK | ✅ run **`36241021427`** SUCCESS · artifact `erpn-chat-debug-apk` (~81,5 MB) |
+| Fix blocker CI (probe tạm) | ✅ xoá `apps/mobile/test/_probe_review_test.dart` ⇒ Flutter **343/343** |
+| Bài học → skill | ✅ `.agents/skills/erpn-verify-first/SKILL.md` (+6 hàng) |
+| Docs đồng bộ | ✅ `next.md` · `faq.md` · `features.md` · `LESSONS_LEARNED.md` · `result75.txt` · handoff |
+
+### Đã làm — Prompt-5 (2 gap THẬT đã vá, commit `0ef6334`)
+
+- `dsh-gateway.mjs`: 3 logEvent `dsh_ask` (refused/failed/answered) += `request_id` · `user_id` (principal server-side)
+  · `conversation_id` · `dsh_in_flight` · `outcome` · `latency_ms` — KHÔNG thêm log line, KHÔNG đổi HTTP shape.
+- Flutter: `DshAnswer.conversationId` (additive) + `ConversationIdService.save()` + controller adopt id server cấp
+  (cùng id ⇒ no-op).
+- OpenSpec change **`next6-real-contract-observability`** (validate valid).
+- REAL-only audit: grep 324 match ⇒ **0 runtime path tự fallback mock**.
+- Node **19/19** (file Prompt-5) · Flutter **17/17** (vùng chạm).
+
+### Đã làm — Prompt-6 (regression gate; CHỈ sửa blocker)
+
+- Focused **99/99** (session 19 · safety-gateway 10 · http-execute 18 · command-store 4 · payment-write 44 · correlation 4).
+- Full Node **847/845/2** (2 fail `dshGatewayHealth`+`verifyDshRuntime` môi trường B0) · `flutter analyze` **0**.
+- **REAL E2E site THẬT** (không `COPILOT_MOCK_OK`): `probe-p4-smoke-real.mjs --dry-run` PASS +
+  fresh REST read `ACC-PAY-2026-00749` **docstatus=1**.
+
+### Đã làm — PUSH + CI APK
+
+- User chốt **KHÔNG clone** từ GitHub (cloud shell = nguồn sự thật) ⇒ **force-push** cây local (không merge).
+- CI lần 1 (`36240691434`) **FAIL** ở step `Test` (`_probe_review_test.dart` RenderFlex overflow 5787px) ⇒ không có APK.
+- **Blocker fix**: xoá probe tạm `_probe_review_test.dart` (header tự ghi "temporary... deleted once confirmed";
+  findings ĐÃ phủ bởi `proposal_card_test.dart` L641/L367/L415). `flutter test` **343/343**.
+- CI lần 2 (`36241021427`, push tự động) **SUCCESS** — đủ 10 step, artifact 81,5 MB.
+
+### CHƯA làm / CHỜ USER
+
+1. **⚠️ Repo Variables/Secrets đang TRỐNG (0/0)** ⇒ APK nhúng endpoint mặc định (loopback `127.0.0.1:8788`).
+   Muốn APK dùng được: thêm `vars: COPILOT_BASE_URL, COPILOT_AUTH_USER` + `secret: COPILOT_AUTH_PASSWORD` rồi build lại.
+2. **M1/M2** refresh/retry "Hôm qua" (vùng SỐ TIỀN) — vẫn CHỜ USER (từ phiên trước).
+3. **Revoke token GitHub** đã từng lộ qua chat (`ghp_…`).
+4. Archive OpenSpec `next6-real-contract-observability` (user chưa duyệt).
 
 ## PHIÊN 2026-09-26 — next5 ĐÃ COMMIT + fix "Hôm qua" ĐÃ COMMIT + audit NEXT6 — 2 commit CHƯA push
 
