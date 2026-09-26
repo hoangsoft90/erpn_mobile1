@@ -1,0 +1,21 @@
+{
+  "name": "erpn-mobile1",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Nghiệp Vụ AI — Vietnamese voice copilot for ERPNext. Root manifest exists to PIN the DSH agent runtime (`.plan/dsh_prompt_check.md` §3): the gateway spawns this exact version, so an unpinned install would change the agent's behaviour without any code change here.",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh": "0.1.5-rc.1"
+  },
+  "scripts": {
+    "dsh:check": "bash scripts/check-dsh-runtime.sh",
+    "dsh:runner": "node scripts/dsh-remote-runner.mjs",
+    "dsh:e2e:read": "bash scripts/dsh-e2e-read.sh",
+    "dsh:e2e:write-block": "bash scripts/dsh-e2e-write-block.sh",
+    "check:ask-normal": "bash scripts/check-ask-normal.sh",
+    "check:topology": "bash scripts/check-dsh-topology.sh"
+  }
+}

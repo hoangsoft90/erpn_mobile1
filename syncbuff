@@ -1,0 +1,8 @@
+#!/bin/bash
+export CLOUDSDK_CONFIG=~/.config/gcloud-hoangsoft90
+
+echo "> zip on gcloud"
+gcloud cloud-shell ssh --command='cd ~/.config/manicode/projects/ && rm -f ~/erpn_mobile1_sess.zip && zip -r ~/erpn_mobile1_sess.zip erpn_mobile1'
+
+echo "> download zip"
+gcloud cloud-shell scp cloudshell:~/erpn_mobile1_sess.zip localhost:/Users/hoang/htdocs/erpnext/erpn_mobile1/.draft/

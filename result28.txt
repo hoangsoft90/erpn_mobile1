@@ -1,0 +1,135 @@
+========================================================================
+RESULT 28 — VIẾT faq.md ⇒ PHÁT HIỆN 2 BUG TIỀN/ĐỊNH DANH THẬT (ĐÃ VÁ)
+    + 1 KHOẢNG TRỐNG LỚN (nút [Xác nhận] chưa có đường sinh đề xuất)
+Timestamp: 2026-09-16 (sau result27)
+Env: container Google Cloud Shell · Node v24.20.0 · Python 3.12.3 · Flutter 3.47.2
+Yêu cầu gốc: "hình dung ra mọi trường hợp web app gây hiểu sai, hiểu nhầm +
+ví dụ cụ thể → viết lại thành faq.md". Vá bug là hệ quả của việc KIỂM CHỨNG
+từng ví dụ trước khi viết (không dán ví dụ suy đoán vào tài liệu).
+========================================================================
+
+== 1. BUG THẬT #1 — TÊN KHÁCH TRÙNG TỪ CHỈ SỐ LÀM SỐ TIỀN SAI (vùng TIỀN) ==
+Cách tìm: để FAQ không bịa, mỗi ví dụ số tiền đều chạy normalize() thật. Case
+"ghi nợ cho bác Hai 500 ngàn" cho amount=2500000 → nghi ngờ, probe hẹp tiếp.
+
+  $ PYTHONPATH=src python3 -c "from vietnamese_nlp import normalize as n; print(n('bác Hai 500 ngàn').amount)"
+  2500000                     ← SAI: 500 ngàn = 500.000
+  'chị Bảy 300 ngàn' → 7300000 ← 7 đọc từ TÊN "Bảy"!
+  'cho bác Hai 300 ngàn' → 2300000 · 'ghi nợ cho Lan 500 ngàn' → 500000 (đúng)
+
+NGUYÊN NHÂN GỐC (đọc code, không đoán): money.py có luật "số cách nhau" cho
+dạng "1 500 000" (`current = current * 1000 + t.value`, guard chỉ kiểm nhóm
+theo sau có 3 chữ số). Từ-chỉ-số ở trước ("Hai"=2) lọt vào luật đó ⇒ 2*1000+500
+= 2500, rồi ×1000 (ngàn) = 2.500.000. Kinship stripper cố ý để lại "Hai"
+(nickname bậc sinh) nên parser ăn luôn cái tên.
+
+FIX: thêm cờ `current_from_digits` — luật "số cách nhau" CHỈ áp cho giá trị
+được dựng từ chữ số; nhánh ONES/HALF_WORDS set cờ = False.
+  Sau fix: 'bác Hai 500 ngàn' → 500000 · 'chị Bảy 300 ngàn' → 300000
+  Vẫn đúng: '1 500 000' → 1500000 · 'anh Nam trả 1 500 000đ' → 1500000
+
+TEST HỒI QUY: tests/test_money.py::TestNamesThatLookLikeNumbers (8 case tên +
+3 case số-cách-nhau hợp lệ).
+FALSIFICATION (gỡ cờ): FAIL đúng chỗ —
+  AssertionError: 2500000 != 500000          ('ghi nợ cho bác Hai 500 ngàn')
+  AssertionError: 2300000 != 300000          ('cho bác Hai 300 ngàn')
+  AssertionError: 7300000 != 300000          ('chị Bảy 300 ngàn')
+Khôi phục → Python 60/60 OK.
+
+== 2. BUG THẬT #2 — DANH XƯNG KHỚP SAI KHÁCH (đường ĐỌC, ảnh hưởng định danh) ==
+Chạy thật /ask (NLP service + ERPNext thật, chỉ ĐỌC):
+  Q: chị Lan còn nợ bao nhiêu
+     normalized: "Lan receivable bao nhiêu"
+     → answer null, reason: không tìm thấy khách hàng trong "Lan receivable bao nhiêu"
+  Q: thu tiền cho chị Lan 500 ngàn
+     normalized: "payment cho chị Lan 500 ngàn"      ← "chị" SỐNG SÓT (đúng thiết kế:
+       stripper chỉ bỏ danh xưng ở ĐẦU câu, vì giữa câu danh xưng thường là phần
+       tên thật — bài học b12 "Công trình nhà ông An")
+     → customer = "Chị Tư — thầu nhỏ"                 ← SAI KHÁCH, KHÔNG cảnh báo
+     → answer: "Chị Tư — thầu nhỏ chưa có phiếu thu nào..."
+
+NGUYÊN NHÂN GỐC: site demo có khách tên đúng là "Chị Tư — thầu nhỏ". Mảnh "chị"
+khớp DUY NHẤT một khách ⇒ vòng substring-match trong resolveCustomer() trả về
+ngay, không đi tới các mảnh tên thật ("Lan").
+
+FIX: thêm KINSHIP_TITLES trong copilot-server.mjs; resolveCustomer() loại các
+ứng viên danh xưng đứng MỘT MÌNH trước khi chấm điểm (không thể vừa thắng unique
+vừa làm fallback ambiguity). Danh xưng vẫn khớp được khi nằm trong cụm dài hơn.
+
+TEST HỒI QUY (customer-resolve.test.mjs, +3 test): mảnh tên thật thắng danh xưng ·
+danh xưng một mình KHÔNG resolve (list chỉ có "Chị Tư — thầu nhỏ" → null) · khách
+tên có danh xưng vẫn tra được bằng tên ĐẦY ĐỦ.
+FALSIFICATION (gỡ filter): 2 test FAIL —
+  actual: 'Chị Tư — thầu nhỏ'  (đúng lỗi cũ)  → khôi phục: Node 97/97.
+
+== 3. KHOẢNG TRỐNG LỚN — NÚT [XÁC NHẬN] CHƯA CÓ ĐƯỜNG SINH ĐỀ XUẤT (CHƯA SỬA) ==
+Kiểm bằng grep (không suy đoán):
+  $ grep -rn "buildPaymentProposal" --include=*.mjs --include=*.dart . | grep -v /test/
+  ./mcp-erpnext/src/skills/payment-write.mjs:253:export async function buildPaymentProposal(...)   ← chỉ ĐỊNH NGHĨA
+  $ grep -rln "record_customer_payment" . → KHÔNG có file nào
+⇒ Hàm tạo đề xuất thu tiền CHỈ được test gọi. Tool duy nhất cho trợ lý
+(copilot_ask) chỉ trả proposal ĐỌC; router chỉ có 4 nhóm ĐỌC. Kết quả dùng thật:
+  · KHÔNG câu hỏi nào sinh ra proposal action=create_payment_entry
+  · ⇒ nút [Xác nhận thu tiền] (Flutter) KHÔNG BAO GIỜ hiện trong luồng chat
+  · ⇒ /execute chỉ tới được bằng gọi tay (đúng như các lần test Stage B)
+  · và câu trả lời vẫn ghi "Ghi nhận phiếu thu mới là Phase 7 — Phase 2 chỉ đọc"
+    (chữ đã CŨ: Phase 7 đã code xong phần máy móc)
+KHÔNG tự sửa trong phiên này: nối đường ghi là thay đổi hành vi vùng tiền, cần
+user quyết (nối ngay hay gộp Phase 9). ĐÃ ghi vào faq.md §3.2/§3.3 và §9.
+
+== 4. faq.md (sản phẩm chính của yêu cầu) ==
+Tạo `faq.md` — 9 mục, mỗi mục là câu hỏi thật + VÍ DỤ cụ thể + "app thực sự làm gì":
+ 1. Số tiền: 13 cách nói app đọc ĐÚNG (bảng) · 5 cách app CỐ Ý không đọc
+    ("tám trăm", "một triệu hai", "2tr5k", "hơn 10 triệu", "2 bạc") · lỗi tên-trùng-số
+    (đã vá) · định dạng "2.500.000" và cạm bẫy copy sang locale EN (sai 1000 lần)
+ 2. Danh xưng & tên: chỉ bỏ danh xưng ở ĐẦU câu (lý do) · lỗi "Chị Tư — thầu nhỏ"
+    (đã vá) · "không tìm thấy khách" ≠ app hỏng · trùng tên ⇒ app HỎI/cảnh báo ·
+    `CUST-00001` là ID nội bộ
+ 3. Đọc hay GHI: "thu tiền …" KHÔNG ghi gì · nút [Xác nhận] chưa có đường sinh ·
+    chữ "Phase 2 chỉ đọc" đã cũ · "ghi nợ" = bán chịu (khác bút toán Nợ) ·
+    "công nợ" = receivable · "trả tiền" hiểu theo chiều phiếu thu của khách ·
+    "nhập hàng" thuộc nhóm tồn kho
+ 4. Đọc kết quả: tổng NET gồm credit note (171.800 vs 269.000 cộng tay) · dòng âm =
+    khách dư · "hôm nay thu được bao nhiêu" chưa hỗ trợ · tồn kho là actual_qty
+    (chưa trừ reserve), khớp nhiều/không khớp vật tư thì hiện tất cả
+ 5. Ghi tiền: NHÁP ⇒ công nợ KHÔNG giảm (bằng chứng số thật) · bấm 2 lần/mất mạng/
+    restart đều không ghi 2 phiếu ("chống trùng") · 5 tình huống app TỪ CHỐI ghi ·
+    "Tiền mặt"→"Cash" là thay thế có kiểm soát · không có phương thức khớp ⇒ từ chối ·
+    số tiền kẹp theo nợ thật (nhưng số sai định dạng thì TỪ CHỐI) · chỉ VND 1:1 ·
+    phiếu có reference_no = command_id + allocation + remarks
+ 6. Môi trường: im lặng ≠ dữ liệu sai (tunnel Mac) · 429/503 free tier · dữ liệu demo
+    lẫn site thật (kể cả 2 phiếu nháp 10.000đ) · ⚠️ KHÔNG scrub PII theo sign-off ·
+    lịch sử cục bộ, chưa có đăng nhập · audit/idempotency-store chứa tên+số tiền,
+    đừng để /tmp · key ERPNext ở server, không trong APK
+ 7. Ranh giới: danh sách rõ việc app KHÔNG làm
+ 8. Lệnh tự kiểm lại từng ví dụ
+ 9. Còn treo ⇒ cần user quyết (bảng 5 dòng, gồm nút [Xác nhận] + submit)
+
+== 5. SUITE CUỐI ==
+  Python : Ran 60 tests in 0.476s — OK          (58 → 60)
+  Node   : ℹ tests 97 · pass 97 · fail 0        (93 → 97)
+  Flutter: 00:04 +27: All tests passed!
+  (không chạy lại analyze trong lệnh cuối — lần gần nhất: No issues found)
+
+== 6. FILE THAY ĐỔI PHIÊN NÀY ==
+  faq.md                                     (MỚI — sản phẩm chính)
+  src/vietnamese_nlp/money.py                cờ current_from_digits (fix bug #1)
+  tests/test_money.py                        +TestNamesThatLookLikeNumbers (11 case)
+  mcp-erpnext/src/copilot-server.mjs         KINSHIP_TITLES + filter ứng viên (fix #2)
+  mcp-erpnext/test/customer-resolve.test.mjs +3 test
+  result28.txt                               (file này)
+
+== 7. VIỆC CỦA USER ==
+ 1. DUYỆT COMMIT: 2 fix trên là vùng TIỀN + ĐỊNH DANH (AI không tự commit).
+    Đề xuất 2 commit nhỏ, độc lập:
+     (a) fix(money): a numeral NAME must not merge with a digit group
+         ("bác Hai 500 ngàn" was 2.500.000đ) + regression tests
+     (b) fix(resolve): a bare kinship title can never be the matched customer
+         ("chị Lan" answered with "Chị Tư — thầu nhỏ") + regression tests
+ 2. Quyết định khoảng trống §3: nối "câu tiếng Việt → đề xuất thu tiền HIGH"
+    (nút [Xác nhận] mới dùng được trong thật) — nối ngay hay gộp Phase 9?
+ 3. Vẫn treo: submit phiếu thu · dọn 2 phiếu nháp demo · các mục khác ở checklist.md.
+
+Không có lệnh write/submit/cancel/delete nào trên ERPNext trong phiên này
+(chỉ ĐỌC: 5 câu hỏi qua /ask + 1 lần liệt kê khách). Không in secret nào.
+========================================================================

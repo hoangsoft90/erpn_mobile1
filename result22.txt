@@ -1,0 +1,198 @@
+========================================================================
+RESULT 22 — COMMIT 6054458 · E2E mac-custom XANH (4 request 200) ·
+            real-gemini VẪN CHẶN BỞI QUOTA (thought_signature chưa verify live)
+Timestamp: 2026-09-15 13:45–13:50 UTC (20:45–20:50 giờ VN)
+Env: Linux VPS · Node v24.20.0 · Python 3.12.3 · dsh 0.1.5-rc.1 (cài lại /tmp)
+Repo erpn_mobile1, branch change/flutter-chat-mvp.
+========================================================================
+
+== 1. COMMIT ĐÃ XONG (user duyệt)
+6054458  fix: count credit notes in the receivable balance (net, not gross)
+         18 files changed, +489/-44
+         a379a71..6054458 → push lên change/flutter-chat-mvp  ✅
+Nội dung: fix `!== 0` (customer.mjs + sales.mjs) + mock credit note SINV-0004 +
+nhãn "chứng từ chưa thanh toán" + test hồi quy + guard 2 batch runner + hermetic
+`ASK_*` cho http-ask.test.mjs + docs (result21, checklist/features/next/working,
+openspec tasks 5.9/5.10) + handoff_20260915-0200.md + handoff_20260915-1330.md.
+Secret scan CLEAN trước khi stage · `.env` KHÔNG bị stage (verified bằng
+`git diff --cached --name-only | grep -x .env` → rỗng).
+
+== 2. MÔI TRƯỜNG PHẢI DỰNG LẠI (không phải lỗi — /tmp đã bị dọn)
+`ls /tmp/dsh-run/node_modules/@deepseek-ai/dsh/lib/bin.js` → No such file or directory
+⇒ dsh đã bị xoá cùng /tmp. Cài lại theo skill `erpn-dsh-setup`:
+  mkdir -p /tmp/dsh-run && cd /tmp/dsh-run && npm i @deepseek-ai/dsh
+  → node_modules/@deepseek-ai/dsh/lib/bin.js · version **0.1.5-rc.1** (đúng bản đã verify)
+Đây xác nhận lời khuyên trong skill: /tmp là scratch, PHẢI kiểm tra bin.js tồn tại
+trước khi chạy E2E (thêm vào skill, xem §5).
+
+== 3. PROBE TUNNEL MAC TRƯỚC KHI CHẠY
+  lần 1/2/3: HTTP 200 / 200 / 200 — body: {"model":"big-pickle",...,"content":"pong"}
+  (trước đó trong cùng phiên: 3/3 HTTP 503 "Tunnel Unavailable")
+
+== 4. E2E QUA mac-custom — XANH (dsh exit 0)
+
+Lệnh (nguyên văn, từ repo root):
+  fuser -k 8787/tcp 8900/tcp
+  setsid python3 -m nlp_service.server --port 8787 &        # → {"ready":true,"port":8787}
+  { set -a; source .env; set +a; }
+  setsid node scripts/llm-router.mjs --config scripts/llm-router.e2e.json &
+     → {"ok":true,"upstreams":[mac-custom healthy, gemini-openai healthy]}
+  DSH_HOME=/tmp/dsh-home-mac-$(date +%s) DSH_TELEMETRY_MODE=DISABLED E2E_TARGET=real \
+    node /tmp/dsh-run/node_modules/@deepseek-ai/dsh/lib/bin.js --profile headless \
+    --patch mcp-erpnext/dsh-e2e.patch.yml \
+    "Khách làm tròn 2026-09-15-p1b-wf1-2 còn nợ bao nhiêu, và Khách smoke 2026-09-15-p1b-wf1-2 còn nợ bao nhiêu?"
+
+Transcript thật (nguyên văn, dsh exit 0):
+  [copilot] ERPNext target: REAL -> prevail-pantyhose-overvalue.ngrok-free.dev
+  dsh: reasoning: ... Let me ask for the second customer separately.
+  Kết quả tra cứu ERPNext:
+  - **Khách làm tròn 2026-09-15-p1b-wf1-2** còn nợ **457.875đ** (1 chứng từ chưa thanh toán).
+  - **Khách smoke 2026-09-15-p1b-wf1-2** còn nợ **171.800đ** (4 chứng từ chưa thanh toán).
+
+⇒ CẢ HAI số khớp ground truth độc lập (result18 §F) — lần đầu tiên câu trả lời
+  171.800đ xuất hiện qua chuỗi đầy đủ (trước fix là 269.000đ).
+
+Bằng chứng audit (phần quyết định — chứng minh turn replay có xảy ra và 200):
+  file llm-router-audit/audit-2026-09-15T13-46-29.jsonl  (ghi rõ TÊN FILE: đừng
+  dùng `ls -t | head -1`, phiên gemini chạy SAU nên file mới nhất là file khác)
+  #1 13:46:43Z status=200 attempts=['mac-custom'] messages=2   model=oc/big-pickle
+  #2 13:46:48Z status=200 attempts=['mac-custom'] messages=5   model=oc/big-pickle
+  #3 13:46:58Z status=200 attempts=['mac-custom'] messages=7   model=oc/big-pickle
+  #4 13:47:14Z status=200 attempts=['mac-custom'] messages=9   model=oc/big-pickle
+  ⇒ 4/4 request 200, TẤT CẢ qua mac-custom. `messages` tăng 2 → 5 → 7 → 9 ⇒ có
+    turn mang kết quả tool (turn replay) và chúng trả 200.
+
+⚠️ MỨC BẰNG CHỨNG — nói đúng cái chứng minh được, không hơn:
+  - CHẮC CHẮN: 4 request provider / 4× 200 / đều mac-custom (audit); ≥2 turn có
+    chứa tool result (chuỗi `messages` tăng 3 lần); ≥2 lần gọi tool (transcript
+    reasoning có câu "Let me ask for the second customer separately" sau khi tool
+    đầu chỉ trả 1 khách).
+  - KHÔNG chốt được: SỐ tool-call chính xác. Transcript profile headless chỉ in
+    reasoning + câu trả lời cuối, KHÔNG in khối tool result, nên không đếm trực
+    tiếp được; và mức tăng `messages` không đều (+3, +2, +2) nên không suy ra
+    được số call một cách chắc chắn (có thể là 2 hoặc 3).
+  - CHƯA GIẢI THÍCH ĐƯỢC (ghi lại để không quên, KHÔNG phải kết luận): trong
+    1 phiên headless, `[copilot] ERPNext target` in **1 lần** nhưng
+    `[mcp-erpnext] Initialized — 125 tools` in **2 lần** ⇒ MCP client được khởi
+    tạo 2 lần / 1 phiên. Chưa rõ là dsh tái tạo client theo từng nhóm turn hay
+    là 2 agent session — cần đo riêng nếu muốn tính chi phí theo turn.
+  ⇒ Vì vậy bản đầu của mục này viết "2 tool-call, 2 turn replay" là MẠNH HƠN
+    bằng chứng — đã sửa lại đúng mức (review phiên này bắt được).
+
+== 5. LẦN THỬ real-gemini (đúng 1 lần, KHÔNG probe trước) — VẪN CHẶN BỞI QUOTA
+
+Lệnh: thêm `E2E_LLM_MODEL=real-gemini` (model → gemini-3.6-flash, upstream
+gemini-openai, bật `geminiThoughtSignatures`); câu hỏi 1 khách.
+
+Kết quả:
+  dsh: SERVER: 502: {"message":"llm-router: all upstreams failed (tried: gemini-openai)",
+                     "type":"llm_router_all_failed"}
+  dsh exit=1
+Audit (7 request, model=gemini-3.6-flash, attempts=['gemini-openai'] — TỨC ĐÃ THỬ THẬT,
+không phải cooldown chặn): tất cả status=502.
+Nguyên văn status thật của provider trong log router:
+  5× "gemini-openai HTTP 429 → next upstream"
+  2× "gemini-openai HTTP 503 → next upstream"
+
+⇒ Vẫn là **trần ngày free tier đã cạn** (giống result18/19), không phải lỗi router:
+  router thử thật (`attempts` không rỗng), phân biệt đúng error type
+  (`llm_router_all_failed`, không phải `llm_router_no_model_match`).
+⇒ **`thought_signature` VẪN CHƯA ĐƯỢC VERIFY LIVE.** Nói thẳng: đây là lần thứ 4
+  liên tiếp không chạm được turn replay bằng Gemini thật; bằng chứng duy nhất vẫn là
+  hermetic (router 19/19, gồm 1 integration test SSE → inject).
+  Không retry trong ngày (đúng luật result19: 429 đầu tiên = hết ngày; ở đây đã 429
+  ngay từ request #1).
+
+Một điều đáng ghi: 429 vẫn còn **~6 giờ** sau lần 429 đầu tiên trong ngày quota
+(07:53Z → 13:47Z) ⇒ củng cố kết luận "trần NGÀY", không phải trần theo phút.
+
+== 6. GHI NHẬN: 408 đầu tiên là flaky tunnel, KHÔNG phải thiếu năng lực endpoint
+
+Lần chạy E2E đầu tiên trong phiên này fail: `dsh: PI_AI_ERROR: 408 status code (no body)`
+(router: 2 request `attempts=['mac-custom']`, status 408). Trước khi kết luận, đã
+loại trừ bằng probe (không tốn session dsh):
+  - payload LỚN 11.600 bytes (system prompt dài) → HTTP 200, 2.7s / 3.0s
+  - CÓ `tools` (đúng shape dsh gửi), không stream → 200, có `tool_calls`
+  - CÓ `tools` + stream → 200, 43 dòng `data:` SSE
+  ⇒ endpoint xử lý tốt cả payload lớn + tools + streaming ⇒ 408 là **flaky tunnel**
+    (đúng như ghi chú trong `llm-router.e2e.json`), chạy lại lần 2 là xanh.
+  Đây là cách phân biệt "endpoint yếu" vs "tunnel chập chờn" mà không đốt session.
+
+== 7. VERIFY CUỐI
+  fuser -k 8787/tcp 8900/tcp → services đã dừng, không process lạc
+  (suite đã chạy xanh ở result21: python 58/58 · mcp-erpnext 50/50 · flutter 14/14;
+   phiên này KHÔNG sửa code sản phẩm — chỉ chạy E2E + docs)
+
+== 8. REVIEW LẠI CHÍNH FILE NÀY — 2 lỗi thật trong docs của tôi (đã sửa)
+
+  (A) OVERCLAIM "2 tool-call, 2 turn replay" (mục 4 ở trên) — bằng chứng chỉ cho
+      phép khẳng định "4/4 request 200, ≥2 turn mang tool result". Số tool-call
+      chính xác KHÔNG đọc được từ transcript headless (nó không in khối tool
+      result). Đã viết lại đúng mức + ghi luôn phần chưa giải thích được
+      (`Initialized — 125 tools` xuất hiện 2 lần trong 1 phiên).
+
+  (B) LỆNH REVIEW CỦA CHÍNH TÔI SAI: tôi viết
+        f=$(ls -t llm-router-audit/*.jsonl | head -1)
+      để "đếm lại" cho phiên mac-custom — nhưng phiên gemini chạy SAU nên file
+      mới nhất là file gemini (7×502). Nếu tin kết quả đó thì tôi đã tự bác bỏ
+      một claim đúng (4/4 200) vì lấy NHẦM FILE. Lấy đúng theo tên:
+        audit-2026-09-15T13-46-29.jsonl → 4 request, {200: 4}, attempts={'mac-custom'}
+      ⇒ Từ nay: audit của một phiên phải tham chiếu bằng TÊN FILE (ghi vào result),
+        không dùng "file mới nhất".
+
+  (C) working.md còn 6 dòng trạng thái ĐÃ LỖI THỜI sau khi commit (result17/18/19/
+      20/21 vẫn ghi "CHƯA commit" / "CHỜ DUYỆT" / "chờ duyệt — vùng tiền") → đã
+      cập nhật hết theo commit thật (be57052 / 8d9f04c / a379a71 / 6054458). Đây là
+      lần lặp lại của cùng một lỗi (trước đó là features.md) ⇒ đã ghi vào skill:
+      commit xong phải quét lại "CHƯA commit|chờ duyệt" trong working/checklist/
+      features trong CÙNG lượt.
+
+  Verify sau khi sửa: 2 skill cập nhật (erpn-verify-first: 2 bài học mới;
+  erpn-dsh-setup: 1 bài học). Không sửa code sản phẩm.
+
+== 9. RÀ TOÀN BỘ result*.txt (yêu cầu user) — 3 PHÁT HIỆN MỚI
+
+  (A) ĐỒNG HỒ VPS LÀ UTC, KHÔNG PHẢI GIỜ VN — và tên file audit cũng là UTC
+      `date -u` và `date` trả CÙNG giá trị (14:14) ⇒ mọi chú thích "giờ VN" trong
+      result*.txt là do agent tự +7, còn TÊN FILE audit thì theo UTC. Đây chính là
+      cái bẫy làm lỗi `ls -t | head -1` ở §8B: "phiên 13:46" (UTC) bị so với giờ VN
+      viết trong result20 (15:20–15:45 VN = **08:20–08:45 UTC**) ⇒ lệch 7 giờ.
+      ⇒ Từ nay: so khớp audit PHẢI quy về UTC; đừng trộn hai hệ giờ.
+
+  (B) CLAIM AUDIT CỦA result20 KHÔNG KIỂM CHỨNG ĐƯỢC — đã thêm đính chính đầu file
+      result20 §5 ghi "Chuỗi E2E thật qua mac-custom: XANH, 2 tool-call, multi-turn
+      200/200/200" và (theo working/checklist) "audit 5 req (408, 502, 200×3)".
+      Kiểm chứng lại:
+        · find toàn home: CHỈ có 1 thư mục audit (`llm-router-audit/`).
+        · khung 08:20–08:45 UTC: KHÔNG có file audit nào (giờ còn: 00,01,02,03,09,13).
+        · không file nào chứa ts `2026-09-15T08:`.
+        · file gần nhất (09:52–09:54 UTC) = 6×200 nhưng `attempts=['mock']`.
+      ⇒ Phiên đó không còn bằng chứng nào cho thấy LLM đi qua `mac-custom`.
+      KHÔNG nói mac-custom "giả" — chỉ nói claim đó bây giờ **không kiểm được**.
+      E2E mac-custom có bằng chứng hợp lệ DUY NHẤT là chính phiên result22 này
+      (13:45:34 = 2×408 mac-custom · 13:46:29 = 4×200 mac-custom).
+
+  (C) AUDIT MẤT — NGUYÊN NHÂN ĐÃ XÁC ĐỊNH (đính chính 16/09, bỏ kết luận sai
+      "dọn dẹp/cron bên ngoài" của bản đầu):
+      phiên result18/19 đếm: **117 file / 302 dòng**. Bây giờ: **24 file / 168 dòng**
+      (mất ~93 file, thiếu hẳn các giờ 04–08 và 10–12). Router KHÔNG có code xoá
+      audit (`scripts/llm-router.mjs` chỉ `appendFileSync`). Cơ chế thật, có bằng
+      chứng từng mỏ neo:
+        · result17.txt:40 — ready line nguyên văn: "audit":"/tmp/audit17/..."
+          ⇒ có phiên chạy router với LLM_ROUTER_AUDIT_DIR=/tmp/audit17.
+        · /tmp nằm trên **overlayfs** (lớp ephemeral của container) — `stat -f /tmp`.
+        · PID 1 = /google/scripts/onrun.sh ⇒ môi trường là **Google Cloud Shell
+          container**; boot gần nhất 21:44:54 UTC 15/09 (`uptime -s`) ⇒ restart
+          container xoá sạch /tmp (giải thích luôn /tmp/dsh-run biến mất 2 lần).
+      ⇒ KHÔNG có cron/timer nào xoá file trong llm-router-audit/ của repo; file
+      thiếu = các phiên ghi audit vào /tmp + restart container. Không xác định
+      được (và không cần) từng phiên cũ ghi vào đâu — quy tắc dưới đây ngăn nó.
+      ⇒ Quy tắc mới: bằng chứng audit phải **DÁN NGUYÊN DÒNG vào resultNN.txt**, không
+      chỉ trỏ tên file (tên file có thể biến mất trước khi ai đó cần đối chiếu).
+      Đã cập nhật runbook `docs/phase5-thought-signature-runbook.md` theo quy tắc này.
+
+  Đã sửa theo 3 phát hiện trên: result20.txt (đính chính đầu file + §5) ·
+  checklist.md · working.md · features.md · next.md (bỏ claim audit result20) ·
+  runbook (dán dòng thay vì trỏ file; GREEN phải có `attempts=["gemini-openai"]`) ·
+  3 skill. KHÔNG sửa code sản phẩm.
+========================================================================

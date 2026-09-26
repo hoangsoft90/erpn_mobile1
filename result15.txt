@@ -1,0 +1,105 @@
+========================================================================
+RESULT 15 — PHASE 5: LLM ROUTER NỐI UPSTREAM THẬT (ZEN + GEMINI) + E2E dsh
+Timestamp: 2026-09-15 01:55
+Env: Linux VPS, Node v24, Python 3.12. Repo branch change/flutter-chat-mvp.
+Commit đầu phiên: 87fcbb1 (đã duyệt, đã push — security fixes + router + sign-off).
+Nguyên tắc: không in giá trị ZEN_API_KEY/GEMINI_API_KEY — chỉ qua env, quét tên.
+========================================================================
+
+== 1. CONFIG THẬT + PROBE TRỰC TIẾP CẢ 2 UPSTREAM (models endpoint)
+------------------------------------------------------------------------
+llm-router.config.json điền endpoint chính thức:
+  zen:           https://opencode.ai/zen/v1        (docs opencode.ai/zen —
+                 config cũ ghi api.opencode.ai là SAI, đã sửa)
+  gemini-openai: https://generativelanguage.googleapis.com/v1beta/openai
+
+Probe trực tiếp (key qua env):
+  zen    GET /models  → HTTP 200 (big-pickle CÒN trong list)
+  gemini GET /models  → HTTP 200 (chọn gemini-3.6-flash ổn định, không preview)
+
+== 2. ZEN — GENERATE THẬT: BỊ CHẶN BILLING (lỗi thật nguyên văn)
+------------------------------------------------------------------------
+POST /v1/chat/completions model=glm-5.3-flash qua router → HTTP 402:
+  {"type":"error","error":{"type":"CreditsError","message":"No payment
+   method. Add a payment method here: https://opencode.ai/workspace/
+   wrk_.../billing"}}
+Kết luận: glm-5.3-flash là model PAID. big-pickle free nhưng CHỈ dùng được
+trong OpenCode client (MissingSessionID — result trước). Tài khoản Zen hiện
+KHÔNG có payment method → upstream zen KHÔNG dùng được cho đến khi user nạp
+balance. Không tự động thêm payment (việc user).
+
+== 3. GEMINI — GENERATE THẬT QUA ROUTER: THÀNH CÔNG
+------------------------------------------------------------------------
+POST /v1/chat/completions model=gemini-3.6-flash qua router → HTTP 200:
+  "250000 nhân 1000 bằng 250000000."
+→ chuỗi dsh-sẽ-dùng (OpenAI-compat) qua router chạy đúng với Gemini.
+
+== 4. BUG THẬT CỦA ROUTER TỰ PHÁT HIỆN KHI CHẠY THẬT (đã sửa + test)
+------------------------------------------------------------------------
+1) https không chạy được: router cũ dùng http.request cho MỌI upstream →
+   mock (http) OK, zen/gemini (https) chết "Protocol https: not supported".
+   Fix: chọn module theo url.protocol (node:http / node:https).
+2) Gemini từ chối field OpenAI-only "store" mà dsh gửi:
+   400 "Invalid JSON payload received. Unknown name \"store\": Cannot find
+   field." → thêm stripFields per-upstream trong config (gemini:
+   ["store"]); router xóa field trước khi forward.
+3) Thêm LLM_ROUTER_DEBUG=1 (env-gated, tắt mặc định): in reqHead + body0
+   của lỗi >=400 — đây là công cụ bóc đúng lỗi upstream (dsh nuốt body,
+   chỉ in "400 no body" → mislead là CONTEXT_WINDOW_EXCEEDED).
+Test sau fix: router 7/7 PASS (187ms) · mcp-erpnext 49/49 PASS.
+Audit JSONL vẫn KHÔNG chép nội dung câu hỏi (đã có test).
+
+== 5. DSH CƠ CHẾ THẬT — "CÔNG THỨC RESULT6" ĐÃ LỖI THỜI (đào source mới rõ)
+------------------------------------------------------------------------
+- settings.yaml (flat key llm-pi-ai.providers.*) KHÔNG đăng ký adapter →
+  NO_ADAPTER. Nguyên văn chạy được của result6 là bản ghi SAI/changed:
+  cơ chế thật = cordis PATCH ROW override theo id (header của
+  dsh-base/cordis.patch.yml: "address rows by id, last write winning,
+  config thay nguyên khối").
+- models PHẢI là list OBJECT (- id: gemini-3.6-flash), không phải string
+  → "models[0] expected object but got \"mock-copilot-1\"".
+- Trap state cũ: settings.yaml thực nghiệm còn sót agent-default-model
+  trùng route mock-copilot → lần mock "thành công" ẢO. Bài học: DSH_HOME
+  MỚI SẠCH mỗi lần verify.
+- CLI thật: node .../dsh/lib/bin.js --profile headless --patch <file>
+  "<prompt positional>" — KHÔNG phải .bin/dsh -p (args parser khác).
+- SAU KHI sửa đúng: MOCK qua router chạy thành công nguyên văn:
+    exit=0
+    "Trả lời từ ERPNext (mock LLM chỉ đọc lại kết quả, không tự tính):
+     Khách smoke 2026-09-13-p1done còn nợ 269.000đ (3 hóa đơn chưa trả)."
+- Kinh nghiệm đã đóng gói thành skill MỚI: .agents/skills/erpn-dsh-setup/
+  (cài, chạy, patch template, bảng lỗi NO_ADAPTER/models/400/502).
+
+== 6. E2E DSH → ROUTER → GEMINI (ERPNext THẬT): FLAKY DO FREE TIER
+------------------------------------------------------------------------
+Cùng câu hỏi "Khách smoke 2026-09-13-p1done còn nợ bao nhiêu", nhiều lần:
+  503 {"message":"This model is currently experiencing high demand..."}
+  429 {"error":{"message":"You exceeded your current quota... Quota
+       exceeded for metric: generativelanguage.googleapis.com/
+       generate_content_free_tier_requests, limit: 20, model:
+       gemini-3.6-flash. Please retry in 56.286880134s.","status":
+       "RESOURCE_EXHAUSTED"}}
+Phân tích: 1 session dsh tốn 2–3 LLM calls (session-title + agent turn)
+→ 20 req/phút free tier là Trần THIẾT KẾ, không phải bug. Router fallback
++ cooldown hoạt động đúng; "tried: none" = cooldown đang có hiệu lực.
+Chưa chụp được 1 run E2E xanh trọn vẹn trong phiên — run đã qua tầng 400
+(store, đã fix) và chạm Gemini nhiều lần (200 trực tiếp xác nhận chuỗi
+đúng); blocker còn lại là quota/503 phía provider.
+
+== 7. KẾT LUẬN + QUYẾT ĐỊNH CHỜ USER
+------------------------------------------------------------------------
+- gemini-openai: DÙNG ĐƯỢC (đã verify generate thật). E2E dsh ổn định cần
+  quota cao hơn free tier (paid tier) hoặc retry kiên nhẫn ngoài giờ cao điểm.
+- zen: bị chặn billing (CreditsError) — USER QUYẾT ĐỊNH: nạp payment method
+  hay bỏ upstream này.
+- PII: theo sign-off đã ký (2026-09-15, không scrub) — tên khách/số tiền
+  gửi thẳng tới Google (Gemini). Đã ghi minh bạch trong SIGNOFF.
+
+== 8. FILE THAY ĐỔI (chưa commit — chờ duyệt)
+------------------------------------------------------------------------
+M scripts/llm-router.mjs        (https transport + stripFields + LLM_ROUTER_DEBUG)
+M scripts/llm-router.config.json (endpoint thật zen/gemini + model + stripFields)
+A .agents/skills/erpn-dsh-setup/SKILL.md (local-only, .agents/ gitignored)
+M docs (result15/checklist/features/next/working/handoff/openspec tasks)
+Đề xuất commit: "feat: phase 5 — router real upstreams (gemini verified, zen
+billing-blocked) + dsh cordis patch mechanism + debug logging"

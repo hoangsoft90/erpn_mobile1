@@ -1,0 +1,123 @@
+========================================================================
+RESULT 24 — FIX `command_id` ỔN ĐỊNH THEO PROPOSAL (Phase 7 Giai đoạn A)
+            + bằng chứng test BẮT ĐƯỢC regression · toàn bộ suite chạy lại
+Timestamp: 2026-09-16 03:48 UTC
+Env: container Google Cloud Shell (ephemeral) · Node v24.20.0 · Python 3.12.3 ·
+     Flutter 3.47.2 stable / Dart 3.13.2
+Repo erpn_mobile1, branch change/flutter-chat-mvp; commit gốc: 8ebfc0e (Giai đoạn A)
+========================================================================
+
+== 1. LỖI ĐƯỢC SỬA (user chỉ ra trong result23 §7) ==
+
+Thiết kế gốc phase-07: "mất mạng → user bấm Confirm lại → KHÔNG ghi nhận 2 lần".
+Code Giai đoạn A vi phạm: Flutter gọi `_generateCommandId()` NGAY TRONG `_confirm()`
+⇒ mỗi lần bấm là một UUID mới ⇒ lần bấm thứ hai là "intent mới" với gateway
+⇒ store KHÔNG replay, ghi phiếu thu THỨ HAI. Tầng idempotency đúng, nhưng khoá
+sinh sai tầng (per-press thay vì per-proposal).
+
+QUYẾT ĐỊNH CỦA USER (2026-09-16, nguyên văn yêu cầu): command_id sinh 1 LẦN khi
+proposal xuất hiện trên UI (hoặc lần bấm đầu tiên, cache lại theo proposal/message),
+giữ NGUYÊN cho mọi lần bấm lại trên CÙNG card — kể cả sau lỗi mạng. Chỉ proposal
+MỚI (câu trả lời mới từ /ask) mới có command_id mới.
+
+== 2. CÁCH SỬA (3 file, KHÔNG đụng idempotency.mjs — dùng lại cơ chế replay có sẵn)
+
+· apps/mobile/lib/features/chat/data/chat_models.dart
+    `ActionProposal.commandId` — getter lazy: `_commandIds[this] ??= _newUuidV4()`
+    - Cache bằng **Expando** keyed theo instance (không phải field) để giữ
+      `@immutable` cho model (nếu là field mutable, analyzer lint `must_be_immutable`).
+    - Chọn Expando thay vì state của widget vì lý do AN TOÀN: card bị rebuild /
+      recycle bởi list ⇒ key trong State có thể biến mất ⇒ lại mở cửa sổ ghi 2 lần
+      mà fix này tồn tại để đóng. Vòng đời key == vòng đời đối tượng proposal.
+    - Proposal MỚI (mỗi câu trả lời /ask) = instance mới = key mới ⇒ intent mới
+      vẫn ghi được (không bị replay nhầm vì nội dung giống nhau).
+· apps/mobile/.../widgets/proposal_card.dart
+    `final commandId = proposal.commandId;` (bỏ `_generateCommandId()` + import dart:math)
+· apps/mobile/test/proposal_card_test.dart — +2 test (§3)
+
+`git diff --stat` (phạm vi fix):
+  .../chat/data/chat_models.dart                | 30 ++++++++++++
+  .../widgets/proposal_card.dart                | 17 ++-----
+  apps/mobile/test/proposal_card_test.dart      | 58 ++++++++++++++++++++++
+  3 files changed, 92 insertions(+), 13 deletions(-)
+
+== 3. TEST MỚI + BẰNG CHỨNG TEST BẮT ĐƯỢC REGRESSION (không chỉ "test xanh")
+
+3.1. Kịch bản user yêu cầu: "bấm 2 lần liên tiếp trên CÙNG proposal, mock lỗi
+     mạng ở lần 1, bấm lại lần 2 → chỉ 1 command_id được gửi, chỉ 1 write"
+
+  ✔ network error then retry on the SAME card → ONE stable command_id, retry is
+    served as replay (phase-07: no second write)
+
+  Test thật sự kiểm:
+   · lần 1: adapter ném `DioException.connectionError` (đúng như mất mạng; phía
+     client không biết lệnh đã tới server hay chưa) → UI hiện "Không gửi được
+     lệnh xác nhận" và NÚT VẪN CÒN (để user bấm lại)
+   · lần 2: server trả `{ok:true, replay:true}` → assert:
+       (a) `requests.length == 2` (có 2 lần gọi HTTP thật)
+       (b) `second['command_id'] == first['command_id']`  ← khoá PHẢI trùng
+       (c) `first['command_id'] == proposal.commandId`    ← khoá thuộc proposal,
+                                                             không thuộc lần bấm
+       (d) UI hiện "chống trùng"  ← đã được phục vụ bằng replay, KHÔNG ghi lần 2
+   · "chỉ 1 write xảy ra" ở tầng nghiệp vụ được bảo đảm bởi store (đã có test
+     Node: duplicate command_id produces exactly ONE Payment Entry) — test Flutter
+     chứng minh client GỬI ĐÚNG một khoá cho mọi lần retry.
+
+3.2. Test biên: proposal mới ⇒ khoá mới (không replay nhầm ý định khác)
+
+  ✔ a NEW /ask answer (new proposal instance) gets a NEW command_id
+
+3.3. FALSIFICATION — chứng minh test trên BẮT ĐƯỢC lỗi cũ (không phải test rỗng):
+     Tạm tiêm lại đúng bug cũ vào widget
+     (`final commandId = 'per-press-${DateTime.now().microsecondsSinceEpoch}';`)
+     rồi chạy riêng test 3.1:
+
+     Expected: 'per-press-1789530516870485'
+       Actual: 'per-press-1789530516994383'
+     00:01 +0 -1: Some tests failed.
+
+     ⇒ FAIL đúng tại assertion "same idempotency key must be reused on retry".
+       Sau đó HOÀN NGUYÊN file (grep xác nhận `final commandId = proposal.commandId;`
+       còn đúng 1 lần) và chạy lại toàn bộ suite (§4).
+
+== 4. TOÀN BỘ SUITE — OUTPUT NGUYÊN VĂN (chạy lại sau fix) ==
+
+  $ PYTHONPATH=src python3 -m unittest discover -s tests
+  Ran 58 tests in 0.455s
+  OK
+
+  $ cd mcp-erpnext && node --test
+  ℹ tests 77
+  ℹ pass 77
+  ℹ fail 0
+  ℹ duration_ms 9827.895086
+
+  $ cd apps/mobile && flutter test
+  00:03 +24: .../test/chat_controller_test.dart: history restored from prefs and clear works
+  00:04 +25: All tests passed!
+  (23 → 25 test: +2 test khoá idempotency)
+
+  $ flutter analyze
+  No issues found! (ran in 6.1s)
+
+  Danh sách test trong proposal_card_test.dart (11 test, nguyên văn tên):
+  ✔ there is NO confirm button — Phase 6 is display-only
+  ✔ HIGH card shows confirm button; pressing it POSTs /execute once
+  ✔ network error then retry on the SAME card → ONE stable command_id, retry is
+    served as replay (phase-07: no second write)
+  ✔ a NEW /ask answer (new proposal instance) gets a NEW command_id
+  ✔ server replay response shows the anti-duplicate message
+  → 00:01 +11: All tests passed!
+
+== 5. GIAI ĐOẠN B — VẪN CHƯA CHẠM ==
+
+Không có lệnh nào ghi ERPNext thật. Điều kiện trước khi replay thật vẫn nguyên:
+① implement tra `reference_no` trên ERPNext thật (mock chưa có)
+② user quyết thời điểm + cách thức chạy (§5 result23)
+
+== 6. TRẠNG THÁI
+
+· Fix nằm ở working tree — CHƯA commit (vùng tiền: chờ user duyệt, đúng quy tắc).
+· Diff: 3 file, +92/-13.
+· Không đụng `idempotency.mjs` / backend: tận dụng lại replay đã có + đã test.
+========================================================================

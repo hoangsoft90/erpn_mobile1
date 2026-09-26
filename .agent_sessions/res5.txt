@@ -1,0 +1,76 @@
+Đã làm — chống trùng theo TỜ hoá đơn ( business_doc_key )
+
+Khóa =  bdk_<sha256>  của  loại chứng từ + party + số HĐ + ngày , sinh ở server, không chứa tiền. Bốn quyết định đều có lý do và có test ghim:
+
+┌────────────────────────────┬────────────────────────────────────────────────────────────────────────────────┐
+│                            │                                                                                │
+├────────────────────────────┼────────────────────────────────────────────────────────────────────────────────┤
+│ MST ưu tiên hơn id ERPNext │ MST trên tờ giấy sống sót khi record NCC bị tạo lại; party_id là fallback      │
+│ Số HĐ so CHÍNH XÁC         │ MST thì bỏ separator (định dạng), nhưng bỏ separator ở số HĐ sẽ gộp 2 số khác  │
+│                            │ nhau thành 1 định danh ⇒ lần từ chối sau nêu SAI tài liệu                      │
+│ KHÔNG gồm series           │ OCR sau này có thể không đọc được ⇒ khóa lệch giữa 2 kênh = trượt trùng = nháp │
+│                            │ thứ hai                                                                        │
+│ kind lấy từ CONTRACT,      │ XML hôm nay và OCR sau này ra cùng một khóa                                    │
+│ không lấy nhãn client      │                                                                                │
+└────────────────────────────┴────────────────────────────────────────────────────────────────────────────────┘
+
+Định danh đi NGOÀI câu nói ( source_document  trên  /ask ) — vì  A-result.md  đã đo NLP đọc  00049  thành số tiền 49. Validate fail-closed cả 2 đầu: client thiếu số HĐ/ngày/MST ⇒ gửi không có (không gửi nửa vời); server ⇒  400 SOURCE_DOCUMENT_INVALID  +  reason .
+
+Executor probe trước mọi thứ: có ⇒  409 PO_DUPLICATE_DOC  +  existing_doc  (mở đơn cũ, không retry được); site thiếu cột ⇒  PO_DOC_KEY_FIELD_MISSING  KHÔNG ghi; đọc lại sai khóa ⇒  PO_WRITE_UNVERIFIED .  command_id / custom_ai_action_id  giữ nguyên (lớp thêm), và câu nói thường vẫn tạo 2 nháp (mua nhiều lần là bình thường). Không đường ghi mới, không auto-execute, không skill WRITE mới, đường thu tiền 0 thay đổi (có test khẳng định chỉ PO khai định danh).
+
+Số đo được: Node mới 10/10 · Node full 765/763/2 (2 fail dsh-env từ B0) · falsify 8/8 RED (A–H, gồm 2 ca Dart) · M1 falsify vẫn 16/16 · Flutter 304/304 (+5) · analyze 0 · migration plan-only in đúng 2 dòng cho Purchase Order.
+
+2 lỗi của chính tôi, do falsify bắt (không suy đoán):
+1. Refactor xong ⇒ ca D/H báo  anchor missing  — đúng cơ chế "neo di chuyển thì báo, không bỏ qua".
+2. Harness Dart bỏ sót cả một lớp lỗi:  expect  đồng bộ trong  group()  bị báo "no test ran (pattern matched nothing?)" ⇒ một ca ĐỎ thật bị quy cho "pattern sai". Đã thêm nguồn  Failing tests:  + chạy lại harness M1 để chắc không làm chết ca cũ.
+
+Review tự làm sửa 5 điểm: nhánh  if  rỗng · payload chết  existing_docstatus  (gateway không chuyển tiếp) · echo  source_document  không UI nào đọc ·  invoiceLabel  bọc giả · doc comment Dart nói sai điều kiện (code đòi MST — và đòi MST là cố ý).
+
+⛔ Chờ bạn (3 việc)
+
+1. Migration trên site — chưa chạy. Trước khi migrate, gửi file XML sẽ bị TỪ CHỐI ( PO_DOC_KEY_FIELD_MISSING ) chứ không ghi thiếu dấu:
+
+// bash
+cd mcp-erpnext && node scripts/add-correlation-field.mjs --plan-only   # không cần creds
+set -a; source ../.env; set +a
+node scripts/add-correlation-field.mjs "Purchase Order" --dry-run && node scripts/add-correlation-field.mjs "Purchase Order"
+
+2. Duyệt commit — chạm đường GHI tài liệu ⇒ AI không tự commit (vùng loại trừ Ponytail).
+3. Vòng XML THẬT 2 lần cùng file — cần phép riêng vì tạo 1 nháp thật (kịch bản + kỳ vọng ở deliverable §7).
+
+Giới hạn đã ghi rõ, không tô hồng: đường BÁN chưa có lớp này (contract chỉ khai ở PO) · kênh ẢNH chưa phát định danh ( /ocr/slots  không dựng  source_document ; app vẫn truyền sẵn 1 tham số để ngày đó tự chống trùng) · đơn mua đã hủy vẫn giữ khóa ( unique=1  — đổi lại: không thể có 2 bản ghi cùng khóa kể cả khi chạy song song) · race thật chưa đo nên không viết xử lý theo text lỗi đoán.
+
+File:  .plan/next4/B-dedupe-result.md  (deliverable) ·  result68.txt  ·  working.md  /  next.md  /  checklist.md  /  features.md  · code:  src/business-doc-key.mjs  (mới) + 8 file server/skill/gateway/mock/migration + 4 file Dart +  test/b-dedupe.test.mjs  +  scripts/falsify/b-dedupe.mjs .
+
+-----------
+Review xong. Soi lại bằng con mắt mới, đọc  git diff  thật của từng file B, đối chiếu với cơ chế thật của gateway/idempotency (không đọc comment rồi tin), và ghim mọi thứ tự sửa bằng mutation.
+
+1. Đã sửa (3 điểm)
+
+R1 — comment nói SAI ở file lõi an toàn (Medium).  executePurchaseOrderProposal  viết "Both run before anything is registered or written, so neither burns the command_id". Sai thật:  store.begin  là bước 6 của gateway, executor là bước 7; mọi refusal ở đây đi qua  store.fail , mà  FAILED  là terminal ( idempotency.mjs : "a retry with the SAME command_id is refused"). Nghĩa là sau khi operator chạy migration, user phải hỏi lại — không retry được cùng  command_id . Đã sửa comment cho đúng (nói rõ giống  PROPOSAL_STALE ); không đổi hành vi, vì hành vi này đúng như mọi refusal pre-write khác ( PO_CORRELATION_FIELD_MISSING ).
+
+R2 — guard quan trọng thứ 2 của lớp này không ai ghim (Medium). Khối "derive, don't trust" (khóa được tính LẠI từ  source_document , không tin  params.business_doc_key ) không có test nào và không có ca falsify nào — A–H không chạm tới. Đã thêm test (3 nhánh: gieo khóa của HĐ khác ⇒ 500  PO_DOC_KEY_UNRESOLVED ; có khóa mà không có  source_document  ⇒ từ chối; chỉ 1 đơn tới được site) + falsify ca I ⇒ gỡ so sánh là ĐỎ (đơn gieo khóa bị ghi, hoặc bị từ chối như trùng HĐ nó mạo nhận).
+
+R3 — thiếu 1 hệ quả vận hành của  unique=1  (Low–Medium, tài liệu). Đã ghi hệ quả hủy đơn, nhưng chưa ghi hệ quả amend: ERPNext copy field khi amend ⇒ đơn amend mang khóa của đơn đã hủy ⇒ đụng unique index. ( no_copy=1  còn tệ hơn: bản amend mất khóa ⇒ tờ HĐ đó lại nhập được lần nữa.) Đã ghi vào header migration, nói rõ CHƯA đo, và nếu bị chặn thật thì xử lý bằng bước tay — không nới  unique .
+
+2. Chưa sửa — cần bạn quyết
+
+1.  pubspec.yaml  khẳng định bạn đã duyệt  file_selector  ngày 2026-09-25 (rule 13). Phiên này không có ghi nhận đó (§7 chỉ nói commit A2 còn chờ duyệt). Comment ghi sai về duyệt package là loại sai tự hợp thức hóa chính nó cho lần sau — xác nhận giúp.
+2.  capabilities.json  khai  composition  +  required_parts  nhưng không chỗ nào đọc (khóa thật do  business-doc-key.mjs  tính) ⇒ JSON lệch code thì không test nào đỏ — đúng loại "policy thứ hai" bị cấm. Đề nghị: 1 test so  businessDocKeyParts({}).missing  ↔  required_parts , hoặc bỏ 2 khóa. Không tự sửa vì là file contract.
+
+3. Đã kiểm và KHÔNG phải lỗi
+
+-  callTool  throw khi  res.isError  ⇒ probe lỗi ERPNext không bao giờ đọc thành "không thấy trùng" (đúng chiều fail-closed). Nếu không kiểm, đây sẽ là lỗ thủng thật — điểm tôi muốn loại trừ nhất.
+- Fallback  ?? supplier.name  ở builder là bất khả đạt sau  validateSourceDocument  ⇒ vô hại, để nguyên.
+-  _reading / _readingFile  không  setState : đối chiếu  _openCamera()  — cùng cách có sẵn, không phải drift do B.
+-  'source_document': ?sourceDocument  hợp lệ (analyze 0); test khẳng định thiếu key khi identity null.
+- Comment "deduped by (doctype|field)" giữa 2 họ migration là không đúng nhưng vô hại ( ensureOne  idempotent) ⇒ sửa comment, không sửa code.
+- Gửi lại trong 15 phút gặp trước cảnh báo advisory rồi mới  PO_DUPLICATE_DOC : đúng thiết kế, không nhánh nào ghi.
+
+4. Đo lại sau khi sửa
+
+ node --test  766/764/2 (2 fail = dsh-env từ B0) · falsify B 9/9 RED (A–I), restore byte-identical ·  flutter analyze  0 ·  flutter test  304/304 · secret scan 0 khớp,  .env  vẫn ignored.
+
+Review không đổi logic nào của B: chỉ 1 test mới, 1 ca falsify mới, và các comment sửa cho đúng. Đã ghi vào  .plan/next4/B-dedupe-result.md  §9.
+
+Vẫn chờ bạn: migration trên site + duyệt commit (đường GHI) + vòng XML thật 2 lần cùng file.

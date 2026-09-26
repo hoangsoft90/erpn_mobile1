@@ -1,0 +1,130 @@
+# result-p4-1 — ops.daily_summary (backend skill + tests, Trụ P4 bước 1)
+
+**Spec:** `.plan/plan4_final.md` §3 · §4.3 · §7 · §10 (đã chốt) + `.plan/plan4_review3.md` §1.2 (fixture 20 chứng từ)
+**Phạm vi:** CHỈ backend skill + test. Không Flutter, không route HTTP, không Redis, không `/execute`, không ghi ERPNext.
+**Ngày:** 2026-09-21 · **Máy này KHÔNG có git** ⇒ chưa commit được (như B1→C2).
+
+---
+
+## 0. Đo TRƯỚC khi code (read-only, ERPNext THẬT) — 4 dữ kiện đổi cả thiết kế
+
+| # | Đo được | Hệ quả |
+|---|---------|--------|
+| 1 | `filters: [["docstatus","=",1]]` (số) → **`TOOL_ERROR: Property /filters/0/2 must be string`**; `"1"` (chuỗi) → OK | **Mọi filter value phải là STRING.** Mock không validate ⇒ lớp lỗi này vô hình với test |
+| 2 | `count` = **số dòng TRẢ VỀ** (limit 3 → `count` 3; limit 1000 → 405) | `count > data.length` **không** phát hiện được cắt trang → phải dùng phép thử `limit+1` |
+| 3 | `custom_ai_action_id` **chỉ tồn tại trên Payment Entry** (Custom Field meta: **0 row** cho SO/SI/QT/PO) | Block `app_drafts` **không thể tính** trên site hiện tại ở 3/4 doctype |
+| 4 | `Account`/company = 104 · `>` với chuỗi `"0"` chạy OK · `GL Entry` đọc được | Đẩy `outstanding_amount > 0` lên server được; két đọc GL thật được |
+
+## 1. Đã làm
+
+| Hạng mục | Chi tiết |
+|---|---|
+| Contract | `capabilities.json` + `ops.daily_summary` (READ · `route_group: ops` · `requires_confirmation: false` · `triggers: []` **không thêm keyword nào** ⇒ đường chat không đổi · `ops_policy` ghi lại toàn bộ §10 đã chốt) |
+| Skill | `src/skills/ops-summary.mjs` — aggregate **server-side** (Flutter không cộng), 8 block đúng schema §4.3 (kể cả `sales_orders` tách `submitted`/`draft`) |
+| Partial | `branch()` + `errors` + block lỗi = **null**; **không nhánh nào được phép báo 0 giả** |
+| Company | `getDailySummary(mcp, {date, company})` — company **từ session**, client không set được (`COMPANY_UNRESOLVED`) |
+| Read-only | Mọi đọc qua `erpnext_doc_list` + `assertReadOnly`; **0** `callWriteTool`, **0** `command_id` (test tĩnh canh) |
+| Mock | nhánh fixture `MOCK_ERP_P4_FIXTURE` + hỗ trợ `>` (so sánh **số**) + **paging** đúng như tool thật |
+| Test | `test/p4-ops-summary.test.mjs` **23 test** (§7 case 1–8, 11–12 + partial + tripwire + truncation) |
+| Falsify | `scripts/falsify/p4-ops-summary.mjs` **12 ca** — mỗi ca đỏ đúng chỗ, restore **byte-identical** |
+
+## 2. Vòng review tự tìm ra 5 lỗi THẬT rồi sửa (đều có bằng chứng)
+
+| # | Lỗi | Bằng chứng | Sửa |
+|---|-----|-----------|-----|
+| 1 | `receivables` dùng filter **số** `["docstatus","=",1]` ⇒ trên site thật **cả nhánh chết** (~551 triệu không bao giờ hiện) | đo #1 ở §0 | `"1"` (chuỗi) + **tripwire tĩnh** khoá lớp lỗi này cho mọi filter trong file |
+| 2 | `app_drafts` nuốt lỗi bằng `catch {}` ⇒ **báo "0 nháp" tự tin** trên site KHÔNG thể trả lời (đo #3) — vi phạm §4.3 "cấm gán 0" | đo #3 ở §0 | bỏ catch ⇒ block = **null** + ghi lỗi (đúng Frappe message) |
+| 3 | Tổng tiền có thể bị **cộng thiếu im lặng** khi trang bị cắt (`count` không giúp được — đo #2) | đo #2 ở §0 | `docList` xin `limit+1`, vượt ⇒ `ERP_TRUNCATED` ⇒ block null (số tiền sai tệ hơn số tiền thiếu) |
+| 4 | `cashDrawer()` trả `cash_in_today/cash_out_today/expected_closing` **= 0 giả** (caller không dùng, tính lại) ⇒ bẫy cho người gọi sau | đọc code | chỉ trả `{opening, account}` |
+| 5 | Guard **không falsifiable** (bỏ đi không test nào đỏ) = trang trí: `if (!so.ok…){}` rỗng, guard kiểu filter runtime | chính harness báo `PROBLEM` | bỏ if rỗng; đổi guard filter thành **tripwire tĩnh** (đọc source, **strip comment** — tripwire từng bắt chính comment của nó) |
+
+Dọn thêm: import `markUntrusted` thừa · `const today = date` vô nghĩa · ternary lồng 1 tầng cho `dateField` · `against_invoice` tính bằng **trừ** → tính trực tiếp · `rowOfCompany`→`rowOfCompanyStrict` indirection thừa.
+
+## 3. Vòng lặp THẬT (read-only, ERPNext thật, company `Minh Phát Cám & VLXD`)
+
+| Ngày | Kết quả đo được |
+|---|---|
+| 2026-09-21 | `receivables.outstanding_total = 551.910.625` (overdue 4.700.000 / 3 HĐ) · két `opening 243.622.620` (GL thật) · `app_drafts = **null**` + 1 lỗi `ERP_UNAVAILABLE` nêu đúng message Frappe (`Trường không được phép trong truy vấn: custom_ai_action_id`) · `partial: true` |
+| 2026-09-20 | thu **320.000** (toàn bộ là ứng trước, tiền mặt) · chi 0 · **closing 243.622.620 = opening 09-21** ✓ |
+| 2026-09-19 | thu **21.127.120** (`cash 19.627.120` + `bank 1.500.000` → **tách Cash\|Bank chạy trên PE thật**) · chi **250.000** (tiền mặt) · **closing 243.302.620 = opening 09-20** ✓ |
+
+**Đối chiếu chéo (không tự tin số mình tính):** cộng độc lập `outstanding_amount` qua REST (paged 1000/lần) = **551.910.625 / 295 HĐ** — **khớp chính xác** con số skill trả. Chuỗi 3 ngày khớp liên tiếp ⇒ két và công thức §3.6 đúng trên dữ liệu thật.
+
+## 4. Bằng chứng suite (đo trong phiên, KHÔNG chép số cũ)
+
+| Suite | Kết quả |
+|---|---|
+| Node | **484 test · 482 pass · 2 fail** = `dshGatewayHealth` + `verifyDshRuntime` (**có từ B0**, thiếu runtime dsh — không phải hồi quy) |
+| P4-1 riêng | **23/23** ✅ |
+| Falsify P4-1 | **12/12 RED**, restore byte-identical |
+| Python | **62 OK** |
+| Flutter | không đụng (theo phạm vi) |
+
+## 5. Hai việc phát hiện ngoài phạm vi P4-1 — user đã duyệt, ĐÃ XỬ LÝ trong cùng phiên
+
+### 5.1 ✅ ĐÃ SỬA — B2/B3 dính ĐÚNG lỗi filter số (user: "Fix ngay")
+
+`src/skills/sales-order-write.mjs:474` + `src/skills/quotation-write.mjs:355` dùng `[["selling", "=", 1]]` (số) ⇒
+**đọc Item Price của cả 2 đường ghi CHẾT trên site thật** (mock không validate ⇒ 41 test B2/B3 vẫn xanh).
+
+- **Sửa**: `1` → `"1"` + comment ghi rõ nguồn đo, **không đổi hành vi nào khác**.
+- **Bằng chứng trên site THẬT (read-only, cùng call builder thực hiện)**: `selling=1` → `TOOL_ERROR … must be string` · `selling="1"` → **`isError=false`, 27 dòng Item Price** trả về ⇒ đường đọc nay sống.
+- **Khoá lớp lỗi cho TOÀN repo** (không chỉ 2 file): test mới **`test/filter-literal-types.test.mjs`** quét **mọi `.mjs` trong `src/`** (15 filter literal / 6 file lúc viết), strip comment, cấm literal số, kèm **control** `>= 12` để scan hỏng (đổi tên thư mục…) không thể "xanh vì tìm thấy 0". Chuyển hẳn tripwire khỏi file test P4 ⇒ **một nhà cho invariant**.
+- **Falsify**: 2 ca mới **K** (đưa số vào `ops-summary`) + **M** (đưa số vào `sales-order-write`) — cả hai đỏ đúng qua tripwire ⇒ harness P4 giờ chạy **cả 2 file test**. (Ghi nhận: `scripts/falsify/` chỉ có c0/c1/c2/issue1/p4 — harness B2/B3 trước đây là script tạm **không nằm trong repo**, nên lớp lỗi này không có gì canh; đó chính là lý do invariant phải thành tripwire in-repo.)
+- **Regression**: B2+B3 **41/41 pass** sau khi sửa.
+
+### 5.2 ✅ ĐÃ ĐO — `custom_ai_action_id` thiếu trên SO/QT/PO thật (user: "chạy --dry-run trước")
+
+`node scripts/add-correlation-field.mjs --dry-run` (chỉ đọc, không tạo gì) xác nhận **độc lập** với probe `Custom Field` meta:
+
+```
+ĐÃ CÓ: Payment Entry-custom_ai_action_id (unique=1) — payment.create
+THIẾU: Purchase Order · Quotation · Sales Order  → cần migration trước khi ghi thật
+```
+
+Hệ quả kép (đã ghi checklist `next.md`): (a) `app_drafts` của P4-1 **phải** null cho tới khi site có field — hiện tượng này tự hết khi tạo field, **không cần sửa code**; (b) **idempotency/correlation của B2/B3/B4 hiện chỉ được chứng minh với mock**. Việc tạo field là ghi vào ERPNext ⇒ **chờ user quyết** (P4-1 không tự làm).
+
+## 6. Review vòng 2 (sau khi sửa B2/B3) — bắt 2 lỗ hổng trong CHÍNH guard vừa viết
+
+OCR vẫn không chạy được (không có git) ⇒ review mặc định + kiểm tác động bằng grep. Kết quả:
+
+**Đã sửa (2 lỗ hổng thật của guard tôi vừa viết)**:
+
+1. **Array literal lọt qua tripwire** — `["docstatus","in",[0,1]]`: nhóm `value` của regex dừng ở `]` đầu tiên nên **không thấy** giá trị số ⇒ vá: nếu value bắt đầu bằng `[` thì tách từng phần tử và kiểm từng cái; đồng thời nhận cả dạng `+1`.
+2. **Ca falsify K/M đỏ mà KHÔNG chứng minh được tripwire là thứ bắt** (test khác có thể đỏ vì lý do khác — đúng bẫy "đỏ không đúng chỗ") ⇒ thêm tuỳ chọn `only` cho harness: ca **K/M/N** chỉ chạy **đúng file tripwire** ⇒ đỏ đúng chỗ.
+
+Sau khi vá: **14/14 RED** (thêm ca **N** = `in` với phần tử số).
+
+**Đã kiểm và sạch (không phải lỗi)**: tripwire **thật sự được `npm test` chạy** (grep thấy `✔ static tripwire…` trong full run — nếu không, nó sẽ là "trang trí" y như bài học vừa ghi); `src/` **chỉ có `.mjs`** ⇒ phạm vi quét đủ; literal số trong `scripts/` chỉ nằm trong **chuỗi mutation của harness** (cố ý); Flutter **không** tự gọi ERPNext (đúng kiến trúc) ⇒ không có chỗ nào khác cùng lớp; không import thừa; sau mỗi lần chạy harness: **không còn mutation sót, không `.falsify-bak`**, filter thật vẫn đúng.
+
+**✅ PHÁT HIỆN MỚI — ĐÃ SỬA (user duyệt "Sửa ngay (validate ở biên HTTP)")**
+
+Filter **động** không được tripwire nhìn thấy (biến, không phải literal) — và một trong số đó là **input của client**:
+
+| Bước | Vị trí |
+|---|---|
+| Client gửi `proposal.action_id` | `src/http-ask.mjs:655` — `body?.proposal?.action_id ?? null` (**không kiểm kiểu**) |
+| Chuyển thẳng vào executor | `src/safety-gateway.mjs:452` — `actionId: proposal.action_id ?? null` (**không đối chiếu** với proposal đã lưu) |
+| Dùng làm giá trị filter | `src/skills/sales-order-write.mjs:290` + `quotation-write.mjs:223` — `filters: [[field, "=", value]]`; `payment-write.mjs:253` — `filters: [[field, "=", actionId]]` |
+
+**Hậu quả nếu client gửi số** (`action_id: 123`): tool thật từ chối (`Property /filters/0/2 must be string`) ⇒ `reconcile*` rơi vào `catch` ⇒ `correlation_field_unavailable: true` ⇒ `sales-order-write.mjs:448` **từ chối ghi** với mã **`SO_CORRELATION_FIELD_MISSING`** và câu "ERPNext **chưa có field** … chạy migration" — tức **buộc tộị SAI cho site** trong khi site hoàn toàn bình thường.
+
+**Mức độ chính xác** (không thêu): **fail-closed — KHÔNG có nguy cơ ghi trùng** (truy vấn chống trùng thất bại ⇒ từ chối ghi), nhưng (a) chặn oan một lệnh hợp lệ, (b) **chẩn đoán sai** khiến người vận hành đi chạy migration không cần thiết. Với `payment-write` thì đơn có thể đã ghi xong mà bị báo "không xác minh được".
+
+**Cách sửa (đã làm)** — validate ở **BIÊN HTTP**, đúng bài học C1 (kiểm tra thuộc biên, không thuộc implementation):
+
+- `src/http-ask.mjs`: helper mới `correlationIdProblem(body)` — `command_id` / `proposal.action_id` nếu **có mặt** thì phải là **chuỗi không rỗng**, ngược lại **400 `INVALID_CORRELATION_ID`**; gọi ngay sau khi parse body và **TRƯỚC** rate-limiter (để một request sai kiểu không đốt `command_id` — cùng luật với throttle).
+- **Dùng lại pattern sẵn có**: `/execute/cancel` đã có `isValidCommandId` từ trước, `/execute` thì **không** — đây là chỗ hở.
+- Thiếu/`null` vẫn để cho gateway báo bằng mã của nó ⇒ **không đổi hành vi nào khác**.
+- **Test** (`test/http-execute.test.mjs`, +1 test): số ở `command_id` ⇒ 400 `INVALID_CORRELATION_ID` · số ở `action_id` ⇒ 400 · chuỗi rỗng/khoảng trắng ⇒ 400 **theo đúng mã** · **control** (id chuỗi) vẫn đi tiếp · và **`store.status(12345) === null`** chứng minh lệnh bị từ chối **không đốt command_id**.
+- **Falsify** (harness mới `scripts/falsify/execute-id-types.mjs`, chỉ chạy đúng file test này): **3/3 RED** — bỏ toàn bộ check · chỉ kiểm `command_id` · nới check (mất nhánh chuỗi rỗng).
+- **Kiểm tác động**: Flutter khai `command_id` là `String?` (`chat_models.dart:540`) ⇒ client thật không gửi số, 400 mới không gãy ai.
+
+**Bài học phụ bắt được ngay ở bước falsify (đã ghi vào skill + LESSONS nhóm 20)**: ca **C** ban đầu **không đỏ** vì test của tôi chỉ assert **status** (`400`) — mà khi bỏ guard thì request vẫn 400 từ chỗ khác ⇒ assertion **yếu**, đỏ/xanh vì lý do không liên quan. Đã siết thành assert **mã lỗi** (`INVALID_CORRELATION_ID`) ⇒ ca C đỏ đúng chỗ. **Assert mã, đừng assert status.**
+
+## 7. Giới hạn đo được (nói rõ, không giấu)
+
+- **OCR (open-code-review) không chạy được**: không có git trong checkout này (OCR review diff git) ⇒ đã làm **review mặc định**: tự đọc code, soát null/validate/secret/truncation → chính là 5 lỗi ở §2.
+- `codebase-memory-mcp` (`detect_changes`) và `AgentMemory` **không có trong tool của phiên này**; `ccc` **chưa init** (`~/.cocoindex_code/global_settings.yml` thiếu) ⇒ theo Graceful Degradation dùng `grep`/`rg` + đọc source. Không tự cài/khởi tạo.
+- `GL Entry` đọc với `limit: 100000` — nếu tương lai vượt trần tool thì guard `ERP_TRUNCATED` sẽ ẩn block (thà thiếu còn hơn sai).
+- Tripwire quét **literal**, nên **không** thấy được giá trị là **biến** (`filters: [[field, "=", value]]`). Đây không phải giả thuyết: nó chính là chỗ ẩn của phát hiện ở §6. Cách bù: kiểm **kiểu ở BIÊN** khi biến đó đến từ client (đang chờ duyệt).

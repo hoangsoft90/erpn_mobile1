@@ -1,0 +1,146 @@
+========================================================================
+RESULT 16 — CODE REVIEW SÂU (sai logic / crash / stuck UI) + FIX + TEST
+Timestamp: 2026-09-15 02:40
+Phạm vi review: TOÀN BỘ chuỗi client thật — 11 file Dart (apps/mobile) +
+http-ask.mjs + copilot-server.mjs + llm-router.mjs + toàn bộ test files.
+Nguyên tắc: mỗi finding phải chỉ ra cơ chế cụ thể, không phỏng đoán.
+========================================================================
+
+== 1. FINDING ĐÃ SỬA (7 lỗi thật, mỗi lỗi có test bám theo)
+------------------------------------------------------------------------
+[CRASH-1] llm-router.mjs: upstream response (res2) khi pipe KHÔNG có listener
+  'error'. Upstream (Gemini/zen free tier) đóng đột ngột giữa stream → error
+  event không ai nghe → uncaughtException → TOÀN BỘ router process chết, mọi
+  session dsh mất. Fix: res2.on("error") → res.destroy() + log. Mẫu hình crash
+  kinh điển của proxy Node.
+[CRASH-2] llm-router.mjs: client (dsh) ngắt giữa request (timeout/hủy) →
+  router vẫn writeHead + pipe vào socket đã chết → uncaught error → process
+  chết. Fix: guard res.destroyed sau mỗi await (đầu handler + sau readBody)
+  ở cả /v1/chat/completions và /v1/models.
+[CRASH-3] llm-router.mjs /v1/models: data.pipe(res) không error listener +
+  client có thể biến mất trong lúc await upstream → cùng nhóm crash #1/#2.
+  Fix: data.on("error") + guard res.destroyed.
+[STUCK-1] http-ask.mjs POST /ask: answerQuestion() KHÔNG có deadline. Pipeline
+  chậm/treo (ERPNext qua ngrok có thể stall) → server-side request treo VÔ
+  HẠN, dồn kết nối (client Flutter chỉ tự timeout 15s rồi báo lỗi, socket
+  server vẫn treo). Fix: server-side deadline 120s (Promise.race) + clearTimeout
+  trong finally (xem §3 — timer không clear giữ event loop).
+[STUCK-2] copilot-server.mjs normalizeText(): fetch Python bridge không có
+  AbortSignal — undici fetch có thể treo vĩnh viễn khi peer accept mà không
+  trả lời (half-open socket, Node không có default timeout). Fix:
+  signal: AbortSignal.timeout(30_000) → /ask luôn có lối thoát.
+[LOGIC-1] chat_controller.dart send(): cold-start race. build() đang load
+  history (AsyncLoading, value=null) + user gửi nhanh → send() coi state là
+  rỗng → _append GHI ĐÈ lịch sử đã lưu trong SharedPreferences chỉ với 1 turn
+  mới (mất lịch sử thật trên máy thật). Fix: guard `if (state.isLoading)
+  return false;` (AsyncValue.isLoading, khác ChatState.isLoading) → send bị
+  từ chối trong cửa sổ load. Regression test: _DelayedHistoryService chứng minh
+  send bị từ chối lúc đang load + sau load history chứa CẢ turn cũ và mới.
+[LOGIC-2] chat_screen.dart _send(): sau `await controller.send(text)`, widget
+  có thể đã unmount (user navigate away) → đụng _textController/context sau
+  await = throw "setState after dispose". Fix: `if (!mounted) return;` ngay
+  sau await, gom nhánh ok/fail dưới guard.
+
+== 2. FINDING ĐÃ XEM, KHÔNG SỬA (có lý do rõ)
+------------------------------------------------------------------------
+- ChatState.isLoading (UI) vs AsyncValue.isLoading (controller): 2 tên gần
+  nhau dễ nhầm — đã ghi comment phân biệt trong send(); tách state là over-
+  engineering cho 1 màn hình.
+- basicAuthOk so user+pass bằng 2 timingSafeEqual riêng: dư 1 leak timing
+  lý thuyết qua AND short-circuit — single-user MVP chấp nhận (đã từng ghi
+  nhận result11); Phase 5 gateway đầy đủ sẽ thay bằng session/token.
+- http-ask CORS "Access-Control-Allow-Origin: *": read-only MVP, dữ liệu công
+  nợ trả qua tunnel có auth; đã có comment kế hoạch Phase 5 sở hữu policy.
+- Debug-mode listener đếm: giữ design "dbg capture trong RETRY drain" — test
+  chứng minh 1-lần-drain không double-consume.
+
+== 3. LỖI CỦA CHÍNH AGENT TRONG PHIÊN NÀY (minh bạch — đã vào skill)
+------------------------------------------------------------------------
+1) Khai báo finding SAI rồi sửa vô nghĩa: tuyên bố "history load thiếu await"
+   — re-read code thấy `await` CÓ SẴN từ đầu → revert comment, rút bài học
+   "khai báo finding rồi phải TÁI ĐỌC code trước khi sửa" vào skill mục 6.
+2) Fix STUCK-1 lần 1 tạo lỗi MỚI: setTimeout trong Promise.race không clear →
+   mỗi /ask giữ event loop 120s (node --test treo đúng 120s, process không
+   exit sạch — cùng nhóm lỗi timer/socket giữ event loop của result15 nhưng
+   biến thể mới). Fix đúng: clearTimeout(deadlineTimer) trong finally. Bài học
+   "Promise.race không hủy losing timer" vào skill mục 6.
+3) Test Dart thiếu override client → ProviderContainer hit provider thật
+   (127.0.0.1:8788 connection refused) → test fail với message gây hiểu nhầm
+   là logic sai. Bài học "override MỌI provider làm I/O" vào skill mục 6.
+4) oldString str_replace gõ sai 1 ký tự → miss (đúng lỗi mục 6 của skill —
+   đã đọc lại nguyên văn rồi sửa, không đoán biến thể).
+
+== 4. TEST THẬT SAU FIX (lệnh + output)
+------------------------------------------------------------------------
+mcp-erpnext (env stripped — hermetic):
+  env -u ERPNEXT_URL -u ERPNEXT_API_KEY -u ERPNEXT_API_SECRET \
+      -u ASK_USER -u ASK_PASSWORD node --test
+  → ℹ pass 49 · fail 0 · duration 9.1s   (trước fix STUCK-1 v1: treo 120s)
+router:
+  node --test scripts/test/llm-router.test.mjs
+  → ℹ pass 8 · fail 0 · duration 189ms   (thêm 1 regression debug-drain)
+flutter (apps/mobile):
+  flutter analyze --fatal-infos → No issues found!
+  flutter test → 00:02 +14: All tests passed!   (thêm 1 cold-start race test)
+Ports sau verify: ss -ltnp → CLEAN (không zombie).
+
+== 5. FILE THAY ĐỔI (chưa commit — chờ user duyệt)
+------------------------------------------------------------------------
+M scripts/llm-router.mjs             (3 crash-guard + debug single-drain)
+M scripts/llm-router.config.json     (endpoint thật + stripFields — result15)
+M scripts/test/llm-router.test.mjs   (+1 regression test)
+M mcp-erpnext/src/http-ask.mjs       (deadline 120s + clearTimeout finally)
+M mcp-erpnext/src/copilot-server.mjs (AbortSignal.timeout cho NLP fetch)
+M mcp-erpnext/test/http-ask.test.mjs (+1 test shape 404)
+M apps/mobile/lib/.../chat_controller.dart (cold-start race guard)
+M apps/mobile/lib/.../chat_screen.dart     (mounted guard)
+M apps/mobile/test/chat_controller_test.dart (+1 race test + override client)
+M docs (result16/checklist/features/next/working/handoff/skill/openspec tasks)
+Đề xuất commit:
+  "fix: crash/hang review — router stream guards, /ask deadline, NLP abort,
+   cold-start race guard (+8 tests)"
+Lưu ý: đợt này gồm cả 2 file router của result15 chưa commit → gộp 1 commit
+hoặc tách 2 (result15 trước, result16 sau) — user chọn.
+
+== 6. ADDENDUM (2026-09-15 03:05) — DECISIONS + REVIEW VÒNG 2 + QUOTA VERDICT
+------------------------------------------------------------------------
+A) QUYẾT ĐỊNH USER (trao đổi trực tiếp 2026-09-15):
+   - Zen: ĐỂ SAU — không xử lý billing, giữ nguyên billing-blocked, KHÔNG
+     tắt/xóa config upstream.
+   - Gemini: free tier ĐƯỢC CHẤP NHẬN, không nâng paid. 429/503 khi E2E coi
+     là bình thường (giới hạn free tier), retry sau ~60s thay vì báo lỗi.
+B) COMMIT e2f5caf đã push (16 files): result15 + result16 batch (user duyệt).
+C) REVIEW VÒNG 2 trên chính fix của mình (re-read e2f5caf) — 5 lỗ hổng
+   window-sau-await còn sót, ĐÃ SỬA + TEST (router 10/10, 452ms):
+   1. Loop chain không check res.destroyed giữa các upstream → còn hammer
+      chain khi client đã biến mất → break ngay đầu loop iteration.
+   2. Models catch-path: 502 write sau await không guard destroyed → guard.
+   3. Exhausted-chain 502: write sau nhiều giây await → guard destroyed;
+      audit status = 499 (client closed) khi bị ngắt — trung thực hơn 502.
+   4. Debug drain path thiếu error listener trên res2 → uncaught error khi
+      upstream đứt GIỮA lúc drain → thêm listener (log, không crash).
+   5. loadConfig không validate stripFields: string "store" iterate từng
+      ký tự trong for..of → xóa nhầm key IM LẶM → hard-error ở boot.
+   +2 regression test: client-abort-mid-chain (process sống, /health sau
+   abort = 200) + stripFields validation (string/mixed-type → throw).
+D) QUOTA VERDICT (evidence-based, kết thúc việc đuổi E2E xanh hôm nay):
+   - 429 nguyên văn sau 130s IM LẶNG hoàn toàn: "generate_content_free_tier
+     _requests, limit: 20, model: gemini-3.6-flash. Please retry in 53.9s"
+   - Audit hôm nay: 149 requests, 10 gemini 200s + models probes + generate
+     trực tiếp → DAILY CAP (RPD=20) ĐÃ CẠN, không phải RPM (60s window đã
+     reset mà vẫn 429 tức thì). "Retry in Xs" của Google là template gây
+     hiểu nhầm cho daily quota.
+   - Kết luận: E2E xanh trọn vẹn CHỜ RESET DAILY (nửa đêm giờ Pacific —
+     ~14-15h giờ VN) rồi chạy DUY NHẤT 1 session (1 session = 2-3 calls ≤
+     trần 20), không retry-loop trong ngày. Router/cửa hàng đã chứng minh
+     chuỗi đúng bằng: gemini 200 qua router (result15 §3) + mock 269.000đ
+     nguyên vẹn qua cùng patch (result15 §5).
+E) Bài học mới vào skill mục 6 (4 mục): client-abort window là LỚP lỗi
+   (audit bằng grep, không trí nhớ) · config validate shape im-lặng · 429
+   daily-cap vs RPM kiểm chứng bằng evidence · grep absence claim phải
+   kiểm tra format log trước ("status=" vs "HTTP 429" từng làm tôi kết luận
+   sai request chưa tới router).
+F) Chưa commit (chờ duyệt): scripts/llm-router.mjs (5 fix vòng 2) +
+   scripts/test/llm-router.test.mjs (+2 test) + docs addendum này.
+   Đề xuất: "fix: router review round 2 — abort-window guards, stripFields
+   validation, 499 audit (+2 tests); record upstream decisions".

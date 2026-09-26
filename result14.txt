@@ -1,0 +1,68 @@
+========================================================================
+RESULT 14 — SIGN-OFF PHASE 5 ĐÃ KÝ (GATE MỞ) · LLM ROUTER BẢN ĐƠN GIẢN
+Timestamp: 2026-09-15 00:35
+Repo: erpn_mobile1 · branch change/flutter-chat-mvp
+========================================================================
+
+== 1. SIGN-OFF PHASE 5 (quyết định pháp lý của chủ dự án)
+SIGNOFF-phase5-pii.md cập nhật theo chỉ đạo user:
+- Bảng mục 6: 4/4 dòng điền — "Hoàng xác nhận qua trao đổi trực tiếp, không
+  scrub": KHÔNG PII scrubbing, KHÔNG LLM Router 2-tier; gửi thẳng tên khách/
+  số tiền cho LLM; free tier được dùng; DPIA chưa làm (chủ dự án tự chấp nhận
+  rủi ro, agent không tự làm thay); mục 4 (mapping) không áp dụng.
+- Người ký: Hoàng (chủ dự án) — Ngày ký: 2026-09-15. Trạng thái: GATE MỞ.
+- Ràng buộc số 1 của phase-05 (free tier không nhận PII) được đánh dấu
+  SUPERSEDED bởi người ký — ghi minh bạch trong file, không xoá lịch sử.
+- Phạm vi Phase 5 điều chỉnh: bỏ mục B (scrub layer) + test scrub; còn
+  LLM Router đơn giản (§C) + audit log (§D).
+
+== 2. LLM ROUTER (scripts/llm-router.mjs — mới)
+- Proxy OpenAI-compatible tại 127.0.0.1:8900; dsh trỏ vào router, router
+  forward theo fallback chain cấu hình JSON (không hardcode model).
+- Fallback: transport error / timeout / 429 / 5xx → mark unhealthy
+  (cooldownMs) → upstream kế; chain cạn → 502 kèm danh sách đã thử.
+- Audit JSONL llm-router-audit/audit-<stamp>.jsonl: id/ts/upstream/attempts/
+  status/latency/messages/stream — KHÔNG chép nội dung câu hỏi (transcript
+  đầy đủ nằm ở trace của dsh, liên kết theo id).
+- Key xử lý qua TÊN biến env (apiKeyEnv), không bao giờ log; không key trong
+  repo. Config: scripts/llm-router.config.json (mock → zen → gemini-openai;
+  2 upstream thật để PENDING verify baseURL/model/key tại thời điểm nối).
+- Bug tự bắt trước khi test: new URL("/chat/completions", baseUrl) drop path
+  /v1 → nối path thủ công (upstreamUrl, có test regression).
+- agent:false cho request outbound — không giữ event loop qua keep-alive.
+
+== 3. TEST THẬT
+- scripts/test/llm-router.test.mjs (mới): 7/7 PASS (duration ~180ms):
+  loadConfig defaults/validation · upstreamUrl giữ /v1 · pool cooldown ·
+  fallback 429→secondary + audit attempts ["up-a","up-b"] + audit không chứa
+  nội dung câu hỏi · chain cạn → 502 + audit · /health + /v1/models proxy.
+  Lệnh chuẩn: node --test "scripts/test/*.test.mjs" (dạng thư mục trần
+  scripts/test bị node --test xử sai — đã thử A/B/C, glob là chuẩn).
+- mcp-erpnext: node --test → 49/49 PASS (env stripped, duration 9.3s).
+- E2E smoke thật (cùng block, cleanup trap, ports freed verified):
+  mock-llm :8899 ready → router :8900 ready (3 upstreams, audit file tạo)
+  GET /health → {"ok":true,...3 upstreams healthy}
+  GET /v1/models → mock model list qua router
+  POST /v1/chat/completions → chuỗi router→mock hoạt động (latency 5ms,
+  audit line: {"upstream":"mock","attempts":["mock"],"status":200,...})
+
+== 4. 4 FILE SECURITY-REVIEW FIX (chờ duyệt commit — liệt kê theo yêu cầu)
+1. mcp-erpnext/src/http-ask.mjs — CGNAT boundary: chỉ 100.64.0.0/10 là
+   private (trước đây cả 100/8 → IP public 100.x bind được không auth);
+   auth constant-time (SHA-256 2 bên trước timingSafeEqual, hết lộ độ dài
+   password); cảnh báo plaintext khi bind public.
+2. mcp-erpnext/test/http-ask-auth.test.mjs — +1 test boundary 4 IP
+   (100.64/100.100/100.127 private; 100.0.1/100.63/100.128/100.200 refused).
+3. .github/workflows/android-debug-apk.yml — dart-define truyền qua env: +
+   quote "${VAR}" thay vì interpolate ${{ }} thẳng vào command (chống
+   break/inject bởi ký tự đặc biệt trong giá trị).
+4. apps/mobile/lib/features/chat/data/copilot_api_client.dart — 401 →
+   message tiếng Việt có hướng dẫn build lại với dart-define auth.
+
+== 5. TRẠNG THÁI COMMIT
+Chưa commit gì trong phiên này. File mới: scripts/llm-router.mjs,
+scripts/llm-router.config.json, scripts/test/llm-router.test.mjs,
+mcp-erpnext/LOCAL-TEST.md, result13/14.txt. File sửa: SIGNOFF, checklist,
+working, next, .gitignore (+ llm-router-audit/), 4 file security trên,
+package.json (start:ask), http-ask-auth.test.mjs.
+NOTE: llm-router-audit/ đã gitignore (runtime artifact).

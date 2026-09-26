@@ -1,0 +1,19 @@
+{
+  "name": "erpn-mcp-erpnext-readonly",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Phase 2 skeleton — MCP ERPNext read-only skill layer (stdio). Pinned per phase-00-result.md.",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@casys/mcp-erpnext": "3.0.4"
+  },
+  "scripts": {
+    "start": "node src/index.mjs",
+    "start:ask": "node src/http-ask.mjs --port 8788",
+    "test": "COPILOT_MOCK_OK=1 node --test",
+    "learning:cluster": "node scripts/learning-cluster.mjs"
+  }
+}

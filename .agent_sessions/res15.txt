@@ -1,0 +1,63 @@
+Đã làm xong Prompt-4 ( .plan/next6-prompt4.md ) — chưa commit (vùng số tiền).
+
+Root cause (đã chứng minh bằng probe thật, không phải suy luận)
+
+Khi  submit_now=true  và submit thất bại/timeout, code cũ  catch  rồi  store.complete()  với  docstatus: 0  (giả định). Vì  begin()  replay một command  COMPLETED  mà không đọc lại ERPNext, retry cùng  command_id  luôn trả  docstatus=0  — app báo sai trạng thái tiền vĩnh viễn, và đường reconcile của gateway không bao giờ chạy. Probe  .plan/probe-p4-submit-reconcile.mjs  in ra:
+
+first attempt : submit_ok=false docstatus=0  | store=COMPLETED
+ERPNext truth : PE-0100 docstatus = 1
+retry replay  : submit_ok=false docstatus=0   ← báo sai
+reconcile     : found:true docstatus=1        ← đọc được sự thật
+
+Vi phạm dòng spec §6.1: “Chỉ complete pending action sau khi verify ERPNext thành công.”
+
+Fix (targeted, 3 file  src/ )
+
+┌──────────────────┬───────────────────────────────────────────────────────────────────────────────────────────┐
+│ File             │ Thay đổi                                                                                  │
+├──────────────────┼───────────────────────────────────────────────────────────────────────────────────────────┤
+│ src/skills/payme │ 2 nhánh submit không-verify: không complete() nữa → throw PAYMENT_WRITE_UNVERIFIED ⇒      │
+│ nt-write.mjs     │ command ở PENDING ⇒ retry reconcile. Chỉ complete() khi verify docstatus===1.             │
+│ src/safety-gatew │ Reply đã reconcile thêm submit_ok = (docstatus===1) (đọc live), để nói thật trạng thái    │
+│ ay.mjs           │ submit.                                                                                   │
+│ src/mock-server. │ Knob test MOCK_ERP_FAIL_SUBMIT_AFTER_WRITE (submit apply rồi mất response) — opt-in,      │
+│ mjs              │ test-boundary.                                                                            │
+└──────────────────┴───────────────────────────────────────────────────────────────────────────────────────────┘
+
+Không đổi session architecture P2/P3, không scale DSH, không sửa WRITE action khác, không thêm mock runtime.
+
+Test (bằng chứng)
+
+-  test/payment-write.test.mjs  → 44/44 pass (+6 test Prompt-4; 3 test cũ đổi đúng theo hành vi mới)
+-  test/p9-pay.test.mjs  → 31/31 pass (+1 E2E HTTP: lost submit → 503 → retry reconcile  docstatus=1 , không tạo phiếu thứ 2)
+-  npm test  (full) → 844 · pass 842 · fail 2 (2 fail =  dshGatewayHealth / verifyDshRuntime  — môi trường DSH từ B0, không hồi quy; baseline 837/835/2 ⇒ +7 test)
+
+Phủ đủ 9 mục test của prompt4: draft 0 / submit 1 / timeout→reconcile cùng action_id / crash→retry cùng id / submit fail→không success / retry→không duplicate / cross-principal / fresh READ thấy ERPNext thật / không dedup theo customer+amount.
+
+Deliverable đầy đủ (root cause, lifecycle, action_id, prerequisite ERPNext, PASS/FAIL, limitations):  .plan/next6-result4.md .
+
+Lưu ý cần bạn quyết
+
+- UX đổi: submit lỗi giờ trả 503 (không còn 200 “PARTIAL”) — fail-closed. Flutter chưa đổi (ngoài scope), sẽ hiện banner lỗi từ 503 thay vì text PARTIAL.
+- Một từ chối submit deterministic (vd kỳ sổ khóa) cũng đi đường 503+retry — không thể phân biệt chắc “từ chối sạch” vs “mất response” ở tầng message, nên tôi chọn fail-closed thống nhất thay vì phán đoán bằng chuỗi.
+- OCR/ cocoindex / codebase-memory-mcp /AgentMemory không khả dụng phiên này → tôi review thủ công diff + kiểm caller ( executePaymentProposal  chỉ được gọi từ  safety-gateway ;  job-queue  coi 503  retry_same_command_id  là retryable; Flutter pin  command_id  trên card nên retry reconcile đúng).
+- Chưa chạy trên ERPNext thật cho vòng này (test dùng mock ở biên test).
+
+Chờ bạn duyệt trước khi commit (vùng số tiền, không tự commit). Ngoài ra 2 file test Prompt-3 ( dsh-gateway.test.mjs ,  next6-session-isolation.test.mjs ) vẫn chưa commit từ phiên trước.
+------------------------------
+Done with steps 1→2→3; stopping before Prompt-5 (not opened). Summary:
+1. Smoke PE THẬT (P4): 3/3 PASS trên site thật (company  Minh Phát Cám & VLXD ), script  .plan/probe-p4-smoke-real.mjs , report  .plan/next6-smoke-pe.md .
+2. (a) create→submit→verify: PE  ACC-PAY-2026-00749  1000đ cho  P1F-ACCEPT T3  (invoice  ACC-SINV-2026-01239 ), executor  docstatus=1, submit_ok=true ; REST read lại  docstatus=1 ,  reference_no=1f1bdd2a-… ,  custom_ai_action_id=act_317a820c-… .
+3. (b) mô phỏng crash-sau-submit (record về  PENDING , giữ  reference_no ) → retry CÙNG  command_id  →  replay:true, reconciled:true, duplicate_documents:0, docstatus=1 .
+4. (c) danh sách Payment Entry: đúng +1 ( ACC-PAY-2026-00749 ), retry không tạo phiếu thứ hai. Không hủy/xóa PE (theo lệnh).
+5. Blocker: không có (site cho submit; Mode of Payment “Tiền mặt” resolve →  Cash ).
+6. Commit 1 —  9b28e34 :  test(dsh): NEXT6 Prompt-3 lifecycle/partial/timeout/global=1  (2 file test Prompt-3).
+7. Commit 2 —  a727047 :  fix(payment): only complete a Payment Entry submit after ERPNext proves docstatus 1  (payment-write + safety-gateway + mock-server + payment/p9-pay tests).
+8. Commit 3 —  a201c3b :  fix(ui): a 503 retry_same_command_id …  (Flutter banner + widget test). Có làm Flutter (bước 3 tuỳ chọn).
+9. Không push (message không yêu cầu push); secret scan sạch trước mỗi lần stage.
+10. Không stage  .env ,  syncode ,  checklist1.md ,  faq1.md ,  icon.png ,  query_customer.py  — vẫn untracked/unmodified như cũ.
+11. Backend suite:  npm test  = 844 tests · pass 842 · fail 2 (2 fail =  dshGatewayHealth / verifyDshRuntime , môi trường DSH từ B0 — không hồi quy; baseline 837/835/2 ⇒ +7 test P4).
+12. Riêng:  payment-write.test.mjs  44/44,  p9-pay.test.mjs  31/31.
+13. Flutter:  flutter analyze  = No issues found;  flutter test  = 339/339 pass (+1 widget test). ( flutter pub get  phải chạy lại — pub cache máy này đã bị xóa.)
+14. Artifacts (gitignored, chưa commit):  .plan/next6-smoke-pe.md ,  .plan/probe-p4-smoke-real.mjs ,  .plan/probe-p4-submit-reconcile.mjs ; hashes đã ghi vào  next6-result4.md §11 .
+15. Chưa chạm  next6-prompt5.md . Nhắc lại: PE  ACC-PAY-2026-00749  đã submit thật (docstatus 1, giảm nợ 1000đ) — muốn hoàn tác phải tự cancel trên ERPNext

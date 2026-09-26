@@ -1,0 +1,13 @@
+#!/bin/bash
+# kythuathoangweb
+export CLOUDSDK_CONFIG=~/.config/gcloud-hoangsoft90
+
+echo "> zip on gcloud"
+gcloud cloud-shell ssh --command='cd ~/htdocs_apps/erpn_mobile1 && rm -f ~/erpn_mobile1.zip && zip -r ~/erpn_mobile1.zip . -x "./.git/*" "./.dart_tool/*" "./.idea/*" "./build/*" "./linux/*" "./macos/*" "./web/*" "./windows/*" "./mcp-erpnext/node_modules/*" "./apps/mobile/build/*" "./apps/mobile/.dart_tool/*" "./apps/mobile/linux/*" "./llm-router-audit/*" "./.cocoindex_code/*"'
+
+echo "> download zip & unzip"
+gcloud cloud-shell scp cloudshell:~/erpn_mobile1.zip localhost:/Users/hoang/htdocs/erpnext/erpn_mobile1/
+
+unzip -qo erpn_mobile1.zip
+rm -f erpn_mobile1.zip
+

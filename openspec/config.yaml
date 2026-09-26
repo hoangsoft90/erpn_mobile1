@@ -1,0 +1,32 @@
+schema: spec-driven
+
+# Project context (shown to AI when creating artifacts)
+context: |
+  Project: ERPNext Vietnamese Voice Copilot (client = Flutter, quyết định 2026-09-13).
+  Backend: Node copilot pipeline (mcp-erpnext/src/http-ask.mjs) + Python NLP bridge
+  (nlp_service) — Flutter client chỉ nói HTTP tới POST /ask.
+  Stack Flutter (khóa theo architecture skill): Riverpod (codegen @riverpod) + GoRouter
+  + Feature-First (features/<name>/{data,domain,application,presentation}).
+  Packages đã duyệt: flutter_riverpod, riverpod_annotation, go_router, dio,
+  shared_preferences (user duyệt 2026-09-14), build_runner + riverpod_generator (dev).
+
+  Design tokens (design-system skill — không dùng số magic trong widget):
+  colors:
+    primary: Material 3 baseline seed (Color(0xFF6750A4)) — user chưa cung cấp brand color
+    surface: "#FFFFFF"
+    error: "#B3261E"
+  spacing:
+    xs: 4
+    sm: 8
+    md: 16
+    lg: 24
+    xl: 32
+  radius:
+    sm: 8
+    md: 12
+    lg: 16
+  typography:
+    base: Material 3 default (Roboto) — user chưa chỉ định font khác
+  elevation:
+    card: 1
+    dialog: 3

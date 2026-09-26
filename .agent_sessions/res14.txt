@@ -1,0 +1,22 @@
+Xong cả 2 việc — Prompt-2 commit và Prompt-3. Tóm tắt:
+
+1. Commit NEXT6 Prompt-2 —  ff3a46e 
+
+- Commit riêng (không gộp next5/ 17d6f9b  hay P4-6/ ed79f77 ): 19 file, message nêu rõ session key principal+conversation, per-conversation lock, WRITE isolation, kèm test counts và limitation G5. Secret scan sạch trước khi stage; junk ( syncode ,  checklist1.md ,  faq1.md ,  icon.png ,  query_customer.py ) vẫn ngoài. Chưa push.
+
+2. Prompt-3 ( next6-prompt3.md ) — audit + 3 test mới, 0 file src/
+
+- Lifecycle 8 bước audit đủ bằng file:line thật (đã ghi trong result3 §1) — tất cả đã có từ Prompt-2, không cần sửa code.
+- 3 test còn thiếu đã thêm:
+- Partial output không commit (crash nửa JSON ⇒  DSH_SESSION_FAILED , store rỗng; timeout ⇒ tương tự; verified ⇒ commit)
+- Timeout kill + scratch DSH_HOME cleanup + session khác sống sót (đếm  dsh-ask-*  leftover = 0 trong TMPDIR test)
+- Global=1: conversation thứ 2 nhận  DSH_IN_FLIGHT  (không queue âm thầm), trace không chồng, prompt không rò turn của conversation kia
+- Phát hiện thật khi viết test:  await new Promise(() => {})  không treo — Node tự exit 13 (unfinished top-level await) sau ~40ms, child tự chết trước timeout. Fake hang thật phải giữ timer sống. Đã verify bằng repro trước khi sửa.
+- Kết quả:  npm test  = 837 tests / 835 pass / 2 fail (2 fail = môi trường DSH từ B0, không hồi quy; so Prompt-2: +3 test mới, cùng 2 fail). Flutter không đổi.
+- Output:  .plan/next6-result3.md  (lifecycle, lock, timeout, concurrency, tests, PASS/FAIL, limitations §8 — 7 mục trung thực gồm Retry-After tĩnh 2s, không cancel-on-disconnect…).
+
+Đang chờ bạn
+
+- 2 file test Prompt-3 chưa commit — duyệt thì tôi commit  test(dsh): ...  riêng.
+- Docs root (checklist/faq/features/next/LESSONS + result74) — commit  docs:  riêng hay để sau?
+- (Tuỳ) vòng smoke 2 conversation/2 principal qua  /dsh/ask  — bạn nhắc ở tin trước, chưa làm.

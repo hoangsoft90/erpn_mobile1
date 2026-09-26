@@ -1,6 +1,16 @@
 # working.md — Nhật ký đang làm
 
 > **Trạng thái mở — cập nhật 2026-09-26** (mục mới nhất nằm ngay dưới; dọn mục cũ hơn 1-2 tuần)
+> - **next6/Prompt-6 — REGRESSION GATE TOÀN NEXT 6 — ✅ ĐẠT, CHƯA COMMIT (2026-09-26)**.
+>   Đối chiếu `next6_final.md` §11: **PASS toàn bộ 26 dòng criterion** (Identity 3 · Session 3 · Isolation 4 · DSH 4 ·
+>   WRITE 4 · REAL-only 3 · Quality 5). **Không sửa gì thêm** (chỉ Prompt-5 commit `0ef6334` là blocker đã vá) — không
+>   mở scope, không tăng DSH concurrency, không thêm mock. **Focused**: session 19/19 · safety-gateway 10/10 ·
+>   http-execute 18/18 · command-store 4/4 · payment-write 44/44 · correlation 4/4 → **99/99**. **Full**: Node
+>   **847/845/2** (2 fail dsh env B0) · `flutter analyze` **0** · Flutter **344/347** (3 fail `_probe_review_test`
+>   có sẵn, A/B proof). **REAL E2E trên site THẬT** (không `COPILOT_MOCK_OK`): `probe-p4-smoke-real.mjs --dry-run`
+>   PASS (REAL MCP child spawned, đọc invoice `ACC-SINV-2026-01239`) + fresh REST read `ACC-PAY-2026-00749`
+>   **docstatus=1** (khớp reference_no/action_id). Definition of Done **PASS** (6 test chứng minh cách ly
+>   principal/conversation + `DSH_MAX_CONCURRENT` default=1). Báo cáo: `.plan/next6-final-report.md`. **Chưa push**.
 > - **next6/Prompt-5 — REAL-only · API contract `/dsh/ask` · OBSERVABILITY — ✅ ĐẠT, CHƯA COMMIT (2026-09-26)**.
 >   OpenSpec change `next6-real-contract-observability` (`openspec validate` **valid**). Audit code trước khi sửa
 >   cho thấy phần lớn đã đạt từ Prompt-2→4; **2 gap thật đã vá**: (1) 3 `logEvent` phase `dsh_ask` trong

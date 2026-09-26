@@ -1,0 +1,155 @@
+========================================================================
+RESULT 4 — RE-VERIFY 5 REPO DSH · SỬA PHASE-03 (FLUTTER) · PHASE 2 E2E MOCK
+Timestamp: 2026-09-13 15:02
+Env: Linux VPS / cloud shell, Python 3.12.3, Node v24.20.0, npm 12.0.2.
+     Repo erpn_mobile1, branch master, git VẪN 0 COMMIT (chờ user gõ OK).
+     AgentMemory DOWN · MCP cocoindex-code/codebase-memory-mcp không expose ·
+     OCR không chạy được · Simplenote MCP không có → Code review thủ công.
+========================================================================
+
+SCOPE phiên này (user giao 3 việc, đúng thứ tự)
+  T1. Re-verify checklist item "5 repo DSH mobile đều tồn tại thật":
+      liệt kê URL chính xác + công cụ dùng; nếu không mở được URL nào
+      thì sửa checklist.md thành "chưa xác minh được".
+  T2. Sửa phase-03: PWA → Flutter (client đích đã chốt), đồng bộ next.md.
+  T3. Phase 2 KHÔNG chờ credential: mock MCP server đúng shape 3.0.4
+      + hoàn thiện JSON-RPC correlation trong client + test end-to-end.
+  KHÔNG commit (vùng tiền + user chưa gõ OK).
+
+------------------------------------------------------------------------
+T1. RE-VERIFY 5 REPO DSH MOBILE — KẾT QUẢ: XÁC MINH ĐƯỢC, CÓ THẬT
+------------------------------------------------------------------------
+CÔNG CỤ: 2 lớp độc lập, cùng chạy lúc 2026-09-13 ~14:45
+  (A) GitHub API  : curl https://api.github.com/repos/<owner>/<repo>
+  (B) Fetch HTML  : curl -L https://github.com/<owner>/<repo> (không qua API)
+CONTROLS: 2 repo không tồn tại (this-owner-does-not-exist-xyz987/... và
+  deepseek-ai/this-repo-does-not-exist-12345) → 404 ở CẢ 2 lớp, message
+  "Not Found" → API/fetch thật, không phải proxy trả 200 cho mọi URL.
+
+URL CHÍNH XÁC ĐÃ MỞ + KẾT QUẢ (cả 5 đều HTTP 200 ở cả 2 lớp):
+
+ 1. https://github.com/Venompool888/deepseek-harness-mobile
+    API: ★14 · fork 2 · fork=false · created 2026-08-15 · pushed 2026-08-18
+         Kotlin · Apache-2.0 · "Native Android client for DeepSeek Harness"
+ 2. https://github.com/woaiys3/deepseek-harness-android-app
+    API: ★206 · fork 15 · fork=false · created 2026-08-16 · pushed 2026-09-12
+         Java · MIT · "DeepSeek Harness 手机版…AI 免 Root 操作手机"
+ 3. https://github.com/Hongtwenfive1226/DSH-Mobile-for-Android
+    API: ★12 · fork 4 · fork=false · created 2026-08-14 · pushed 2026-09-07
+         TypeScript · (không license) · "relies on Tailscale"
+ 4. https://github.com/201222-L/dsh-mobile-remote
+    API: ★59 · fork 7 · fork=false · created 2026-08-15 · pushed 2026-09-08
+         Dart · MIT · "插件 + Flutter App" (dsh remote control bằng Flutter)
+ 5. https://github.com/monster-echo/deepseek-harness-pocket
+    API: ★0 · fork 0 · fork=false · created 2026-08-18 · pushed 2026-09-11
+         TypeScript · (không license) · "dsh 的手机伴侣端"
+
+HTML title fetch trực tiếp khớp tên từng repo (trích trong output phiên).
+→ KẾT LUẬN: giữ nguyên "TỒN TẠI THẬT" trong checklist.md, bổ sung bằng chứng
+  re-verify lần 2. KHÔNG đổi sang "chưa xác minh được" vì đã mở được URL thật.
+→ Quyết định KHÔNG dùng 5 repo này giữ nguyên (lý do thẩm định an toàn:
+  third-party, xử lý tiền/PII — KHÔNG phải vì "không tồn tại").
+→ Ghi chú thú vị cho Flutter track: repo #4 là plugin dsh + Flutter App thật.
+
+------------------------------------------------------------------------
+T2. PHASE-03: PWA → FLUTTER (đồng bộ 4 file)
+------------------------------------------------------------------------
+- .plan/phases/phase-03-mvp-pwa-text-chat.md:
+    * viết lại toàn bộ theo Flutter (giữ TÊN FILE cũ để tham chiếu cũ không
+      gãy, ghi chú rõ ở đầu file)
+    * bỏ "Add to Home Screen" → thay bằng build APK debug nội bộ
+    * app gọi HTTP service nội bộ VPS (đúng kiến trúc cầu nối đã chốt),
+      không nhúng ERPNext/LLM key vào app
+    * thêm exit criteria "app mượt theo checklist.md gốc" (background
+      process, loading indicator, toast) + ui-checkpoint trước khi qua phase
+    * ghi rõ phụ thuộc Flutter client track (vẫn là khoảng trống)
+- next.md: bảng phase 3 → "MVP Flutter text chat (file đã sửa từ PWA)"
+- features.md: mục Phase 3 Flutter hoá; khoảng trống "track chi tiết" giữ nguyên
+- .plan/phases/production_roadmap.md: hàng phase 3 + dòng quyết định kiến trúc
+
+------------------------------------------------------------------------
+T3. PHASE 2 E2E — MOCK SERVER + JSON-RPC CORRELATION (không cần credential)
+------------------------------------------------------------------------
+3.0 PHÁT HIỆN QUAN TRỌNG — WHITELIST CŨ SAI TÊN TOOL
+    Đọc source bundle 3.0.4 trong node_modules (57.377 dòng, 1 file
+    mcp-erpnext.mjs): package expose 125 tool, TẤT CẢ prefix "erpnext_"
+    (erpnext_customer_list, erpnext_doc_get, …). KHÔNG tồn tại tool
+    get_list/get_doc/run_sql_query như skeleton đầu tôi viết.
+    → Sửa readonly-guard: whitelist 12 tool đọc THẬT
+      (customer/item/stock/sales invoice/payment entry/doc list-get/ar_aging)
+    → Thêm test chặn regession: whitelist không được chứa tên generic.
+
+3.1 SHAPE THẬT CỦA 3.0.4 (đọc từ source, dùng làm mẫu cho mock)
+    - tools/call result: { content: [{type:"text", text:"<json>"}],
+      structuredContent: {...}?, isError?: bool }
+    - erpnext_customer_list trả { doctype, count, data:[…] } với
+      fields name, customer_name, customer_group, territory, email_id, disabled
+    - erpnext_customer_get trả { data: doc }
+    - erpnext_stock_balance đọc Bin: item_code, warehouse, actual_qty,
+      reserved_qty, projected_qty, valuation_rate, stock_value
+    - tool đọc có annotations.readOnlyHint = true (dùng làm lớp cross-check)
+
+3.2 FILE MỚI / SỬA
+    MỚI:
+      src/mock-server.mjs   — JSON-RPC 2.0 stdio: initialize / tools/list /
+                              tools/call; 5 tool đọc với dữ liệu giả ĐÚNG shape
+                              (2 khách, 3 hoá đơn, 2 dòng tồn, 1 phiếu thu);
+                              tool lạ → error -32602; tool lỗi → isError
+      src/client.mjs        — createMcpClient: spawn process, initialize
+                              handshake, CORRELATION THEO ID (pending map),
+                              unwrap structuredContent/first-text, isError →
+                              TOOL_ERROR, JSON-RPC error → MCP_ERROR,
+                              guard chặn TRƯỚC khi server nhận, close() sạch
+    SỬA:
+      src/readonly-guard.mjs — whitelist 12 tool thật + WRITE_VERBS bổ sung
+                               (method_call, move_card…) + auditAgainst
+                               AdvertisedTools() cross-check readOnlyHint
+      src/index.mjs          — dùng client.mjs; realServerScript() resolve
+                               binary 3.0.4 từ node_modules; CLI chạy thật
+                               vẫn bắt buộc env (exit 2 khi thiếu)
+      src/router.mjs         — factory theo (mcp, knownIds) thay vì dump module
+      src/skills/*.mjs       — 4 skill đổi sang tool thật + tham số thật;
+                               customer.getCustomerBalance = tổng outstanding
+                               từ sales invoice (read-only composition)
+      test/router.test.mjs   — +2 test (tên tool thật; write verbs mới)
+      test/client.test.mjs   — MỚI: 6 test E2E spawn process thật
+
+3.3 KẾT QUẢ TEST (output thật)
+    npm test  → 19/19 PASS (0.35s), gồm:
+      E2E correlation: initialize+tools/list · callTool unwrap
+        structuredContent · 3 call SONG SONG không trùng id · isError →
+        TOOL_ERROR · JSON-RPC error → MCP_ERROR · audit readOnlyHint
+      Guard: whitelist toàn tên erpnext_* · write verbs bị chặn ở tầng code
+        (erpnext_doc_create/update/delete/submit/cancel/assign/file_upload/
+        method_call/sales_invoice_submit…) · tool lạ/empty bị chặn ·
+        ID bịa bị chặn (ID_REFUSED) · markUntrusted bọc đúng marker
+    Smoke flow nghiệp vụ (route → find → balance):
+      route 'công nợ của chị Lan…' → customer (matched: công nợ)
+      findCustomer('Lan') → 1 match: Nguyễn Thị Lan / CUST-00001
+      getCustomerBalance(CUST-00001) → 2.500.000 VND, 1 hoá đơn chưa trả
+      getCustomerBalance('CUST-99999') → ID_REFUSED ✅ (chống bịa ID)
+
+3.4 KHI CÓ CREDENTIAL THẬT
+    Chỉ cần: ERPNEXT_URL + ERPNEXT_API_KEY + ERPNEXT_API_SECRET và
+    createMcpClient({ serverScript: realServerScript() }) — KHÔNG viết lại
+    logic (client/guard/skill giữ nguyên; mock không bị import bởi production).
+    Chưa làm (đúng phạm vi): auth header mapping chi tiết của 3.0.4 (đọc thêm
+    README package khi nối thật), audit log / rate limit (phase-05).
+
+------------------------------------------------------------------------
+TỔNG HỢP TRẠNG THÁI
+------------------------------------------------------------------------
+  Python NLP : 58/58 PASS · money 259/259 = 100% (không đụng trong phiên)
+  Phase 2 JS : 19/19 PASS · pin 3.0.4 verify lockfile · E2E mock OK
+  Git        : VẪN 0 COMMIT — user đã duyệt nguyên tắc commit gộp Phase 1
+               (session trước) nhưng chưa gõ OK lần cuối → KHÔNG tự commit
+  Docs       : checklist.md (bằng chứng re-verify DSH) · phase-03 (Flutter)
+               · next.md · features.md · production_roadmap.md · result4.txt
+               · handoff_20260913-1502.md
+
+VIỆC CÒN LẠI
+  1. Chờ user gõ OK commit (feat: phase 1 — Vietnamese NLP pipeline)
+  2. Khi nối ERPNext thật: cung cấp ERPNEXT_URL/API_KEY/API_SECRET
+  3. Định nghĩa Flutter client track (khoảng trống lớn nhất)
+  4. Thu audio 3 miền (trước Phase 4) · bạc = ? (chờ mệnh giá)
+========================================================================

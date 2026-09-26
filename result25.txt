@@ -1,0 +1,289 @@
+========================================================================
+RESULT 25 — PHASE 7 GIAI ĐOẠN B: GHI THẬT VÀO ERPNEXT
+   (demo trên Mac, quy trình như production) · 1 LỖI DOUBLE-WRITE THẬT
+   ĐÃ TÁI HIỆN + TÌM RA NGUYÊN NHÂN + FIX + KIỂM CHỨNG LẠI TRÊN ERPNext THẬT
+Timestamp: 2026-09-16 03:55–04:25 UTC
+Env: container Google Cloud Shell · Node v24.20.0 · Python 3.12.3 · Flutter 3.47.2
+ERPNext: https://prevail-pantyhose-overvalue.ngrok-free.dev (site Minh Phát Cám & VLXD)
+Repo erpn_mobile1, branch change/flutter-chat-mvp · commit gốc 8ebfc0e / 05dda38
+Tất cả dưới đây là OUTPUT LỆNH THẬT, dán nguyên văn.
+========================================================================
+
+== A. IMPLEMENT PHẦN CÒN THIẾU (result23 §7) ==
+
+A.1. ĐỌC SOURCE THẬT ĐỂ TÌM TOOL — không đoán tên (bài học result4/result21)
+
+  $ grep -o 'name: *"erpnext_[a-z_0-9]*payment[a-z_0-9]*"' node_modules/@casys/mcp-erpnext/mcp-erpnext.mjs | sort -u
+  name: "erpnext_payment_entry_get"
+  name: "erpnext_payment_entry_list"
+
+  ⇒ **KHÔNG TỒN TẠI `erpnext_create_payment_entry`** — tên gọi trong yêu cầu/comment cũ
+    là SAI. Tool tạo document là `erpnext_doc_create` với `{doctype, data}`.
+    (125 tool tổng; có doc_create / doc_get / doc_list / doc_submit / doc_cancel / doc_delete.)
+
+  Tool đọc để reconcile theo reference_no:
+    · `erpnext_payment_entry_list` — inputSchema CHỈ có limit / payment_type /
+      party_type / party / date_from ⇒ **KHÔNG lọc được theo reference_no**.
+    · `erpnext_doc_list` — `{doctype, fields, filters: [[field,op,value]], limit, order_by}`
+      ⇒ đây mới là tool đúng: filters: [["reference_no","=",commandId]].
+  Tool tạo:
+    · `erpnext_doc_create` — handler: `ctx.client.create(input.doctype, input.data)`
+      ⇒ tạo ở dạng **NHÁP (docstatus 0)**; submit là tool RIÊNG
+      (`erpnext_doc_submit` → frappe.client.submit, annotations destructiveHint: true).
+
+A.2. CODE ĐÃ THÊM (mcp-erpnext/src/skills/payment-write.mjs)
+  · `buildPaymentEntryData()` — payload Payment Entry thật (pure, test được):
+      payment_type Receive · party_type Customer · party · company · posting_date
+      paid_from (từ invoice.debit_to) · paid_to (từ Mode of Payment) ·
+      paid_amount/received_amount · source/target_exchange_rate = 1 ·
+      mode_of_payment · reference_no = command_id · reference_date ·
+      remarks · references[{reference_doctype:"Sales Invoice", reference_name,
+      total_amount, outstanding_amount, allocated_amount}]
+  · `resolvePaymentAccounts()` — ĐỌC từ ERPNext lúc execute: company + debit_to
+    từ chính hóa đơn; **tên Mode of Payment được RESOLVE** (khớp đúng → tên kiểu
+    "cash" → type Cash → cái đầu tiên) rồi lấy default_account cho company;
+    fallback: account Cash đầu tiên qua erpnext_account_list.
+  · `reconcilePaymentEntry()` — CHỈ ĐỌC, dùng erpnext_doc_list + filter
+    reference_no; trả {found, count, doc, duplicates} (duplicates = có >1 chứng
+    từ cùng reference ⇒ phơi ra, không giấu).
+  · `verifyWrittenPayment()` — ĐỌC LẠI document vừa tạo và so reference_no /
+    paid_amount / party; lệch ⇒ throw PAYMENT_WRITE_UNVERIFIED.
+  · client.mjs `callWriteTool` — cổng write fail-closed: CHỈ
+    `erpnext_doc_create` với `doctype === "Payment Entry"`; mọi thứ khác
+    (kể cả doctype khác) bị từ chối trong code.
+  · http-ask `/execute` — nhánh resumed: reconcile trước khi ghi; tìm thấy ⇒
+    hoàn tất + trả replay (kèm duplicate_documents); không tìm thấy ⇒ mới ghi;
+    reconcile lỗi mạng ⇒ 503 và KHÔNG ghi.
+  · readonly-guard: thêm `erpnext_account_list` vào whitelist đọc (cần cho
+    resolve tài khoản) — kèm test riêng.
+
+A.3. TEST (trước khi chạm ERPNext thật) — TOÀN BỘ SUITE
+
+  $ cd mcp-erpnext && node --test
+  ℹ tests 86
+  ℹ pass 86
+  ℹ fail 0
+
+  Test mới (Stage B): tool đúng được dùng (erpnext_doc_list + filter
+  reference_no) · payload Payment Entry thật (accounts đọc live, allocation
+  gắn vào hóa đơn) · mode-of-payment resolve từ ERPNext (không dùng nhãn) ·
+  verify đọc-lại phát hiện sai lệch · reconcile phát hiện DUPLICATE ·
+  crash-recovery qua HTTP (xem §B.8 — test này chính là thứ bắt được bug thật).
+
+  Mock server được sửa cho TRUNG THỰC với ERPNext: nó KHÔNG dedupe theo
+  reference_no nữa (ERPNext không có unique constraint — mock dedupe sẽ che
+  đúng loại bug đã xảy ra), và giữ state qua file khi `MOCK_ERP_STATE` được set
+  (client spawn process mới mỗi request, không có state thì reconcile luôn
+  trả rỗng).
+
+== B. CHẠY THẬT ==
+
+B.1. ERPNext sống + chọn khách demo (CHỈ ĐỌC)
+  ERPNext MCP connected · tools = 125
+  customers = 31
+  Khách làm tròn 2026-09-15-p1b-wf1-2 | chứng từ mở=1 | tổng nợ=457875
+    | ACC-SINV-2026-00047:457875
+  (các khách demo khác: Khách smoke 2026-09-15-p1b-wf1-2 = 171800/4 chứng từ,
+   457875/485625/269000… — chọn khách có ĐÚNG 1 hóa đơn mở cho sạch)
+
+B.2. Proposal HIGH dựng từ dữ liệu THẬT (buildPaymentProposal, amount 10.000)
+  invoice mục tiêu : ACC-SINV-2026-00047
+  outstanding thật : 457875
+  proposal: action=create_payment_entry, risk=HIGH, entity.id=Khách làm tròn
+  2026-09-15-p1b-wf1-2, params={amount_vnd:10000, invoice:ACC-SINV-2026-00047,
+  outstanding_vnd:457875, mode:"Tiền mặt"}
+  command_id (sinh mới): 48b31992-0a4b-4eea-a623-1d250ad2acdd
+
+B.3. PRE-FLIGHT (chỉ đọc) — kiểm tài khoản trước khi gọi write
+  company   : Minh Phát Cám & VLXD
+  paid_from : 1310 - Phải thu khách hàng - MP
+  paid_to   : 1110 - Tiền mặt - MP
+  reconcile trước khi ghi (command_id mới): {"found":false,"count":0,"doc":null,"duplicates":false}
+
+B.4. LẦN GHI THỨ NHẤT — THẤT BẠI ĐÚNG CÁCH (và đây là lỗi của tôi, không phải của ERPNext)
+  $ curl -X POST http://127.0.0.1:8790/execute --data-binary @/tmp/exec-real.json
+  HTTP:500 time:2.029111s
+  {"ok":false,"error":"execute failed: TOOL_ERROR: [FrappeClient] POST
+   /api/resource/Payment%20Entry failed: LinkValidationError: Không thể tìm thấy
+   Phương thức thanh toán: Tiền mặt (HTTP 417)"}
+
+  ⇒ Nguyên nhân: code ĐOÁN tên mode "Tiền mặt"; site không có document này.
+    Không có document nào được tạo; store ghi command_id này = FAILED (terminal).
+
+  $ python3 -c "...idempotency-store/commands.json..."
+  48b31992… FAILED | TOOL_ERROR: [FrappeClient] POST /api/resource/Payment%20Entry failed: …
+
+  Tra mode THẬT trên site:
+  Mode of Payment: [{"name":"Chuyển khoản","enabled":1,"type":"Cash"},
+                    {"name":"Cash","enabled":1,"type":"Cash"},
+                    {"name":"Bank Draft","enabled":1,"type":"Bank"},
+                    {"name":"Wire Transfer","enabled":1,"type":"Bank"},
+                    {"name":"Credit Card","enabled":1,"type":"Bank"},
+                    {"name":"Cheque","enabled":1,"type":"Bank"}]
+  Cash → accounts: [{company:"Minh Phát Cám & VLXD", default_account:"1110 - Tiền mặt - MP"}]
+  ⇒ Sửa: resolve mode name từ ERPNext (khớp đúng → tên kiểu "cash" → type Cash →
+    đầu tiên) + báo lại `mode_substituted_from` khi phải thay.
+
+B.5. LẦN GHI THỨ HAI — THÀNH CÔNG (lần đầu tiên code ghi dữ liệu thật)
+  command_id (MỚI — id cũ đã FAILED terminal theo thiết kế):
+    a7fe0949-8931-4201-882f-1c06b670b502
+
+  $ curl -X POST http://127.0.0.1:8790/execute --data-binary @/tmp/exec-real2.json
+  HTTP:200 time:2.990267s
+  {"ok":true,"replay":false,"result":{
+     "erpnext_doc":"ACC-PAY-2026-00114",
+     "paid_vnd":10000,
+     "invoice":"ACC-SINV-2026-00047",
+     "customer":"Khách làm tròn 2026-09-15-p1b-wf1-2",
+     "reference_no":"a7fe0949-8931-4201-882f-1c06b670b502",
+     "docstatus":0,
+     "mode_of_payment":"Cash",
+     "note":"phiếu tạo ở trạng thái NHÁP (docstatus 0) — submit là bước riêng, cần người quyết định",
+     "mode_substituted_from":"Tiền mặt"}}
+
+B.6. VERIFY ĐỘC LẬP — đọc lại từ ERPNext (KHÔNG tin response của lệnh vừa gọi)
+  == 1) tra theo reference_no ==
+  [{"name":"ACC-PAY-2026-00114","docstatus":0,"paid_amount":10000,
+    "party":"Khách làm tròn 2026-09-15-p1b-wf1-2",
+    "reference_no":"a7fe0949-8931-4201-882f-1c06b670b502","posting_date":"2026-09-16",
+    "mode_of_payment":"Cash","paid_from":"1310 - Phải thu khách hàng - MP",
+    "paid_to":"1110 - Tiền mặt - MP"}]
+  == 2) đọc TRỰC TIẾP document ==
+    name            : ACC-PAY-2026-00114
+    docstatus       : 0
+    party           : Khách làm tròn 2026-09-15-p1b-wf1-2
+    party_type      : Customer      payment_type    : Receive
+    paid_amount     : 10000         received_amount : 10000
+    reference_no    : a7fe0949-8931-4201-882f-1c06b670b502
+    mode_of_payment : Cash
+    paid_from       : 1310 - Phải thu khách hàng - MP
+    paid_to         : 1110 - Tiền mặt - MP
+    company         : Minh Phát Cám & VLXD
+    references      : [{"reference_doctype":"Sales Invoice",
+                        "reference_name":"ACC-SINV-2026-00047",
+                        "total_amount":457875,"outstanding_amount":457875,
+                        "allocated_amount":10000,"exchange_rate":1,
+                        "account":"1310 - Phải thu khách hàng - MP",
+                        "parent":"ACC-PAY-2026-00114"}]
+    remarks         : Số tiền VND 10000 nhận từ Khách làm tròn 2026-09-15-p1b-wf1-2 …
+  == 3) ĐỐI CHIẾU ==
+    reference_no == command_id : true
+    paid_amount  == 10000      : true
+    số PE cùng reference_no    : 1
+
+B.7. TEST REPLAY — "bấm lại sau khi tưởng mất mạng" (cùng command_id)
+  $ curl -X POST …/execute --data-binary @/tmp/exec-real2.json   (lần 2)
+  HTTP:200 time:0.002332s
+  {"ok":true,"replay":true,"result":{"erpnext_doc":"ACC-PAY-2026-00114", …}}
+  ⇒ 2ms: phục vụ từ store, KHÔNG gọi ERPNext.
+
+  Đếm lại trên ERPNext:
+  SỐ PAYMENT ENTRY mang reference_no a7fe0949-… → 1
+  [{"name":"ACC-PAY-2026-00114","paid_amount":10000,"docstatus":0}]
+
+B.8. 🔴 BUG THẬT: CRASH-RECOVERY GHI PHIẾU THỨ HAI — TÁI HIỆN ĐƯỢC, ĐÃ FIX
+
+  Kịch bản (mô phỏng crash giữa chừng): ép record về PENDING như thể process
+  chết sau khi ERPNext nhận write nhưng trước store.complete(), rồi RESTART
+  server (xoá cache trong RAM), rồi POST lại cùng command_id.
+
+  Lần thử đầu (CHƯA restart) trả replay từ cache RAM → **kết quả này KHÔNG
+  chứng minh gì**; phải restart mới thật sự đi vào nhánh reconcile. (Ghi lại
+  vì bản thân nó là một bẫy: store cache trong RAM, sửa file bên ngoài không
+  có tác dụng cho process đang chạy.)
+
+  Sau khi restart đúng cách:
+  $ curl -X POST …/execute   (lần 4, record PENDING)
+  HTTP:200 time:3.229181s
+  {"ok":true,"replay":false,"result":{"erpnext_doc":"ACC-PAY-2026-00115", …}}
+  ⇒ ĐÃ GHI PHIẾU THỨ HAI (ACC-PAY-2026-00115) cho cùng khoản tiền 10.000đ,
+    cùng reference_no. Đây chính là thảm hoạ mà cả phase này tồn tại để chặn.
+
+  NGUYÊN NHÂN GỐC (đọc code, không đoán) — `idempotency.mjs` begin():
+      db.commands[key] = { status: "PENDING", action, fingerprint, ts };
+    Ghi ĐÈ TOÀN BỘ record ⇒ **XOÁ MẤT `reference_no`** của lần thử trước.
+    Ở http-ask, nhánh reconcile có điều kiện `existing.reference_no` ⇒ sau khi
+    begin() đã xoá nó, điều kiện FALSE ⇒ **bỏ qua reconcile** ⇒ ghi thẳng.
+    Và ERPNext KHÔNG ràng buộc unique trên reference_no (bằng chứng: 2 document
+    cùng reference_no cùng tồn tại) ⇒ không có lưới an toàn nào khác.
+
+  FIX (fail-closed):
+    · begin(): `{...existing, status:"PENDING", …}` — giữ mọi field đã ghi
+      (nhất là reference_no), chỉ xoá error/failed_ts; trả thêm `resumed: true`.
+    · http-ask: dùng `gate.resumed`; nếu resumed mà THIẾU reference ⇒ 409 và
+      KHÔNG ghi (không đoán); reconcile lỗi mạng ⇒ 503 và KHÔNG ghi.
+    · Mock: bỏ dedupe theo reference_no (hư cấu che bug) + giữ state qua file
+      khi MOCK_ERP_STATE set (để test crash-recovery có ý nghĩa).
+
+  TEST HỒI QUY (2 test mới) + FALSIFICATION:
+    "/execute: RESUMED command reconciles against ERPNext — NO second write"
+    "store: begin() on a resumed command KEEPS reference_no"
+    Gỡ tạm fix `...existing` → test HTTP FAIL đúng chỗ ("reconcile path must
+    have run"); khôi phục → 4/4 pass. ⇒ test thật sự bắt được bug này.
+
+  KIỂM CHỨNG LẠI TRÊN ERPNEXT THẬT (sau fix):
+    $ curl -X POST …/execute   (record PENDING, server mới)
+    HTTP:200 time:0.945556s
+    {"ok":true,"replay":true,"reconciled":true,"duplicate_documents":2,
+     "result":{"erpnext_doc":"ACC-PAY-2026-00115", …, "reconciled":true}}
+    SỐ PAYMENT ENTRY: 2      ← KHÔNG tăng lên 3 (trước fix sẽ thành 3)
+    ⇒ reconcile chạy, tìm thấy chứng từ, KHÔNG ghi thêm, và phơi thẳng con số
+      duplicate_documents = 2 (không giấu thiệt hại đã xảy ra).
+
+  ĐIỀU CÒN NỢ TỪ BUG NÀY (việc của NGƯỜI, không tự làm):
+    ERPNext hiện có 2 Payment Entry NHÁP cho cùng 10.000đ:
+      · ACC-PAY-2026-00114 (bản ghi lần đầu)
+      · ACC-PAY-2026-00115 (bản ghi do bug)
+    Cách dọn (KHÔNG tự thực hiện — destructive, user quyết):
+      1. Mở ERPNext → Payment Entry → ACC-PAY-2026-00115 → Delete (đang là nháp
+         nên xoá được, không cần cancel).
+      2. Cân nhắc xoá luôn ACC-PAY-2026-00114 nếu muốn sạch dữ liệu demo.
+      3. Nếu muốn GIỮ làm bằng chứng: để nguyên — cả hai đang nháp, không ảnh
+         hưởng số dư công nợ.
+
+B.9. HỆ QUẢ NGHIỆP VỤ (quan trọng — đo thật, không suy đoán)
+  ACC-SINV-2026-00047 sau khi có 2 phiếu NHÁP:
+  [{"status":"Unpaid","grand_total":457875,"outstanding_amount":457875}]
+  ⇒ Phiếu NHÁP KHÔNG làm giảm công nợ. Muốn tiền thực sự được ghi nhận phải
+    SUBMIT (erpnext_doc_submit — destructiveHint). Đây là quyết định của user,
+    KHÔNG tự làm trong phiên này.
+
+== C. SUITE CUỐI (sau toàn bộ thay đổi) ==
+  Node    : ℹ tests 86 · pass 86 · fail 0
+  Python  : Ran 58 tests in 0.472s — OK
+  Flutter : 00:04 +25: All tests passed! · analyze: No issues found! (5.9s)
+
+== D. FILE THAY ĐỔI (chưa commit — vùng tiền, chờ user duyệt) ==
+  mcp-erpnext/src/skills/payment-write.mjs   + resolve accounts/mode, build
+                                             payload PE thật, reconcile, verify
+                                             đọc-lại
+  mcp-erpnext/src/client.mjs                 callWriteTool: chỉ erpnext_doc_create
+                                             + doctype "Payment Entry"
+  mcp-erpnext/src/http-ask.mjs               nhánh resumed reconcile (fail-closed)
+  mcp-erpnext/src/idempotency.mjs            begin() giữ reference_no + resumed
+  mcp-erpnext/src/mock-server.mjs            erpnext_doc_create/doc_list/doc_get,
+                                             bỏ dedupe hư cấu, state qua file
+  mcp-erpnext/src/readonly-guard.mjs         + erpnext_account_list
+  mcp-erpnext/test/payment-write.test.mjs    + test payload/reconcile/verify/mode
+  mcp-erpnext/test/http-execute.test.mjs     + test crash-recovery (bắt bug thật)
+  mcp-erpnext/test/client.test.mjs           dùng tool chưa implement khác cho test
+  mcp-erpnext/test/account-list-guard.test.mjs (mới)
+  result25.txt
+
+  Không có secret nào bị in ra ở bất kỳ đâu (chỉ tên biến môi trường).
+  `idempotency-store/` (chứa command_id + tên khách + tên chứng từ) nằm trong
+  .gitignore — không lên git.
+
+== E. BÀI HỌC RÚT RA (đã/ sẽ ghi vào skill) ==
+  1. Nhánh phục hồi sau crash là NHÁNH KHÓ NHẤT và phải được test END-TO-END
+     qua đúng đường đi thật — test unit gọi hàm reconcile trực tiếp KHÔNG bắt
+     được lỗi "begin() xoá mất dữ liệu" (bug này sống sót qua 3 lớp test cũ).
+  2. Khi store/state có cache trong RAM (như IdempotencyStore._cache), mô phỏng
+     crash bắt buộc phải RESTART process — sửa file bên ngoài không có tác dụng
+     và sẽ "chứng minh" sai rằng nhánh đó chạy đúng.
+  3. Mock phải TRUNG THỰC với hành vi server thật: dedupe theo reference_no mà
+     ERPNext không có = mock đang che chính loại bug cần bắt.
+  4. Không được đoán định danh dữ liệu của site (Mode of Payment "Tiền mặt"):
+     LinkValidationError 417 là thông báo đúng, còn lỗi là ở chỗ hardcode nhãn.
+  5. Ghi xong phải ĐỌC LẠI và đối chiếu — response của lệnh write không là bằng chứng.
+========================================================================

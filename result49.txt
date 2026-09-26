@@ -1,0 +1,53 @@
+========================================================================
+RESULT 49 — P5 (phases2): DSH EXPLICIT OPT-IN READ
+Timestamp: 2026-09-18 (giờ shell)
+Phạm vi: gate opt-in server-side + bằng chứng không-fallback. KHÔNG đụng
+ERPNext thật; không đổi hành vi /ask; dsh vẫn chưa cài trên VPS (biết trước).
+========================================================================
+
+== 1. AUDIT TRƯỚC KHI CODE (bài học P1–P4) ==
+Đã có, không làm lại: dsh.cordis.patch.yml (đăng ký MCP, result6-era);
+copilot_ask qua answerQuestionLogged (P4 §8); forbidden/stub P0/P2;
+Safety Gateway P0. Phần thiếu = opt-in gate + bằng chứng D2/D8.
+
+== 2. CODE ==
+- src/dsh-optin.mjs (mới): DSH_CONTEXT_ENV=COPILOT_DSH_CONTEXT;
+  isDshContext() chỉ nhận đúng '1' (không truthy — falsify F2 chốt);
+  blockedInDshContext() chặn group payment_write (WRITE duy nhất, Phase 7b);
+  dshWriteBlockedAnswer() trả DSH_WRITE_BLOCKED + copy tiếng Việt.
+- copilot-server.mjs: 1 điểm chặn TRƯỚC skill factory — chỉ chạy khi
+  isDshContext(opts.env) && blockedInDshContext(route); copilotAsk truyền
+  env: process.env. /ask KHÔNG truyền flag này (không ai set) ⇒ hành vi
+  path chính không đổi.
+- dsh.cordis.patch.yml: + COPILOT_DSH_CONTEXT: '1' (comment đúng luật D8).
+
+== 3. TEST (mới: test/p5-dsh-optin.test.mjs — 6 test) ==
+§1 isDshContext chỉ nhận '1' ('' / '0' / 'true' đều false)
+§2 blockedInDshContext: WRITE chặn, READ/null/forbidden không
+§3 D2: grep toàn src/ — không lệnh spawn dsh nào (regex phân biệt
+   call thật vs chữ trong comment — lỗi đầu đã sửa)
+§4 D8: patch file có COPILOT_DSH_CONTEXT='1' + spawn copilot-server thật
+§5 /ask không tự set COPILOT_DSH_CONTEXT; server chỉ ĐỌC env
+§6 E2E: child thật với flag → READ "chị Lan còn nợ bao nhiêu" trả lời
+   bình thường; WRITE "thu tiền cho chị Lan 50 nghìn" → DSH_WRITE_BLOCKED,
+   proposal null; 2 dòng learning log vẫn ghi (P4 giữ nguyên)
+
+== 4. FALSIFY (bản sao /tmp với test mới nhất) ==
+F1 gate vô hiệu (return false)            → unit FAIL 1 ✅ → khôi phục ✅
+F2 isDshContext chấp nhận truthy          → unit FAIL 1 ✅ → khôi phục ✅
+
+== 5. SUITE (lệnh + output thật) ==
+Node     tests 210 · pass 210 · fail 0   (204 → 210, env -u ERPNEXT_*)
+Python   OK (60)
+Flutter  +69: All tests passed!  ·  analyze: No issues found!
+
+== 6. STAGE (chờ duyệt) ==
+7 file: src/dsh-optin.mjs (mới) · test/p5-dsh-optin.test.mjs (mới) ·
+docs/dsh-optin.md (mới) · src/copilot-server.mjs (gate + env wiring) ·
+dsh.cordis.patch.yml (+4 dòng env) · result49.txt.
+(.plan/phases2/p5-result.md gitignored — local)
+
+== 7. GAP ==
+- Live dsh smoke: khi user chạy dsh thật (chưa cài trên VPS — biết trước).
+- UI Flutter nút "Phân tích bằng AI": phase UI sau; hiện opt-in là quyết
+  định của người vận hành, đúng D8.

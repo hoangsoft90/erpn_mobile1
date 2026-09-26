@@ -1,0 +1,93 @@
+# E2E patch: dsh → copilot MCP → Vietnamese NLP → ERPNext (REAL, or a loud
+# refusal — never fixtures), with dsh's LLM going through the local llm-router
+# (scripts/llm-router.mjs) instead of a provider directly.
+#
+# Usage (from repo root — cwd matters, see the warning below):
+#   python3 -m nlp_service.server &                                   # :8787
+#   { set -a; source .env; set +a; } \
+#     node scripts/llm-router.mjs --config scripts/llm-router.e2e.json &
+#   DSH_HOME=/tmp/dsh-home-$(date +%s) DSH_TELEMETRY_MODE=DISABLED \
+#     node /tmp/dsh-run/node_modules/@deepseek-ai/dsh/lib/bin.js \
+#     --profile headless --patch mcp-erpnext/dsh-e2e.patch.yml "chị Lan còn nợ bao nhiêu"
+#
+# TARGET SELECTION — real ERPNext, or a LOUD REFUSAL. There is no mock default
+# (issue1_fix1: a silent fixture fallback manufactured "Nguyễn Thị Lan", a
+# customer that does not exist in real ERPNext, and dsh reported it as fact):
+#
+#   (no E2E_TARGET)      → the copilot child REFUSES to start:
+#                          "ERPNEXT_NOT_CONFIGURED ..." and exits 2
+#   E2E_TARGET=real      → real   (.env values passed through; .env is loaded by
+#                                  dsh itself, see below)
+#
+# Mock is now opt-in via COPILOT_MOCK_OK=1 in the OPERATOR environment, and this
+# patch deliberately does NOT pass that variable — an E2E run against this file
+# can therefore never be answered from fixtures.
+#
+# WHY THE MOCK BRANCH NEEDS A LITERAL EMPTY STRING: dsh itself runs
+# `process.loadEnvFile(<cwd>/.env)` at boot (dsh-app-boot), so a bare
+# `!!js process.env.ERPNEXT_URL || ''` resolves to the REAL value from this repo's
+# .env even when the launcher environment has it unset — an E2E that intends to
+# use the mock silently targets production ERPNext (verified by probe, result17).
+# A literal '' is the only value dsh cannot overwrite from .env.
+- insert:
+    - id: erpn-copilot-mcp
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: erpn_copilot
+        transport: stdio
+        command: node
+        args:
+          - !!js >-
+            process.getBuiltinModule('node:path').join(process.cwd(), 'mcp-erpnext', 'src', 'copilot-server.mjs')
+        cwd: !!js process.cwd()
+        env:
+          NLP_SERVICE_PORT: '8787'
+          # P5 (plan2_final §2 D8) — the SAME flag dsh.cordis.patch.yml sets.
+          # SAFETY-CRITICAL: without it the copilot child is NOT in dsh context,
+          # so the WRITE gate (dsh-optin.mjs) never fires and a write question
+          # falls through to the skill/entity layer (observed 2026-09-19: the
+          # write question was stopped only by an ambiguous-customer error, not
+          # by the DSH gate). The gateway now refuses to spawn a patch that
+          # lacks this flag (dsh-gateway.mjs dshPatchMarksDshContext).
+          COPILOT_DSH_CONTEXT: '1'
+          # Block scalar (`>-`) is REQUIRED here: an inline `!!js` expression
+          # containing ": " is parsed by YAML as a nested mapping, not a string
+          # (result17: env became {"[object Object]": ""} and dsh refused to boot).
+          ERPNEXT_URL: !!js >-
+            process.env.E2E_TARGET === 'real' ? (process.env.ERPNEXT_URL || '') : ''
+          ERPNEXT_API_KEY: !!js >-
+            process.env.E2E_TARGET === 'real' ? (process.env.ERPNEXT_API_KEY || '') : ''
+          ERPNEXT_API_SECRET: !!js >-
+            process.env.E2E_TARGET === 'real' ? (process.env.ERPNEXT_API_SECRET || '') : ''
+# LLM: dsh's model traffic goes to the local router. Rows are addressed BY ID
+# (source of truth: @deepseek-ai/dsh-base/cordis.patch.yml) — settings.yaml has
+# no effect on adapter registration, and `models` must be a list of objects.
+#
+# The ROUTER routes by model name, so the model requested here selects the
+# upstream chain (see scripts/llm-router.e2e.json):
+#   E2E_LLM_MODEL unset → ag/gemini-3.6-flash-low → mac-custom
+#   E2E_LLM_MODEL=ag/gemini-3.6-flash-low → mac-custom (canonical daily model)
+#       (default: self-hosted, NO provider quota — daily dev/test)
+#   E2E_LLM_MODEL=real-gemini           → gemini-3.6-flash → gemini-openai (real
+#       provider compat verify: thought_signature; free tier RPD=20)
+# MODEL DRIFT 2026-09-19 (2nd, `.plan/dsh_prompt_fix1.md` §10 evidence): the Mac
+# retired oc/big-pickle, then gemini/gemini-3.6-flash too; /v1/models now lists
+# tiered ag/* ids. ag/gemini-3.6-flash-low probed LIVE (finish_reason=stop).
+# The router matches model names EXACTLY, so the prefix is what keeps ag/*
+# distinct from gemini-openai's bare `gemini-3.6-flash`.
+# The router provider's apiKeyEnv stays GEMINI_API_KEY — it is never sent to
+# mac-custom (the router replaces Authorization per-upstream from MAC_LLM_API_KEY).
+- id: llm-pi-ai
+  config:
+    providers:
+      router:
+        apiKeyEnv: GEMINI_API_KEY
+        api: openai-completions
+        baseURL: http://127.0.0.1:8900/v1
+        models:
+          - id: ag/gemini-3.6-flash-low
+- id: agent-default-model
+  config:
+    provider: router
+    model: !!js >-
+      (process.env.E2E_LLM_MODEL || 'ag/gemini-3.6-flash-low') === 'real-gemini' ? 'gemini-3.6-flash' : (process.env.E2E_LLM_MODEL || 'ag/gemini-3.6-flash-low')

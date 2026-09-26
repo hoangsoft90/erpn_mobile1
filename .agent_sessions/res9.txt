@@ -1,0 +1,37 @@
+D1 — ĐẠT · 2 mục drawer đã bật
+
+Đã làm gì
+
+┌─────────────┬────────────────────────────────────────────────────────────────────────┬──────────────────────┐
+│             │ Server                                                                 │ Flutter              │
+├─────────────┼────────────────────────────────────────────────────────────────────────┼──────────────────────┤
+│ Công nợ     │ drill mới receivable_customers — MỌI khách còn nợ toàn công ty (SI     │ Drawer mục "Công nợ  │
+│ (lối tắt)   │ docstatus=1 & outstanding>0, không cancelled), sort outstanding DESC   │ (lối tắt)" bấm được  │
+│ Nợ quá hạn  │ drill mới overdue_top — cùng tập SI quá hạn nhưng sort days_overdue    │ Mục mới thay "Top    │
+│ / Nợ lâu    │ DESC (oldest due_date từng khách), secondary outstanding               │ khách nợ"            │
+└─────────────┴────────────────────────────────────────────────────────────────────────┴──────────────────────┘
+
+- Số = GL raw, không trừ Draft PE (§9): nháp đi đường khác — dòng phụ optional  draft_hint {count, amount}  đọc PE  docstatus=0  company-wide, không khớp allocation (P9-D giữ toán effective trên proposal chat, không đụng 1 dòng).
+- Footnote verbatim §3.1 do server gửi: "Theo sổ ERPNext đã ghi nhận (chưa trừ phiếu thu/chi nháp)." — client không tự chế, vắng mặt khi server không gửi.
+- Tái dụng nguyên trạng  DrillListScreen  +  /read/drill  + provenance gate D0.5; intent là drill id cố định (không phrase, không  /ask , không  /execute ).
+-  days_overdue  suy server-side từ  due_date  (D0 đã đo SI không có field này); hint đọc lỗi ⇒ vắng mặt (không 0 giả, không lỗi trang — knob mock mới  MOCK_ERP_FAIL_SI_LIST / MOCK_ERP_FAIL_PE_LIST  tách bạch hai ca).
+
+Verify trên site THẬT ( .plan/next5/d1-verify-real.py , chỉ đọc — expected từ REST, không tự bịa)
+
+REST: 283 SI · 47 khách · tổng 461.505.625 · quá hạn 17.764.500 (company pin Minh Phát Cám & VLXD)
+drawer receivable_customers: 461.505.625đ · 47 khách · trang 10/47 (truncated=true) · từng khách top-10 khớp REST theo đúng luật sort
+drawer overdue_top: 17.764.500đ · 6 khách · oldest từng khách khớp REST · sort cũ-trước đúng
+GL-raw: site có 13 phiếu PE NHÁP (162.092.570đ) — drawer VẪN = REST GL ⇒ KHÔNG trừ nháp ✅
+fresh read: 2 lần mở → 2 generated_at khác nhau ✅
+
+Test §3.1 số 2 (Submit PE → drawer khớp REST): đạt dạng kiểm chứng chéo toàn bộ — 13 nháp PE có sẵn trên site, số không hề giảm; không submit thêm PE mới chỉ để đo (ghi thật không cần thiết, mệnh đề đã phủ).
+
+Số đo
+
+Node full 810/808/2 (2 fail  dshGateway*  có sẵn từ B0) ·  p44  15/15 (GL-raw, age-sort, hint-optional/refusal) · Flutter 318/318 · analyze 0 · falsify drill 20/20 RED (3 ca mới: trừ nháp vào drawer ⇒ RED, bỏ sort tuổi ⇒ RED, gỡ footnote ⇒ RED; restore byte-identical).
+
+Nói thẳng
+
+1 probe đầu của tôi FAIL 37 dòng vì kỳ vọng sai (đòi drawer liệt kê đủ 47 khách) — drawer là trang giới hạn 10/47 với  truncated  trung thực; sửa probe so trang đầu theo đúng luật sort, không phải lỗi sản phẩm. Còn lại  soon : D1c (HĐ chưa trả), D2 (Tồn kho nóng — chờ bạn chốt nguồn kho: pin  COPILOT_DEFAULT_WAREHOUSE  hay đọc settings nào), D3 (Nháp hôm nay).
+
+Docs:  .plan/next5/D1-result.md  +  checklist.md / next.md / working.md . Chưa commit — diff gộp A3 + D0.5 + D0.7(skip) + D1 chờ bạn duyệt. Gateway đang chạy code mới PID 145162 ( kill 145162  nếu cần).

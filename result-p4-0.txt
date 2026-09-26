@@ -1,0 +1,63 @@
+result-p4-0.txt — Mapping Mode of Payment → Cash|Bank (P4-0, 2026-09-21)
+
+PHẠM VI: chỉ khảo sát + map (spec .plan/plan4_final.md §3.2/§10/§12). KHÔNG UI Flutter,
+KHÔNG WRITE, KHÔNG Redis, KHÔNG skill WRITE mới. Mọi truy vấn ERPNext là get_list/READ.
+
+== 1. Đã đọc (bắt buộc) ==
+- .plan/plan4_final.md: §3.2 (thu/chi tách Cash|Bank, map nằm CONFIG SERVER — Flutter
+  không hardcode tên mode) · §10 (đã trả lời: §10.3 két lấy Company.default_cash_account,
+  thiếu → ẨN block) · §12 (checklist "Mapping Cash/Bank trên site demo ghi vào checklist").
+- mcp-erpnext/capabilities.json: CHƯA có block mode→cash|bank (đúng — P4-0 tạo bản đầu;
+  P4-1 sẽ thêm vào contract/server config, không hardcode ở client).
+- .plan/plan2_final.md READ path (§1.1/§1.2): /ask :8788 cổng duy nhất, deterministic,
+  skill server-side — khớp ràng buộc §3.2.
+- AGENTS.md: verify-first, secrets, cấm tự cài service, test trước khi báo xong.
+
+== 2. Đo trên ERPNext THẬT (2026-09-21, tunnel, chỉ READ) ==
+2.1 Mode of Payment (doctype chuẩn, field type): 6 mode, đều enabled=1:
+    Cash=Cash · Wire Transfer=Bank · Cheque=Bank · Bank Draft=Bank · Credit Card=Bank
+    · Chuyển khoản=**Cash**  ← cấu hình ĐẶC THÙ site (bị type Cash dù là chuyển khoản)
+2.2 Payment Entry: 245 tổng; 173 docstatus=1:
+    Receive: Cash 52 · mode TRỐNG 82 · Chuyển khoản 9 · Wire Transfer 3
+    Pay:     Cash 10 · mode TRỐNG 9  · Wire Transfer 8 · Chuyển khoản 1
+    ⇒ **91/173 (53%) mode TRỐNG** — xếp theo mode sẽ MISS quá nửa dữ liệu.
+2.3 Tài khoản tiền thực dùng — đo đủ 9/9 Account.account_type:
+    Cash:   1110 - Tiền mặt - MP · Tiền mặt - DPC · Cash - S
+    Bank:   1210 - ACB 110296868 - MP
+    Khác:   1310 - MP (Receivable) · 2110 - MP (Payable) · Con nợ - DPC (Receivable)
+            · Chủ nợ - DPC (Payable) · Debtors - S (Receivable)
+2.4 Company (get_list, field select tường minh — frappe.client.get bị 403):
+    Minh Phát Cám & VLXD: default_cash=1110 - Tiền mặt - MP · default_bank=1210 - ACB …
+    DEMO POC CO:          default_cash=Tiền mặt - DPC · default_bank=null
+    SANLOAN:              default_cash=Cash - S · default_bank=null
+
+== 3. PHÁT HIỆN CHÍNH (cờ mới cho P4-1) ==
+(1) KHÔNG thể xếp Cash|Bank bằng Mode of Payment.type trên site này:
+    - 53% PE submitted có mode TRỐNG;
+    - "Chuyển khoản" bị type=Cash nhưng mọi PE thực dùng nó vào tài khoản BANK (ACB).
+(2) Bộ phân loại đáng tin = Account.account_type của TÀI KHOẢN TIỀN (paid_to khi Receive,
+    paid_from khi Pay): đo đủ 9/9 — xếp được 100% PE mode-trống, không cần fallback.
+(3) Két P4-1 KHÔNG bị chặn: 3/3 company có default_cash_account; riêng DEMO POC CO +
+    SANLOAN không có default_bank_account ⇒ phần bank của két không mở cho 2 company đó.
+
+== 4. BẢNG MAP (đã ghi chi tiết ở docs/plan4-mode-map.md) ==
+    Cash           → cash   (bằng chứng PE: 61R + 7P qua 1110-MP/Cash) ✓
+    Chuyển khoản   → bank   (NGOẠI LỆ TƯỜNG MINH, đè type=Cash; 15R + 1P qua ACB/Bank) ✓
+    Wire Transfer  → bank   (7P + 4R qua ACB/Bank) ✓
+    Cheque/Bank Draft/Credit Card → bank (theo MoP.type; 0 PE — chưa có bằng chứng thật)
+Thứ tự rule cho P4-1: rule-1 account_type của tài khoản tiền → rule-2 so
+Company.default_cash_account/default_bank_account → rule-3 đếm riêng "không xếp được"
+(KHÔNG 0 giả — đúng policy partial §4.3 plan4_final).
+
+== 5. Đã ghi ==
+- docs/plan4-mode-map.md (map + rule + cảnh báo P4-1)
+- checklist.md: mục P4-0 mới (đã làm / cần hỏi lại: duyệt khuyến nghị account_type)
+
+== 6. Cần hỏi lại (chặn P4-1) ==
+- Duyệt khuyến nghị: xếp Cash|Bank theo Account.account_type (thay vì MoP.type) —
+  khác định hướng "map mode" ban đầu, có bằng chứng PE thật (result này + docs map).
+
+== 7. Giới hạn đo được ==
+- frappe.client.get (Company) 403 với API key hiện có ⇒ đo bằng get_list + field select.
+- Chưa test quyền của ERPNext user drawer sẽ dùng trên Account/Company/MoP (P4-1 làm).
+- 0 PE trên Cheque/Bank Draft/Credit Card ⇒ xếp theo MoP.type, phải đo lại khi có dữ liệu.

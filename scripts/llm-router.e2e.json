@@ -1,0 +1,27 @@
+{
+  "_note": "E2E variant of llm-router.config.json. Canonical daily E2E model ID is ag/gemini-3.6-flash-low; DSH selects it via E2E_LLM_MODEL. mac-custom is FIRST for daily dev/test E2E; gemini-openai remains available only for real-provider compatibility verification.",
+  "port": 8900,
+  "host": "127.0.0.1",
+  "timeoutMs": 60000,
+  "cooldownMs": 30000,
+  "upstreams": [
+    {
+      "name": "mac-custom",
+      "baseUrl": "http://localhost:9000/v1",
+      "model": "ag/gemini-3.6-flash-low",
+      "apiKeyEnv": "MAC_LLM_API_KEY",
+      "timeoutMs": 120000,
+      "cooldownMs": 15000,
+      "_note": "Flaky tunnel: first attempts may 502/408 — retry the request, it usually succeeds. No geminiThoughtSignatures (different protocol). MODEL DRIFT 2026-09-19: the Mac no longer serves oc/big-pickle (403 model-not-found); /v1/models there now offers prefixed ids. gemini/gemini-3.6-flash is verified on that endpoint with real tool_calls (probe: finish_reason=tool_calls, function copilot_ask). The prefix keeps this distinct from gemini-openai's bare `gemini-3.6-flash` — the router matches model names EXACTLY (llm-router.mjs candidates(): u.model === wantModel), so the two can never cross over."
+    },
+    {
+      "name": "gemini-openai",
+      "baseUrl": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "model": "gemini-3.6-flash",
+      "apiKeyEnv": "GEMINI_API_KEY",
+      "stripFields": ["store"],
+      "geminiThoughtSignatures": true,
+      "_note": "Real-provider verify only (thought_signature). Free tier RPD=20 — see result19 for why counting 200s is wrong and one dsh turn costs 6-8 requests."
+    }
+  ]
+}

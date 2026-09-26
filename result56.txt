@@ -1,0 +1,309 @@
+========================================================================
+RESULT 56 — TTS (đọc câu trả lời) — FLUTTER CLIENT THEO .plan/next2
+Timestamp: 2026-09-19 (giờ shell)
+Nguồn: `.plan/next2/tts-implementation-plan.md` (+ `text-to-speed.md` yêu cầu gốc)
+Phạm vi: CHỈ Flutter client. KHÔNG đụng backend/Gateway/Safety Gateway —
+`git status --porcelain -- mcp-erpnext/ nlp_service/ scripts/` = RỖNG (đã kiểm).
+Luật: verification-before-completion — mọi claim dưới đây kèm lệnh + output thật.
+========================================================================
+
+== 0. ĐỌC LẠI CODE TRƯỚC KHI VIẾT (theo đúng yêu cầu user: "đừng tin plan 100%")
+
+Plan tham chiếu đúng tên file/thành phần hiện có. Đã tự đọc lại để xác nhận
+tên field + pattern trước khi code:
+- `app_settings_service.dart` → `allowSubmitPayment` / `voiceAutoSend` dùng
+  CÙNG khuôn `try { _prefs?.getBool(k) ?? false } catch (_) { return false; }`
+  ⇒ `ttsEnabled` theo đúng khuôn đó.
+- `chat_controller.dart` → `_append(ChatTurn)` tồn tại, là nơi DUY NHẤT thêm turn
+  MỚI. `build()` chỉ `load()` history; `attachRejection()` chỉ map lại turns cũ;
+  `pickEntity()` gọi `send()` (⇒ đi qua `_append`, đúng như plan nói).
+- `chat_models.dart` → `ChatTurn.answer` là String (không nullable, `?? ''` lúc
+  fromAskResult); `ActionProposal.summary` nullable; `commandId`/`proposalId`/
+  `params` là field máy, KHÔNG dùng để đọc.
+- API package thật (không đoán): `flutter_tts 4.2.5`, `MethodChannel('flutter_tts')`,
+  `setLanguage`/`setSpeechRate`/`setPitch`/`speak`/`stop`/`isLanguageAvailable`
+  đều `Future<dynamic>`; doc `isLanguageAvailable` ghi "Returns `true` or `false`"
+  ⇒ coerce bằng `== true` (an toàn hơn `as bool`).
+
+== 1. DIFF (file nào tạo mới, file nào sửa)
+
+TẠO MỚI (2):
+- `apps/mobile/lib/core/tts/tts_service.dart` — `abstract class TtsService`
+  (`speak`/`stop`) + `FlutterTtsService`. Interface CỐ Ý không có method nào
+  confirm/execute ⇒ không tồn tại đường TTS → ghi.
+- `apps/mobile/test/tts_service_test.dart` — 6 test, fake ở tầng PLATFORM CHANNEL
+  (`MethodChannel('flutter_tts')`), không mock wrapper ⇒ chạy đúng code thật.
+
+SỬA (7 code/test + 1 config):
+- `android/app/src/main/AndroidManifest.xml` — thêm `<intent>` `TTS_SERVICE`
+  vào `<queries>` (Android 11+ ẩn service ⇒ `speak()` im lặng không làm gì).
+- `core/constants/app_constants.dart` — `ttsEnabledStorageKey = 'settings_tts_enabled_v1'`.
+- `core/settings/app_settings_service.dart` — `ttsEnabled` getter + `saveTtsEnabled()` + `clear()` xoá key.
+- `app/providers.dart` — `ttsServiceProvider` (override được bằng fake trong test).
+- `features/chat/application/chat_controller.dart` — hook tại `_append()` +
+  `_maybeSpeak()` + `spokenTextFor()` / `sanitizeForSpeech()`.
+- `features/settings/presentation/screens/settings_screen.dart` — SwitchListTile
+  "Đọc câu trả lời" (+ ghi chú gói tiếng Việt) + `okTts` gộp vào kết quả lưu.
+- `test/chat_controller_test.dart` — nhóm `TTS` (11 test).
+- `test/settings_test.dart` — 4 test service + 2 test màn hình; SỬA 2 test cũ
+  (xem §5b).
+- `pubspec.yaml` / `pubspec.lock` — `flutter_tts 4.2.5`.
+
+== 2. HÀNH VI ĐÃ CÀI (đúng plan §4/§5/§6)
+
+Hook DUY NHẤT: `ChatController._append()` → `_maybeSpeak(turn)`:
+  `if (!ttsEnabled) return;` → `spokenTextFor(turn)` → rỗng thì return →
+  `try { ttsService.speak(...) } catch (_) {}`   // TTS không bao giờ làm hỏng kết quả
+Chỉ đọc `turn.answer` + `turn.proposal.summary` (prose). KHÔNG đọc
+`commandId`/`proposalId`/`params`. `sanitizeForSpeech()` gỡ markdown (`* _ ` # > ~`)
++ mọi token dạng UUID, gộp whitespace.
+`FlutterTtsService`: init 1 lần (vi-VN, rate 0.55, pitch 1.0) → `isLanguageAvailable`;
+KHÔNG có gói tiếng Việt ⇒ `speak()` là no-op IM LẶNG (không throw, không hiện lỗi);
+mỗi `speak()` gọi `stop()` trước (không chồng giọng).
+
+== 3. TEST — LỆNH + OUTPUT THẬT
+
+$ cd apps/mobile && flutter test
+  00:23 +141: All tests passed!
+(120 → 141; +21 test: 6 tts_service + 4 settings service + 2 settings screen
+ + 11 chat controller − 2 test settings cũ được đổi cách tìm)
+
+$ cd apps/mobile && flutter analyze
+  Analyzing mobile...
+  No issues found! (ran in 6.4s)
+
+$ git status --porcelain -- mcp-erpnext/ nlp_service/ scripts/
+  (rỗng ⇒ KHÔNG đụng backend)
+
+$ PYTHONPATH=src python3 -m unittest discover -s tests     # repo root
+  Ran 62 tests in 0.465s
+  OK
+
+$ cd mcp-erpnext && node --test
+  ℹ tests 267
+  ℹ pass 267
+  ℹ fail 0
+⇒ Suite cũ KHÔNG regress (Flutter 141 · Python 62 · Node 267 · analyze 0).
+
+== 4. FALSIFY (gỡ thật → đỏ đúng chỗ → khôi phục; mỗi lần `diff` về backup = CLEAN)
+
+A. Gỡ `if (!...ttsEnabled) return;` ở `_maybeSpeak`
+   → ĐỎ đúng `TTS OFF (default) ⇒ nothing is ever spoken`
+B. Gỡ `.replaceAll(_uuidLike, '')` khỏi sanitizer
+   → ĐỎ đúng `identifier-shaped tokens and markup never reach the engine`
+C. Đổi nguồn đọc thành `turn.proposal?.toJson().toString()` (rò dữ liệu máy)
+   → LẦN 1: **XANH** (xem §5a — oracle quá yếu, đã sửa test) → LẦN 2: ĐỎ đúng chỗ
+D. Gỡ try/catch quanh `speak()` trong `_maybeSpeak`
+   → ĐỎ đúng `a broken engine never turns a good answer into a failed send`
+E. Nhét auto-confirm vào `ProposalCard.initState` (đúng regression mà §6 cấm)
+   → LẦN 1: **XANH** (xem §5a) → LẦN 2: ĐỎ đúng `§6 safety: a HIGH proposal is
+     READ aloud and NOT confirmed`
+F. Cho `_append` nuốt proposal của turn (nút Xác nhận biến mất)
+   → ĐỎ đúng `§6 safety: ...`
+
+== 5. HAI LỖI **CỦA CHÍNH TÔI** — falsify bắt được, không phải suy đoán
+
+(a) ORACLE RỖNG (nghiêm trọng nhất — 1 lần bắt được 2 falsify xanh oan):
+    C xanh: test chỉ khẳng định "chuỗi UUID không xuất hiện", mà sanitizer (lớp B)
+    đã gỡ UUID trước khi tới oracle ⇒ assertion luôn đúng dù nguồn là JSON máy.
+    E xanh: `ProposalCard` POST `/execute` qua **`dioProvider`**, nhưng test lại
+    gắn adapter ghi request vào Dio **riêng của `copilotApiClientProvider`** ⇒
+    một lần confirm thật KHÔNG BAO GIỜ lọt vào `requests` ⇒ khẳng định "không có
+    request /execute" không thể sai.
+    SỬA: (C) thêm khẳng định về HÌNH DẠNG nguồn — `{`, `}`, `schema`, `params`,
+    `risk_display` không được xuất hiện trong text đọc; (E) override **`dioProvider`**
+    (Dio dùng chung) để `/ask` và `/execute` cùng đi qua một adapter ghi lại.
+    Sau khi sửa: C và E đều ĐỎ đúng chỗ, khôi phục thì xanh.
+
+(b) `find.byType(SwitchListTile)` mơ hồ sau khi thêm switch thứ 2:
+    `settings_test.dart` có 2 test dùng `tester.widget<SwitchListTile>(find.byType(...))`
+    ⇒ màn hình giờ có 2 `SwitchListTile` (auto-send + "Đọc câu trả lời") ⇒ đỏ.
+    SỬA: neo vào tiêu đề — `find.widgetWithText(SwitchListTile, 'Tự gửi sau khi nói xong')`.
+    (Cùng họ với bài học `textContaining` mơ hồ khi có 2 switch, đã có trong skill.)
+
+(c) Một assertion SAI (không phải code sai): tôi viết test "an empty answer is not
+    spoken" với payload chỉ có `reason`; nhưng `ChatTurn.fromAskResult` đặt
+    `answer = r.answer ?? r.reason ?? ''` ⇒ `reason` CHÍNH LÀ text user nhìn thấy
+    ⇒ đọc lên là ĐÚNG hành vi. Sửa test (assert đúng sự thật) và thêm test khoá
+    luật "cái user ĐỌC chính là cái được đọc".
+
+== 6. RANH GIỚI AN TOÀN §6 — TRẠNG THÁI
+
+- `TtsService` chỉ có `speak`/`stop`; không method nào chạm confirm/executable.
+- TTS KHÔNG được gọi từ `/execute`, không gọi `proposal_card._confirm()`, không
+  đọc/ghi cờ nào của proposal. `voiceAutoSend` và `ttsEnabled` là 2 setting ĐỘC LẬP.
+- Test §6 (widget, đi qua UI thật): bật `ttsEnabled` + câu tạo proposal HIGH ⇒
+  `speak()` ĐƯỢC gọi, đồng thời **0 request `/execute`** và nút `Xác nhận thu tiền`
+  vẫn còn nguyên chờ bấm. Falsify E/F chứng minh test này BẮT được regression.
+
+== 7. CÒN LẠI (CHỈ NGƯỜI THẬT — exit criteria cuối của plan)
+
+Đúng phần "Exit Criteria" của plan, 2 ý ĐẦU cần thiết bị thật:
+- Bật switch trong Settings, hỏi 1 câu thật qua `/ask` thật → NGHE được giọng đọc
+  trên máy (không chỉ giả lập). Cần build APK (đụng `apps/mobile/**` ⇒ CI chạy).
+- Tắt switch → hết giọng đọc, mọi thứ khác không đổi.
+Cả 2 cần máy thật; phần mã + test + falsify đã xong ở trên.
+
+== 8. GHI CHÚ PHẠM VI COMMIT
+
+Working tree hiện có 2 nhóm KHÁC NHAU, không được gộp lẫn:
+- Nhóm TTS (đợt này) — §1 ở trên.
+- Nhóm P6 UX còn treo từ phiên trước (CHƯA commit): `speech_service.dart`,
+  `chat_screen.dart`, `test/voice_input_test.dart`, `test/settings_navigation_test.dart`
+  + docs. Tôi KHÔNG tạo ra nhóm này trong phiên này.
+⇒ Khi commit cần tách 2 commit theo 2 nhóm (nhóm cũ vẫn đang chờ user duyệt riêng).
+CHƯA COMMIT gì trong phiên này (mobile client — chờ user duyệt).
+
+========================================================================
+§9. REVIEW VÒNG 2 ("tìm lỗ hổng") — 2 LỖI THẬT + 2 TEST TRƯỚC ĐÓ CHƯA FALSIFY
+Timestamp: 2026-09-19 (cùng phiên)
+========================================================================
+
+== F1 (THẬT, đã sửa) — `await speak()` ⇒ STUCK UI khi engine TTS treo ==
+
+Cơ chế (không phỏng đoán — có bằng chứng): plan §4 viết `await ...speak(...)`
+trong `_append`, mà chat chỉ XOÁ Ô NHẬP khi `send()` trả về `true`. Nếu engine
+không bao giờ trả lời init (`setLanguage`/`isLanguageAvailable` treo — binder TTS
+chết, hoặc máy không có engine), `send()` KHÔNG BAO GIỜ return ⇒ câu trả lời đã
+hiện nhưng chữ user gõ vẫn nằm trong ô = stuck UI do một tiện ích tuỳ chọn.
+
+CHỨNG MINH (test viết TRƯỚC khi sửa, dùng fake `_HangingTts` với
+`Completer<void>().future` không bao giờ complete):
+$ flutter test test/chat_controller_test.dart --plain-name "never answers must NOT hold the send open"
+  [E] TimeoutException after 0:00:02.000000: Future not completed
+  Failed: "TTS a TTS engine that never answers must NOT hold the send open"
+⇒ ĐỎ đúng chỗ = lỗ hổng có thật, không phải suy đoán.
+
+SỬA (lệch plan §4 CÓ Ý THỨC):
+```dart
+unawaited(_maybeSpeak(turn));          // thay cho `await`
+```
+và bọc try/catch **BAO TRÙM CẢ CỔNG** (không chỉ quanh `speak`) — vì caller
+không còn await, một async error sẽ thoát thành unhandled zone error.
+SAU KHI SỬA: test trên XANH + toàn bộ suite 142/142 + analyze 0.
+
+== F2 (THẬT, đã sửa) — oracle DỄ VỠ: 2 switch dùng chung đuôi câu ==
+
+`settings_test.dart` (test TTS) assert `find.textContaining('vẫn phải bấm Xác
+nhận khi thu tiền')` `findsOneWidget`. Chuỗi này có ở **cả** phụ đề auto-send
+(dòng 296) lẫn TTS (dòng 316). Lúc viết auto-send đang OFF nên chỉ khớp 1 ⇒ test
+XANH, nhưng "duy nhất" chỉ đúng với tổ hợp trạng thái hiện tại.
+
+ĐO THẬT (probe tạm, đã xoá sau khi chạy: pump Settings → bật CẢ HAI switch):
+  PROBE shared-phrase matches = 2
+  PROBE tts-unique matches    = 1
+⇒ bằng chứng test sẽ vỡ vì lý do không liên quan.
+SỬA: neo vào câu CHỈ TTS có: `'ĐANG BẬT: câu trả lời mới sẽ được đọc to'`.
+(Khác kiểu "Found 2 widgets" ở skill dòng 379 — kiểu đó đỏ NGAY; kiểu này XANH
+rồi đỏ về sau = flaky tiềm ẩn.)
+
+== F3 — 2 test BẮT BUỘC của plan (§Test 3 và 4) CHƯA từng được falsify ==
+
+Đây là lỗ hổng trong QUY TRÌNH của chính tôi (đúng nhóm bài học #7 vừa ghi):
+"restoring history KHÔNG đọc" và "attachRejection KHÔNG đọc" chỉ được CHẠY XANH,
+chưa từng chứng minh là CÓ THỂ ĐỎ. Đã falsify bổ sung:
+
+G. Nhét `await _maybeSpeak(history.last)` vào `build()`
+   → ĐỎ đúng `restoring history at startup does NOT read old turns aloud`
+H. Nhét `await _maybeSpeak(turns.last)` vào `attachRejection()`
+   → ĐỎ đúng `attachRejection() stamps an existing card WITHOUT speaking`
+(cả hai khôi phục → `diff` = CLEAN)
+
+== Tổng kết falsify tới giờ: A B C D E F G H — 8/8 đỏ đúng chỗ, diff khôi phục sạch ==
+
+== Suite (sau review) ==
+$ flutter test   → 142/142  (141 → 142, thêm test never-completing engine)
+$ flutter analyze → No issues found!
+
+========================================================================
+§10. TRỞ NGẠI COMMIT "TTS RIÊNG" — CẦN USER QUYẾT (sự thật, không phải từ chối)
+Timestamp: 2026-09-19
+========================================================================
+
+Yêu cầu: commit RIÊNG nhóm TTS, KHÔNG gộp nhóm P6 UX cũ.
+Kiểm tra thật: KHÔNG thể tách sạch ở mức file, vì 4 file bị TRỘN:
+
+$ grep -c voiceAutoSend trên HEAD (từng file) → 0 cho TẤT CẢ
+⇒ toàn bộ nhóm P6 UX vẫn CHƯA commit (xác nhận bằng git show HEAD:<file>).
+
+  file                                                        P6UX  TTS
+  lib/core/constants/app_constants.dart                          4    3
+  lib/core/settings/app_settings_service.dart                    6    4
+  lib/features/settings/presentation/screens/settings_screen.dart 9    9   ← TRỘN NẶNG
+  test/settings_test.dart                                       22   21   ← TRỘN NẶNG
+  lib/features/chat/application/chat_controller.dart             0    1   ← sạch (TTS)
+  test/chat_controller_test.dart                                 0    9   ← sạch (TTS)
+  lib/app/providers.dart                                         0    0   ← sạch (TTS)
+  android/.../AndroidManifest.xml                                0    2   ← sạch (TTS)
+  pubspec.yaml                                                   0    1   ← sạch (TTS)
+(Lib mới `lib/core/tts/` + `test/tts_service_test.dart` + `result56.txt` = sạch.)
+
+ĐIỂM NGHẼN CỤ THỂ (không thể tách hunk) — trong `_save()` của settings_screen:
+  + final okVoice = await settings.saveVoiceAutoSend(_voiceAutoSend);   ← P6 UX
+  + final okTts   = await settings.saveTtsEnabled(_ttsEnabled);         ← TTS
+  + final ok = okGateway && okSubmit && okVoice && okTts;               ← MỘT hunk
+TTS phụ thuộc `okVoice` cùng hunk; tách ra ⇒ `okVoice` không định nghĩa ⇒ KHÔNG
+compile. Và nếu chỉ commit các file "sạch (TTS)" thì commit đó THIẾU
+`ttsEnabledStorageKey` + `ttsEnabled` + switch UI ⇒ `chat_controller_test`
+tham chiếu `AppConstants.ttsEnabledStorageKey` ⇒ **commit không build được**.
+
+⇒ Hai lựa chọn trung thực (chờ user chọn), KHÔNG tự chọn:
+  (a) Commit nhóm P6 UX trước (1 commit riêng, đã xong + Flutter 120 + falsify),
+      rồi TTS lên trên ⇒ vẫn là 2 commit tách bạch, TTS push được để build APK.
+  (b) Chấp nhận 1 commit chứa cả hai, message ghi rõ phạm vi cả hai nhóm.
+Khuyến nghị: (a) — tách bạch đúng ý user, và P6 UX vốn đã sẵn sàng commit.
+⇒ USER ĐÃ CHỌN (a). Đã giải quyết — xem §11.
+
+========================================================================
+§11. COMMIT + PUSH + CI APK — XONG (quyết định user: P6 UX trước, TTS lên trên)
+Timestamp: 2026-09-19
+========================================================================
+
+== Cách tách (đo, không đoán) ==
+Tạm tạo cây "P6-only": revert 6 file sạch-TTS về HEAD + gỡ nội dung TTS khỏi 4 file trộn
+(assert từng anchor trong python, rồi grep lại = 0/0/0/0 dấu vết TTS). VERIFY cây đó
+TRƯỚC khi commit:
+  $ flutter analyze → No issues found!   $ flutter test → **120/120**
+  (khớp ĐÚNG con số đã ghi ở result55 §11 ⇒ chứng minh cây P6-only chính là trạng thái
+   đã được verify hồi đó, không phải bản dựng lại gần giống)
+Sau commit: giải nén snapshot trở lại → `flutter pub get` (lần chạy P6-only đã prune
+`flutter_tts` khỏi `.dart_tool` ⇒ analyze báo 4 lỗi do package config cũ) →
+  $ flutter analyze → No issues found!   $ flutter test → **142/142**
+
+== 3 commit (không gộp — đúng yêu cầu) ==
+  f55d557  feat(p6-ux): dictation auto-send switch, drop the locale hint, honest save report
+           8 file, +424/−45
+  1401f16  feat(tts):   read a new answer aloud via on-device flutter_tts (vi-VN)
+           12 file, +915/−3 (2 file mới: lib/core/tts/tts_service.dart, test/tts_service_test.dart)
+  8d2055c  docs:       record the P6 UX and TTS work — evidence, lessons, live status
+           11 file, +649/−30 (result56.txt mới)
+
+== Kiểm tra TÁCH BẠCH (không chỉ tin vào lệnh git add) ==
+- Commit 1: grep 4 file trộn = **0** dấu vết TTS.
+- Commit 2: **0 dòng THÊM** thuộc chức năng P6 UX
+  (`saveVoiceAutoSend|_voiceAutoSend = on|value: _voiceAutoSend` = 0).
+  16 lần khớp `voiceAutoSend` còn lại đã được ĐỌC TỪNG DÒNG: tất cả là dòng CONTEXT,
+  dòng bị XOÁ, hoặc comment của chính TTS nhắc tên key kia — không có hành vi P6 UX nào
+  được thêm. 2 dòng THÊM duy nhất nhắc P6 UX là 2 neo test
+  `find.widgetWithText(SwitchListTile, 'Tự gửi sau khi nói xong')` — hợp lệ: switch TTS
+  mới chính là thứ làm `find.byType(SwitchListTile)` trở nên mơ hồ.
+- Secret scan cả 3 commit: SẠCH. 2 hit duy nhất đã truy: chuỗi fixture
+  `enterText(fields.at(2), 'secret')` và `ask-time` khớp mẫu `sk-`.
+
+== PUSH + CI ==
+  $ git push origin change/flutter-chat-mvp
+    bbca7ca..8d2055c  change/flutter-chat-mvp -> change/flutter-chat-mvp
+  run #20  https://github.com/hoangsoft90/erpn_mobile1/actions/runs/35414524990
+           head_sha=8d2055c · status=completed · conclusion=SUCCESS
+  artifact erpn-chat-debug-apk · 84.213.013 bytes · expired=false · created 2026-09-19T02:09:51Z
+
+== Bằng chứng APK chứa TTS — GIÁN TIẾP, nói rõ vì sao không trực tiếp ==
+  $ git merge-base --is-ancestor 1401f16 8d2055c  → YES
+    (commit TTS nằm trong cây đã build; 8d2055c không đụng apps/mobile nên nội dung
+     apps/mobile của nó = y hệt 1401f16)
+  size: 84.213.013 − 84.169.705 (APK trước TTS, result55 §8) = **+43.308 bytes**
+    (khớp việc thêm plugin flutter_tts + code + test)
+  ⚠️ KHÔNG grep được binary như result55 §8: tải artifact cần token đã xác thực, shell này
+     không có (`GH_TOKEN`/`GITHUB_TOKEN` = absent, đã kiểm) ⇒ bước "mở APK ra grep" coi như
+     CHƯA LÀM. Muốn bằng chứng trực tiếp thì cần token, hoặc user tự mở APK sau khi tải.
+     ⇒ Không claim "APK chắc chắn chứa TTS" ở mức binary; chỉ claim điều đã đo được.

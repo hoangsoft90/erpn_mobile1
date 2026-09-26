@@ -1,0 +1,40 @@
+{
+  "port": 8900,
+  "host": "127.0.0.1",
+  "timeoutMs": 60000,
+  "cooldownMs": 30000,
+  "upstreams": [
+    {
+      "name": "mac-custom",
+      "baseUrl": "http://localhost:9000/v1",
+      "model": "ag/gemini-3.6-flash-low",
+      "apiKeyEnv": "MAC_LLM_API_KEY",
+      "timeoutMs": 120000,
+      "cooldownMs": 15000,
+      "_note": "Self-hosted OpenCode LLM on the user's Mac. Canonical daily E2E model ID: ag/gemini-3.6-flash-low. The router matches model IDs exactly, so DSH must request this exact ID (via E2E_LLM_MODEL) to reach mac-custom. No provider quota. Not a real-provider-compat proxy: no geminiThoughtSignatures here (different protocol)."
+    },
+    {
+      "name": "mock",
+      "baseUrl": "http://127.0.0.1:8899/v1",
+      "model": "mock-copilot-1",
+      "timeoutMs": 10000,
+      "cooldownMs": 5000
+    },
+    {
+      "name": "zen",
+      "baseUrl": "https://opencode.ai/zen/v1",
+      "model": "glm-5.3-flash",
+      "apiKeyEnv": "ZEN_API_KEY",
+      "_note": "big-pickle free tier is OpenCode-client-only (MissingSessionID 2026-09-15); glm-5.3-flash is the fallback free candidate — probe before relying on it"
+    },
+    {
+      "name": "gemini-openai",
+      "baseUrl": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "model": "gemini-3.6-flash",
+      "apiKeyEnv": "GEMINI_API_KEY",
+      "stripFields": ["store"],
+      "geminiThoughtSignatures": true,
+      "_note": "gemini-2.5-flash retired for new users (provider 404 2026-09-15 names gemini-3.6-flash as replacement). ROLE: real-provider compatibility verify (thought_signature etc.) before production — free tier RPD=20, do NOT use for daily dev (mac-custom covers that)."
+    }
+  ]
+}

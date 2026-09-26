@@ -1,0 +1,43 @@
+NEXT6 Prompt-1 (Audit & Baseline) — XONG. Không sửa code (git status chỉ còn rác cũ). Deliverable:  .plan/next6-audit1.md  (277 dòng, gitignored).
+
+Bằng chứng baseline (command → result thật)
+
+┌─────┬───────────────────────────────────┬───────────────────────────────────────────────────────────────────┐
+│ #   │ Command                           │ Result                                                            │
+├─────┼───────────────────────────────────┼───────────────────────────────────────────────────────────────────┤
+│ 1   │ cd mcp-erpnext && npm test        │ tests 820 · pass 818 · fail 2 (2 fail: dshGatewayHealth,          │
+│     │                                   │ verifyDshRuntime — môi trường dsh, đã biết từ B0)                 │
+│ 2   │ flutter analyze --no-pub          │ No issues found!                                                  │
+│ 3   │ flutter test                      │ +333: All tests passed!                                           │
+│ 4   │ grep -nE                          │ 0 match → chứng minh session key thiếu principal                  │
+│     │ 'principal|user_id|userId'        │                                                                   │
+│     │ src/dsh-gateway.mjs               │                                                                   │
+│ 5   │ grep -rn                          │ chỉ :387 (khai báo, không dùng) + :469,:503 (hằng cứng 200)       │
+│     │ 'maxSessions|DSH_SESSION_LIMIT'   │                                                                   │
+│     │ src/                              │                                                                   │
+│ 6   │ grep -rniE                        │ 33 file; ngoài mock-server.mjs = 181 match toàn comment/nhãn →    │
+│     │ 'mock|fake|fixture|fallback…'     │ REAL-only OK                                                      │
+│     │ src/ -l                           │                                                                   │
+└─────┴───────────────────────────────────┴───────────────────────────────────────────────────────────────────┘
+
+Kết luận chính (kèm file:dòng)
+
+- Q1 conversation_id: Flutter  chat_controller.dart:124  = 1 id/app-session,  millisecondsSinceEpoch , không persist; server lưu  dsh-gateway.mjs:1186 .
+- Q2 session key =  conversation_id  đơn độc ( dsh-gateway.mjs:459,524,544 ) — không principal → G1.
+- Q3 principal:  http-ask.mjs:444-452 , từ Basic Auth, server-authoritative ✓.
+- Q4 chỉ  /dsh/ask  nhận conversation_id ( http-ask.mjs:547 ).
+- Q6 guard: global  inFlight  ( dsh-gateway.mjs:565,710 , max=1); không per-conversation lock → G2.
+- Q7 global mutable state:  sessionContext  singleton khoá theo kind ( copilot-server.mjs:56 ) seed được customer cho WRITE ở  :1409  → G3 (cross-user).
+- Q8 Payment Entry: create→verify→submit→ docstatus===1  ( payment-write.mjs:1164/573/1221/1244 ); draft còn khi  submit_now!==true  hoặc submit lỗi ⇒ ĐẠT §6.5.
+- Q9 action_id sinh lúc build ( payment-write.mjs:151,939 ) +  custom_ai_action_id ; idempotency thật =  command_id → reference_no  ( :1135 ), reconcile  :526 .
+- Q11 eviction LRU memory-only, cap cứng 200, không clear endpoint, restart mất sạch → G7,G9.
+
+11 gap đã chốt (chi tiết §8 audit file)
+
+ G1  key thiếu principal ·  G2  thiếu per-conversation lock ·  G3  sessionContext cross-user ·  G4   begin()  replay không kiểm  user_id  ·  G5  proposal không bind principal ·  G6  429 thiếu  Retry-After  ·  G7   DSH_MAX_SESSIONS  không dùng + file-mode không cap ·  G8  Flutter id không persist ·  G9  không endpoint clear ·  G10   /ask  log thiếu conversation_id ·  G11  metadata session thiếu field.
+
+File dự kiến sửa (cho prompt 2+)
+
+ dsh-gateway.mjs  ·  http-ask.mjs  ·  idempotency.mjs  ·  safety-gateway.mjs  ·  copilot-server.mjs  · tests mới  next6-session-isolation  · Flutter  chat_controller.dart . Không sửa  payment-write.mjs / authorization.mjs  (đã đạt).
+
+OpenSpec: prompt 1 là audit-only ⇒ chưa tạo change (sẽ tạo  openspec/changes/next6-session-isolation/  ở đầu prompt 2, trước khi chạm source). Chờ bạn đưa prompt 2.

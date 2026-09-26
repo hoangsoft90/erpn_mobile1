@@ -1,0 +1,199 @@
+# result-p4-3 — Drawer + màn `Tóm tắt ngày` (Trụ P4, bước 3)
+
+| | |
+|---|---|
+| Phạm vi | Flutter UI (plan4_final **§2** drawer, **§6** trạng thái) + **1 mảnh server nhỏ bắt buộc** (`meta.erp_target`, xem §0) |
+| Màn hình | `features/ops/presentation/screens/daily_summary_screen.dart` · drawer `features/ops/presentation/widgets/app_drawer.dart` · footer `summary_status_footer.dart` |
+| Dữ liệu | `features/ops/data/daily_summary_models.dart` (parse §4.3) + `daily_summary_cache.dart` (SharedPreferences, cửa sổ **45s** = khoảng §2 gợi ý 30–60s) |
+| Route | `/summary` trong `app_router.dart` — **không** `extra`, **không** tham số: screen tự đọc 1 aggregate server-side |
+| Gọi API | `CopilotApiClient.dailySummary({date})` → `GET /read/daily-summary` (route P4-2), envelope **không** có `result` wrapper (đúng như route gửi) |
+| CẤM (đã đối chiếu) | Không `/execute` (**assert trên log request**), không nút thu/tạo/submit/xóa, không TextField, không drill P4-4/P4-5 (để "sắp có") |
+| Test | `apps/mobile/test/daily_summary_test.dart` **25** (widget + unit parse) |
+| Falsify | `mcp-erpnext/scripts/falsify/p43-drawer-summary.mjs` **11 ca → 11/11 RED** (7 Dart + 3 Node, 5 luật mỗi ca) |
+| Real loop | `meta.erp_target = REAL` **và** log khởi động nói REAL (khớp nhau) · cross-check REST: receivables 493.440.625 (286 HĐ) + invoices 575.000 (1 HĐ) **khớp chính xác** |
+
+---
+
+## 0. §0 Đo trước khi code — dữ kiện làm ĐỔI thiết kế
+
+| # | Đo được | Hệ quả |
+|---|---------|--------|
+| 1 | **Không có tín hiệu REAL\|MOCK nào tới được client**: `/read/daily-summary` chỉ có `meta.source`, mà `ops-summary.mjs` **hardcode** `source: "real"` (cả khi chạy fixture); `/ask` chỉ trả `erpnext_target` ở đường DSH (lấy từ stderr của dsh) | §2 bắt buộc footer **REAL\|MOCK** ⇒ nếu in thẳng `source` thì footer **nói sai** khi service chạy mock. Thêm `meta.erp_target` = `erpTargetLabel(env)` (**đúng biểu thức** của dòng log khởi động, cùng 1 helper) — xem §1 |
+| 2 | `flutter test` **đỏ sẵn 1 test** trước khi tôi viết dòng nào: `_probe_review_test.dart` ca **P2b** | Không phải regression của P4-3 — nhưng phải **quy trách nhiệm bằng bằng chứng** trước khi code, xem §2.4 |
+| 3 | `DrawerHeader` + 7 item + footer **> 600px** (viewport mặc định của widget test) ⇒ ListView lazy **không build** item cuối | Test phải mở viewport cao (`_tallViewport`) — nếu không, test "drawer có mục X" sẽ **xanh vì item chưa được build**, hoặc đỏ giả |
+| 4 | `AppBar` của `Scaffold` **có `drawer`** tự sinh `DrawerButton` (`Icons.menu`) | Mở drawer trong test bằng `find.byIcon(Icons.menu)` — không phụ thuộc chuỗi tooltip/ngôn ngữ |
+| 5 | Footer hiện URL **hiệu lực**: chưa lưu Settings ⇒ dùng `--dart-define` (`AppConstants.defaultCopilotBaseUrl`), **không** phải `Dio.baseUrl` của client (test override client trực tiếp) | Assert URL phải theo giá trị **hiệu lực** (`defaultCopilotBaseUrl`), không theo baseUrl của test double |
+
+---
+
+## 1. Đã làm
+
+**Server (mảnh nhỏ, bắt buộc bởi §2 — 3 chỗ, 1 nhà cho 1 luật)**
+- `copilot-server.mjs`: `export function erpTargetLabel(env)` — `ERPNEXT_URL ? "REAL" : "MOCK"`, **presence-only** như `pickServerScript` (host chết vẫn REAL); **không** tham chiếu hằng fixture (mock-optin tripwire canh việc này).
+- `http-ask.mjs`: route truyền `erpTargetLabel(process.env)` vào skill; **dòng log khởi động nay dùng chính helper đó** ⇒ log của người vận hành và footer của chủ tiệm **không thể lệch** (ca falsify chứng minh).
+- `ops-summary.mjs`: `meta.erp_target` — **`null` khi không ai nói**, không đoán REAL.
+- Test: `target.test.mjs` +2 (label bám `pickServerScript` cả 2 nhánh; presence-only), `p4-ops-summary.test.mjs` +1 (pass-through + null), `p42-read-daily-summary.test.mjs` (trong test happy path: fixture ⇒ `MOCK`, và **bằng** `erpTargetLabel(process.env)`).
+
+**Flutter**
+- **Drawer (§2)**: `Tóm tắt ngày` **đầu tiên + "Mặc định"**, section THEO DÕI / PHIẾU TỪ APP / LỐI TẮC READ / CÀI ĐẶT; mục chưa làm ghi **"Sắp có (bước P4-4/P4-5)"** và **disable** (không có nút đoán); **Server / đăng nhập** → `/settings`; footer REAL\|MOCK + URL + giờ cập nhật. **Không có affordance ghi nào**, không có ô free-text (§4.4 cấm inject free-text để đoán capability). Drawer dùng ở cả chat (chat vẫn là màn mặc định của app) và màn tóm tắt (ở đó footer có dữ liệu thật).
+- **Screen**: SO **submitted \| draft tách bạch** (§10.1) · HĐ **giá trị sau VAT** · thu **TM/CK/theo HĐ/ứng trước** + dòng **"Chưa phân loại được"** khi có (§3.2 — không gộp để chia phần vẫn cộng đúng ra tổng) · chi + **footnote "Chưa gồm chi qua Journal Entry"** (§10.2) · **két dự kiến** (Đầu ngày + Thu TM − Chi TM = Dự kiến cuối) · **nợ hiện tại** + quá hạn · nháp app.
+- **Trạng thái §6**: skeleton (Loading) · OK + stamp `generated_at` · **partial theo TỪNG block** (thẻ "Lỗi · chưa đọc được mục này (MÃ)" + `Thử lại`) · offline/401/503 ⇒ giữ số cũ + nhãn **DỮ LIỆU CŨ** + lý do · **empty day** ⇒ số 0 chỉ khi `partial=false`, kèm câu nói rõ "không phải lỗi".
+- **Cache §2**: 45s; trong cửa sổ **không gọi HTTP**; quá cửa sổ ⇒ hiện số cũ + nhãn cũ **ngay** rồi revalidate; cache hỏng ⇒ bỏ qua và vẫn đọc live (fail-safe như `ChatHistoryService`).
+- **Nhãn (§3.1)**: **không** dùng chữ "Doanh thu" ở đâu; nói "Hóa đơn đã xuất hôm nay (giá trị sau VAT)" / "Tiền khách trả hôm nay" / "Đơn hàng (Sales Order) — gồm nháp".
+
+---
+
+## 2. Review tự soi — 4 phát hiện THẬT (3 do falsify/harness bắt, 1 do full suite)
+
+1. **"Không hiện 0 giả" chỉ ở tầng render là chưa đủ.** Block `null` vốn đã ra thẻ lỗi, nhưng nếu parser biến `{}`/chuỗi lỗi thành **block rỗng 0** thì màn vẫn in "Tổng thu 0đ" — câu về tiền server chưa từng nói. Vá ở **tầng parse**: `_block()` trả `null` cho **cả object rỗng**; test + ca falsify riêng cho cả `null` lẫn `{}`.
+2. **Fixture `??` làm test đo sai thứ nó tưởng đang đo.** `payload({receipts})` dùng `receipts ?? {...}` ⇒ truyền `null` **không** tạo block null ⇒ 3 test "block lỗi" chạy trên dữ liệu lành. Vá bằng cờ tường minh `noReceipts`/`noAppDrafts`/`noCashDrawer`.
+3. **Ca falsify "xanh oan" vì nhánh khác cũng chặn (2 lần).** (a) guard "ngày yên ắng cần `partial=false`" gỡ vẫn xanh vì fixture để `receipts=null` và guard `receipts==null` khác cũng trả false ⇒ đổi fixture sang `noAppDrafts` (mọi block dòng tiền đều có, bằng 0); (b) guard `_stale = !fresh` không được test vì test cũ chỉ assert nhãn **sau khi request thất bại** (nhánh lỗi tự set cờ) ⇒ thêm test quan sát **lúc request đang bay** (server bị gate, `settle:false`).
+4. **Test đỏ sẵn không phải regression của mình — QUY TRÁCH NHIỆM bằng bằng chứng, không bằng cảm giác.** `_probe_review_test.dart` (tự ghi "PROBE ONLY — temporary review harness") ca **P2b** giả định nút [Xác nhận] **quay lại** sau khi `ListView` recycle; `ProposalCard` từ fix **F2** có `AutomaticKeepAliveClientMixin` (`wantKeepAlive => _result != null …`) nên thẻ đã ghi **không bị dispose** ⇒ "nút quay lại" không còn tồn tại. Bằng chứng: (i) chạy **riêng** file → vẫn đỏ (không phải ô nhiễm chéo); (ii) comment F2 trong `proposal_card.dart` **trích số đo của chính probe đó** ("probe P2 measured success=1/button=0 → success=0/button=1") ⇒ tiền đề đã bị thay bằng thiết kế khác; (iii) không file nào tôi sửa nằm trong cây import của probe; (iv) **probe đối chứng** cùng kịch bản (đã xoá sau khi đọc số) cho thấy hành vi hiện tại khác tiền đề P2b. **User đã chốt: XOÁ** ⇒ đã xoá `apps/mobile/test/_probe_review_test.dart` (4 test của probe biến mất) ⇒ suite Flutter **233/233 xanh** (xem §3).
+
+Ngoài ra, harness P4-3 **tự bắt điểm mù của chính nó**: `flutter test` in `The test description was:` rồi **xuống dòng** tên test, parser lọc-một-dòng cho ra tên **rỗng** ⇒ cả 7 ca Dart bị báo `RED NHƯNG SAI TEST` (đúng theo thiết kế "đỏ phải đúng tên test" — nên không mừng hụt); sửa parser đọc dòng kế tiếp ⇒ 11/11 RED.
+
+---
+
+## 3. Bằng chứng (số đo sau thay đổi cuối cùng)
+
+| | |
+|---|---|
+| Flutter analyze | **0 issue** (`No issues found!`) — sau khi đổi helper test sang private (`_pumpApp/_seedCache/_tallViewport`) |
+| Flutter suite | **233/233 pass** (sau khi xoá probe theo quyết định user). Trước P4-3: **212 test / 211 pass + 1 fail** (probe P2b) ⇒ +25 test P4-3, −4 test probe |
+| `daily_summary_test.dart` | **25/25** |
+| Falsify P4-3 | **11/11 RED** — mỗi ca: xanh-trước / áp được mutation / đỏ **đúng tên test** / restore byte-identical |
+| Falsify cũ | P4 **13/13**, C0/C1/C2 + issue1 + execute-id-types chạy lại ở P4-2 (không đổi) |
+| Node suite | **508 test: 506 pass**, 2 fail = `dsh-gateway` (có từ B0, thiếu binary `dsh`) · trước P4-3: 505 ⇒ **+3** |
+| Mutation sót | **0** (`find -name '*.falsify-bak'` rỗng; `grep FALSIFY` trên 6 file bị mutate: rỗng) |
+| Python | không đụng (62 OK ở P4-1/P4-2) |
+
+**Vòng lặp THẬT (read-only, service thật + ERPNext thật, `node /tmp/p43-real-loop.mjs`):**
+```
+GET /read/daily-summary -> HTTP 200
+  meta.date       = 2026-09-21 (today VN = 2026-09-21, match=true)
+  meta.company    = Minh Phát Cám & VLXD
+  meta.erp_target = REAL            <-- nhãn mới, thứ footer sẽ in
+  meta.partial    = true  errors=["app_drafts"]
+  SO sub=0/0 invoices=1/575000 receipts=6030000 out=0 receivable=493440625
+  startup says    : ERPNext target: REAL -> <host>     <-- khớp footer (1 helper)
+  [1] log và response cùng nói REAL: true
+  [2] receivables: route=493440625 REST=493440625 (286 HĐ) match=true
+  [3] invoices   : route=575000    REST=575000    (1 HĐ)  match=true
+```
+`partial=true` ở đây **đúng như thiết kế**: `custom_ai_action_id` **chỉ có trên Payment Entry** (đo ở P4-1) ⇒ `app_drafts` buộc `null` cho tới khi Custom Field được tạo; màn hình hiện thẻ lỗi **riêng cho mục đó**, các block khác vẫn là số thật.
+
+---
+
+## 4. Docs & bài học
+
+- `LESSONS_LEARNED.md`: **nhóm 24** (nhãn provenance phải dẫn xuất, một nhà, `null` khi không biết) + **nhóm 25** (probe tạm bỏ quên ⇒ đỏ giả; cách quy trách nhiệm bằng bằng chứng) + mục **Đợt P4-3** (parse-layer cho "không 0 giả", fixture `??` ăn mất null, fixture falsify phải cô lập đúng biến, assert cấu trúc thay vì chuỗi, định dạng output `flutter test`, cache phải đo cả 2 chiều thời gian).
+- Skill `erpn-verify-first`: **+8 hàng** (nhãn provenance · probe tạm/attribution · fixture `??` · falsify bị nhánh khác che · state theo thời gian · assert cấu trúc · helper test private + `--fatal-infos` · parser output đa runtime).
+
+## 5. Việc chờ user quyết
+
+1. ~~Xoá `apps/mobile/test/_probe_review_test.dart`?~~ → **ĐÃ LÀM theo quyết định của user** (probe tạm, finding đã fix ở F2 — xem §2.4). Suite Flutter nay **233/233 xanh**.
+2. **Tạo `custom_ai_action_id` trên SO/QT/PO thật?** (chờ từ P4-1) — tạo xong thì `app_drafts` hết `null` và `partial` hết bật trên site này, **không cần sửa code**.
+3. **Commit**: env này **không có git** (`fatal: not a git repository`) ⇒ chưa commit được; P4-1/P4-2 cũng đang chờ. Màn này là **vùng đọc số tiền** ⇒ AI **không tự ký duyệt**.
+4. **Build APK (user chọn "qua CI rồi cài") — ĐANG TẮC, cần user quyết tiếp** (đo, không suy):
+   - **CI không chạy được chính code này**: checkout **không có `.git`** (không push được) và **không có `.github/workflows`** trong bản copy này ⇒ `gh workflow run` chỉ build **trạng thái đang ở trên remote** = **KHÔNG có P4-3** ⇒ APK đó không có drawer/màn tóm tắt (báo "xong" với APK như vậy là sai).
+   - **Build local cũng không được**: `/usr/lib/android-sdk` chỉ có `platform-tools` (**không có `platforms/`, không có `build-tools/`**); `/home` chỉ còn **~1.5G trống** (Gradle + SDK cần vài GB) ⇒ phải **cài SDK + dọn đĩa** = cài tool mới ⇒ **chờ user duyệt** (AGENTS.md: không tự cài service/tool).
+   - **Cài lên máy cũng không làm được từ đây**: `flutter devices` ⇒ chỉ có `Linux (desktop)`, **không có phone/emulator** ⇒ bước cài phải do user làm.
+   - **Đo thêm (read-only, `gh api`)**: remote `hoangsoft90/erpn_mobile1` **CÓ** workflow **`android-debug-apk.yml`**, nhưng chỉ có **MỘT** branch `change/flutter-chat-mvp`; `gh` **2.99.0** có sẵn + `GH_TOKEN` trong `.env` ⇒ đường (a)/(b) khả thi về mặt tool.
+   - ⚠️ **Cảnh báo quan trọng cho đường (b) — KHÔNG tự làm**: bản này **không có `.git`** ⇒ mọi lịch sử/`git init` ở đây là **history KHÔNG chung gốc** với remote, và bản local **thiếu file so với remote** (ví dụ chính `.github/workflows` **không có trong bản local** nhưng **có** trên remote) ⇒ commit thẳng cả cây local rồi push sẽ **XÓA file trên branch duy nhất của họ** (phải `--force` mới qua) = **không thể hoàn tác**. Muốn đi đường (b) phải làm **đúng thứ tự an toàn**: `git init` → `git fetch origin change/flutter-chat-mvp` → checkout **đúng tree của remote** trước → **chỉ overlay những file thuộc P4-1/P4-2/P4-3** → commit → push (không force). => Chỉ làm khi user duyệt rõ; AI không tự thực hiện.
+   - **Đường còn lại (chờ user chọn)**: (a) user push từ máy của họ → tôi `gh run download` artifact rồi **grep verify binary** (như result59) và đưa đường dẫn APK; (b) cho phép tôi làm **theo đúng thứ tự an toàn ở trên** rồi trigger CI; (c) bỏ bước APK, chuyển P4-4.
+
+**Bằng chứng UI hiện có**: 25 widget test chạy trên **router thật** + **1 vòng lặp HTTP thật** (read-only). **Chưa có ảnh chụp màn hình trên máy thật** — đó chính là lý do mục 4.
+
+---
+
+## 7. User đã quyết (cùng phiên) — tạo correlation field THẬT + APK để sau (2026-09-21)
+
+### 7.1 APK — **ĐỂ SAU** (user: *"push gh repo sẽ tự build apk trên gh action, nhưng để sau"*)
+
+Không push, không `git init`, **không đụng repo** — giữ nguyên cảnh báo ở §5.4 để phiên sau không push thô.
+
+### 7.2 `custom_ai_action_id` — **ĐÃ TẠO TRÊN SITE THẬT** (user duyệt "chạy bỏ `--dry-run`")
+
+Đây là **schema migration của người vận hành**, không phải giao dịch nghiệp vụ ⇒ đi thẳng REST, **không qua Safety Gateway**, **không reachable từ `/execute`** (đúng file `scripts/add-correlation-field.mjs`). Đã đọc source trước khi chạy: target **dẫn xuất từ `capabilities.json`**, idempotent, verify bằng read-back, không in secret.
+
+**TRƯỚC** (`--dry-run`, read-only, host `prevail-…ngrok-free.dev`): PE **ĐÃ CÓ** · PO/QT/SO **THIẾU**
+**SAU** (chạy thật, mỗi doctype có `VERIFIED` do script đọc lại):
+```
+đã tạo: Purchase Order-custom_ai_action_id    VERIFIED: type=Data unique=1 search_index=1
+đã tạo: Quotation-custom_ai_action_id         VERIFIED: type=Data unique=1 search_index=1
+đã tạo: Sales Order-custom_ai_action_id       VERIFIED: type=Data unique=1 search_index=1
+exit=0
+```
+
+**Verify ĐỘC LẬP (không dùng lại read-back của script)** — 3 lớp, mỗi lớp bắt được một kiểu sai khác:
+
+| Lớp | Cách đo | Kết quả |
+|---|---|---|
+| **META** (Custom Field row) | `GET Custom Field` lọc `dt`+`fieldname` | 4/4 `type=Data unique=1 search_index=1 label="AI Action ID"` |
+| **CỘT THẬT** (đọc doc + field) | `GET <doctype>?fields=["name","custom_ai_action_id"]` | PE `ACC-PAY-2026-00708` = `null` · SO `SAL-ORD-2026-00328` = `null` · PO `PUR-ORD-2026-00005` = `null` · QT **không có chứng từ nào** ⇒ check này **vacuous** (nói rõ, không tính là bằng chứng) |
+| **WHERE trên cột** (bịt lỗ vacuous) | filter `[["custom_ai_action_id","=","__no_such__"]]` — **thiếu cột là Frappe lỗi 417 `Unknown column`**, không phải 0 row | 4/4 **HTTP 200 rows=0** ⇒ cột tồn tại trên **cả Quotation** |
+| **CONTROL âm** | field không tồn tại ⇒ phải 0 row | `rows=0` ✓ (chứng minh query thật sự hỏi server, không phải echo "thành công") |
+
+**Idempotency**: chạy script **lần 2** ⇒ 4/4 `ĐÃ CÓ`, **không tạo gì** (`exit=0`).
+
+### 7.3 Hệ quả ĐO ĐƯỢC — chặn đã hết
+
+Trước migration: `partial=true` + `app_drafts=null` trên site này. Sau migration, chạy lại **vòng lặp thật (read-only)**:
+```
+GET (no date → today VN): HTTP 200 date=2026-09-21 company=Minh Phát Cám & VLXD partial=false
+   SO sub=0/0 invoices=1/575000 receipts=11430000 out=0 receivable=488040625
+GET==POST: true · ?date=2026-02-30 → 400 INVALID_DATE · company claim 'SANLOAN' → 403 COMPANY_SCOPE_MISMATCH
+```
+⇒ **`partial=false`**, màn tóm tắt hết thẻ lỗi "nháp app"; `meta.partial`/block-null vẫn giữ nguyên đường test.
+
+**Cross-check REST độc lập (đo lại cùng lúc)**: `receivables route=488040625 rest=488040625 rows=281 MATCH=true` · `day invoices 575000/1 MATCH=true` · `default day 2026-09-21 MATCH=true` · `partial=false errors=[]`.
+
+> ⚠️ **Số cũ trong `result-p4-3.txt` §2.5/handoff (`493.440.625` / 286 HĐ) KHÔNG phải sai lúc ghi** — dữ liệu trên site **đã đổi giữa hai lần đo** (nay **281** HĐ chưa trả, **−5.400.000**; thu trong ngày **11.430.000**): đúng dấu hiệu **5 hoá đơn đã được thanh toán**. Điều đáng tin là **route luôn khớp REST tại chính thời điểm đo** — không hardcode số.
+
+### 7.4 Còn lại (không tự làm)
+
+- **B2/B3/B4 idempotency trên site thật**: field đã có ⇒ **giờ mới có thể** chứng minh, nhưng cần **chạy ghi thật** (tạo SO/QT/PO nháp rồi tạo lần 2 để xem dedupe) ⇒ **chưa được user cho phép**: tới lúc đó correlation của B2/B3/B4 **vẫn chỉ đứng với mock**, và đây là điều **phải phát biểu đúng thế**, không suy ra "đã xong".
+- **APK**: user "để sau".
+- **Commit**: vẫn chờ máy có git (vùng đọc số tiền ⇒ AI không tự ký duyệt).
+
+---
+
+## 8. Review vòng 2 trên chính phần vừa làm ("review code nhưng gì vừa làm")
+
+Phần vừa làm không sửa code app ⇒ review tập trung vào **thay đổi duy nhất đụng hệ thống thật**: `unique=1` thêm vào một cột trên bảng đã có dữ liệu, và migration script đã chạy.
+
+### 8.1 Đã kiểm — `unique=1` trên bảng có sẵn **KHÔNG** phá luồng tạo chứng từ (an toàn)
+
+Câu hỏi thật: một unique index chỉ tha nhiều dòng khi các dòng đó là **NULL**; nếu Frappe lưu ô trống là `''` thì chứng từ rỗng thứ hai sẽ **đụng unique** ⇒ mọi lần tạo chứng từ bắt đầu lỗi. **Probe đầu của tôi không trả lời được** (`filter = ''` của Frappe **cũng khớp NULL**: `null=249` và `emptyString=249` cùng lúc ⇒ không phân biệt) — đúng bài học "verify có thể vacuous". Đo bằng thứ phân biệt được:
+
+```
+Payment Entry: field tạo 2026-09-17 15:00:08 · PE tạo SAU đó mà vẫn rỗng = 106 · API trả về = null
+⇒ 106 chứng từ cùng rỗng tồn tại SONG SONG dưới unique=1 ⇒ engine lưu rỗng là NULL ⇒ AN TOÀN
+```
+Kèm một bằng chứng cấu trúc độc lập: **lệnh ALTER thành công** trên bảng đang có 249 PE / 61 SO / 5 PO ⇒ tại thời điểm đó không tồn tại 2 giá trị **không-NULL** trùng nhau. **Nói rõ giới hạn**: với `Sales Order` phép đo này **vacuous** (0 chứng từ tạo sau khi field tồn tại) — kết luận an toàn cho SO/PO/QT là **suy theo cùng loại field/spec/engine** từ bằng chứng PE, không phải đo trực tiếp trên SO.
+
+### 8.2 Phát hiện THẬT #1 — mock **không mô phỏng được** đúng trạng thái của site, nên CI mù với chính lỗi vừa fix
+
+`appDrafts()` gọi **cả 4 doctype** và **một** doctype thiếu field ⇒ **throw** ⇒ `app_drafts` null + `partial=true` (đó là trạng thái thật của site tới hôm nay). Nhưng trong mock, nhánh fixture (`MOCK_ERP_P4_FIXTURE`) **bỏ qua** knob `MOCK_ERP_*_NO_CORRELATION_FIELD` mà nhánh ledger có ⇒ **không test nào tái hiện được trạng thái đó**, và một doctype "thiếu field" lặng lẽ thành **"0 nháp"** — đúng kiểu **số 0 bịa** mà §4.3 cấm; test cũ chỉ phủ được nó qua `MOCK_ERP_FAIL_LIST=1` (**sập mọi block** ⇒ không chứng minh được phạm vi).
+
+**Đã vá**: nhánh fixture nay có **cùng luật parity** (thiếu field ⇒ `Unknown column 'custom_ai_action_id'`) + **2 test mới**: (a) chỉ `Sales Order` thiếu field ⇒ `app_drafts` **null**, error **nêu tên block** + `code=ERP_UNAVAILABLE` + detail nêu tên cột, **và control: các block khác vẫn ra đúng số** (chứng minh phạm vi); (b) **đối chứng không-vacuous**: cả 4 có field ⇒ `partial=false` + `app_drafts = {count: 0, by_type: {}}` (một ngày không nháp là **câu trả lời thật**).
+**Falsify**: thêm ca **O** vào `scripts/falsify/p42-read-daily-summary.mjs` (bỏ guard ở nhánh fixture) ⇒ **15/15 RED**, đỏ **đúng tên test**, test đối chứng vẫn xanh, restore **byte-identical**.
+
+### 8.3 Phát hiện THẬT #2 — nhánh "ĐÃ CÓ" của migration script **không kiểm SPEC** (CHƯA sửa, chờ user quyết)
+
+`ensureOne()`: nếu field đã tồn tại → in `ĐÃ CÓ ... type/unique` rồi `return {had:true}`; **không so spec**. Hệ quả nếu field tồn tại với `unique=0` (ai đó tạo tay / tạo dở): script **exit 0** và người vận hành tin rằng **nửa DB của duplicate guard** đã có — trong khi `payment-write.mjs:112` ghi rõ unique mới là nửa DB đó (race mới lộ). Hiện tại **4/4 field đã verify đúng spec** ⇒ đây là **lỗ tiềm ẩn cho lần chạy sau**, không phải lỗi đang sống. Đề xuất (nhỏ, fail-closed): field tồn tại mà `fieldtype/unique/search_index` lệch ⇒ `die` nói rõ lệch gì, thay vì chỉ in ra; kèm 1 test dùng HTTP server giả.
+
+### 8.4 Đã kiểm & sạch
+
+- `appDrafts()` query **cả 4 doctype** với `filters=[[correlation,'is','set']]` ⇒ đúng dữ liệu copilot, không phải mọi draft; **không cần sửa code** sau migration (đúng như đã ghi) — comment cũ trong `ops-summary.mjs` (nói site **thiếu** field) đã **cập nhật** để không dẫn phiên sau đi sai.
+- Mock **mặc định** = field **CÓ** (`!== "1"`) ⇒ mặc định CI nay **khớp site thật** (trước đó mock lạc quan hơn thực tế; drift đã đóng).
+- Không rò secret trong docs/script mới; repo **sạch** file tạm/probe (`.falsify-bak`, `_probe*`, `_tmp*` = 0).
+
+### 8.5 Số sau review vòng 2
+
+| | |
+|---|---|
+| Node | **510 (508 pass, 2 fail dsh-gateway từ B0)** — +2 test mới |
+| P4-2 route | **20/20** · P4-1+P4-2 cùng lượt **43/43** |
+| Falsify P4-2 | **15/15 RED** (thêm ca **O**) |
+| Flutter | **233/233** · analyze **0** (không đụng) |

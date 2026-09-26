@@ -1,0 +1,43 @@
+========================================================================
+RESULT 13 — TUNNEL LOCALTUNNEL (USER CHẠY TRÊN MAC) · VERIFY E2E THẬT
+Timestamp: 2026-09-14 (sau result12)
+Repo: erpn_mobile1 · branch change/flutter-chat-mvp
+Đóng góp phiên: mcp-erpnext/LOCAL-TEST.md (mới) + npm script "start:ask"
+========================================================================
+
+== 1. Việc đã giao (LOCAL-TEST.md + start:ask + test) — ĐÃ XONG
+- mcp-erpnext/LOCAL-TEST.md: quy trình 3 terminal, placeholder <key>/<secret>
+  (KHÔNG chứa giá trị thật — secret scan CLEAN), thứ tự chạy 6 bước.
+- package.json: thêm "start:ask": "node src/http-ask.mjs --port 8788".
+- node --test (env ERPNEXT_*/ASK_* stripped): 49/49 pass (duration 9.2s).
+- Smoke mock E2E: nlp ready → npm run start:ask ready → /health 200 →
+  /ask trả "Nguyễn Thị Lan còn nợ 2.500.000đ" (mock) → kill sạch, port rảnh.
+- .env: KHÔNG đọc/in giá trị (chỉ liệt kê TÊN biến env).
+
+== 2. TUNNEL — user chạy trên MÁY MAC (không phải VPS)
+Topology: lt (Mac) --tunnel--> loca.lt (public) --user forward--> VPS:8788.
+localtunnel mặc định forward localhost của máy chạy lt → user tự nối tới VPS
+(SSH port-forward / --local-host). Đã ghi topology này vào LOCAL-TEST.md.
+
+== 3. BẰNG CHỨNG TEST TỪ VPS QUA TUNNEL (ERPNext thật)
+Lần 1-2 (ngay sau khi user mở tunnel): HTTP 502 "Bad Gateway" (size 11) —
+tunnel client chưa sẵn sàng / chưa nối xong.
+Lần 3+, kèm header bypass-tunnel-reminder: 1:
+  /health  → 200 (0.83–0.85s) × 3/3 ổn định
+  POST /ask "chị Lan còn nợ bao nhiêu"
+    → HTTP 200, answer: null + reason "không tìm thấy khách hàng... (Phase 6)"
+    → ĐÚNG fail-safe: "Lan" là candidate 1 từ, bị chặn trên DB thật (bài học b07)
+  POST /ask "Khách smoke 2026-09-13-p1done còn nợ bao nhiêu"
+    → HTTP 200 (1.6s): "Khách smoke 2026-09-13-p1done còn nợ 269.000đ
+       (3 hóa đơn chưa trả)" — KHỚP ground-truth result9.
+
+== 4. BÀI HỌC GHI VÀO DOC
+- curl qua loca.lt PHẢI kèm "bypass-tunnel-reminder: 1" — không có header này
+  tunnel server trả 502, dễ chẩn nhầm service chết.
+- URL tunnel (HTTPS) dùng được làm COPILOT_BASE_URL cho APK test thiết bị thật
+  (đi qua firewall hosting mà port 8788 bị chặn) — CHỈ trong lúc test, tunnel
+  public không auth (http-ask bind loopback), Ctrl-C ngay khi xong.
+
+== 5. TRẠNG THÁI COMMIT
+6 file modified + 2 file mới chưa commit (4 file security-review fix chờ duyệt
++ package.json + LOCAL-TEST.md). KHÔNG tự commit (vùng phân quyền chờ duyệt).

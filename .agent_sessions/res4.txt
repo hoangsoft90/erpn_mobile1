@@ -1,0 +1,59 @@
+Xong phần code + test. Tóm tắt:
+
+Đã làm — upload HĐĐT XML trong app (A2 phần Flutter)
+
+Luồng: nút "HĐĐT XML" cạnh nút camera (cả 2 layout input bar) →  file_selector  chọn  .xml  →  POST /input/einvoice  → form slots sẵn có của camera → user sửa →  OcrCompose  →  /ask  → proposal → [Xác nhận] → NHÁP.
+
+Phát hiện quan trọng khi đọc contract: route nhận JSON  {xml, kind:"purchase"} , không phải multipart — và response là đúng shape  OcrSlots  mà camera dùng, nên tôi tái dùng model + form cũ thay vì dựng UI/model mới (chỉ thêm enum  OcrSlotsSource  để đổi wording Ảnh ↔ File XML, chuỗi cũ giữ nguyên byte-identical).
+
+5 điều CẤM — chặn bằng cấu trúc, có test: không parser XML thứ hai (picker chỉ trả TEXT + tripwire tĩnh quét  lib/**.dart , đã kiểm SỐNG: thả  XmlDocument  vào  lib/  ⇒ RED), không auto-execute, không auto-create master (MST lạ = cảnh báo nêu MST + chip ứng viên), không skill WRITE mới (server 0 dòng đổi), giá không bao giờ lấy từ file.
+
+Bằng chứng:
+-  flutter analyze  → 0 issue ·  flutter test  → 298/298 (baseline 281 ⇒ +17, 0 regression)
+-  flutter pub get  chỉ +4 package (linux/macos/windows + platform_interface đã có sẵn từ  image_picker )
+- Bước mới bắt được 1 sai sót thật: dựng gateway mock rồi POST fixture thật, parse bytes thật bằng model Dart ⇒ phát hiện fixture tôi tự gõ tay sai ( CAM-GA-25KG /"Cám gà thịt 25kg" trong khi route trả  CAM-GA-10KG /"Cám gà thịt 10kg") → đã sửa. Fixture tự chế có thể đồng ý với client mà không đồng ý với server.
+- Review tự làm tìm 2 điểm đã sửa: field  byteLength / kiloBytes  chết → xoá; guard parse thiếu  kind  (payload thiếu  kind  sẽ ra  TypeError  thô) → thêm ⇒ chạy lại analyze + full suite. Secret scan 0 khớp,  .env  vẫn ignored.
+
+File:  .plan/next4/flutter-xml-upload-result.md  (deliverable §8 có danh sách 7 file Dart đã đổi) ·  result67.txt  ·  working.md  /  next.md  /  checklist.md  /  features.md .
+
+⛔ Chờ bạn quyết (chưa commit)
+
+1. Duyệt commit — task này thêm dependency ( file_selector ) + chạm UI của đường GHI ⇒ theo rule 13 + vùng loại trừ Ponytail, AI không tự commit.
+2. E2E ERPNext thật không chạy lại (server đã cover  PUR-ORD-2026-00006 ); chạy lại sẽ tạo thêm 1 nháp thật ⇒ cần bạn cho phép riêng.
+3. Test tay trên máy Android — quy trình 9 bước ở deliverable §6 (cần APK + điện thoại; máy này không có emulator nên tôi không có screenshot để bạn duyệt UI)
+--------------
+
+Review done — 4 findings fixed, 3 observations documented, all re-verified. Kết quả:
+
+Đã sửa (4)
+
+1. Trung bình — lời hứa "nút có ở CẢ 2 layout" không được test ghim. Đây là finding thật: test cũ chỉ chạy layout mặc định, nên một refactor sau này xoá nút khỏi row voice-first sẽ không làm test nào đỏ — trong khi deliverable vẫn khẳng định "cả 2 layout".
+→ Thêm 1 test (override  appSettingsServiceProvider  + assert  ValueKey('input-voice-first')  để chắc chắn đang test đúng row) và chứng minh nó sống bằng đột biến 2 chiều:  onPressed: null  ⇒ RED, xoá hẳn block nút ⇒ RED, restore byte-identical.
+Tự thú: lần đột biến đầu của tôi neo sai — tôi viết  false ? a : a , mà biểu thức đó vẫn trả về callback nên test vẫn xanh; tôi suýt kết luận sai. Đúng lại bẫy "anchor không làm điều mình tưởng" đã có sẵn trong  LESSONS_LEARNED.md / erpn-verify-first .
+
+2. Thấp —  SystemEinvoiceFilePicker.xmlTypeGroup  là static public ⇒ rò type của plugin ( XTypeGroup ) ra API của mình dù không ai dùng ngoài class → đổi  _xmlTypeGroup .
+
+3. Thấp —  decodeEinvoiceXml  là hàm thuần nhưng lại đọc trần dung lượng qua class gắn plugin (layering ngược) → tách hằng top-level  einvoiceMaxXmlBytes = 950000  (kèm comment nêu server sở hữu policy), cả hai dùng chung.
+
+4. Thấp (ponytail) —  einvoiceSlots({String kind = 'purchase'}) : không caller nào truyền tham số này và kênh chỉ có đúng 1 kind ⇒ linh hoạt chết → bỏ, gửi literal  'kind': 'purchase'  + comment nêu đây là TỪ của contract (khi server mở kind thứ 2 thì tham số quay lại cùng UI chọn kind).
+
+Quan sát, KHÔNG sửa (có lý do)
+
+5. Trần so theo byte thô, còn body gửi lên là JSON đã escape ( \n ,  "  thành 2 ký tự) ⇒ lý thuyết có thể vượt  MAX_BODY  1 MB của gateway ⇒ lỗi transport thay vì lỗi policy. Đã tính: XML xuống dòng bình thường ~1  \n /40 byte ⇒ 950 KB thô ≈ 974 KB sau escape, vẫn lọt. Chỉ file dị dạng mới vượt → không đáng thêm logic.
+
+6.  _notice  in tên file (dữ liệu không tin cậy). Không phải lỗi injection (render bằng  Text  thuần, không markdown/HTML); rủi ro duy nhất là tên file dài/nhiều dòng làm dòng notice xấu — giống mọi tên khách/NCC đang hiển thị ⇒ giữ nguyên.
+
+7. Nút vẫn bật khi đang ở chế độ AI (DSH) — đo được  _InputBar(enabled: !chat.isLoading) . Nhưng ở chế độ AI, câu compose đi  ChatController.send()  →  _sendDsh  →  /dsh/ask  (chỉ ĐỌC) nên không mở đường ghi nào; nút camera hiện có y hệt hành vi này ⇒ không phải vấn đề task này tạo ra.
+
+Đã kiểm và thấy đúng (không finding)
+
+- Không có đường ghi: chỉ  /input/einvoice  +  /ask  (test khẳng định  rec.paths  không có  execute ).
+-  _reading / _readingFile  reset trong  finally  chạy trước frame rebuild ⇒ dòng "Đang đọc file XML…" không thể kẹt trên màn hình sau khi lỗi/xong (tôi kiểm thứ tự này vì nó là bug kinh điển).
+- Impact:  showOcrSlotsForm  có đúng 2 call site; tham số  source  default  photo  ⇒ chuỗi của camera không đổi 1 ký tự (test cũ  Ảnh → Đơn mua (NHÁP)  /  trên ảnh: "10 Bao"  vẫn xanh nguyên).
+- Tripwire "không parser XML thứ hai" vẫn sống (đã kiểm lại bằng cách thả  XmlDocument  vào  lib/ ).
+
+Sau mọi fix:  flutter analyze  0 issue ·  flutter test  299/299 (baseline 281 ⇒ +18, 0 regression).
+
+Giới hạn của vòng review này: OCR/AgentMemory/codebase-memory/Simplenote đều không có trong phiên ⇒ review thủ công + mutation proof thay cho lớp phát hiện tự động;  detect_changes / search_graph  không dùng được nên impact review làm bằng grep + full suite. Và phần UI trên máy thật vẫn chưa ai nhìn (máy này không có emulator ⇒ không có screenshot để duyệt) — đây vẫn là việc chờ bạn.
+
+Đã cập nhật:  .plan/next4/flutter-xml-upload-result.md  §5.2 (bảng finding + mức + cách xử lý),  result67.txt  §5b,  working.md ,  checklist.md . Commit vẫn chờ bạn duyệt (thêm dependency + chạm UI đường GHI

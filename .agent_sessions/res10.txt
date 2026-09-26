@@ -1,0 +1,13 @@
+D5 — DOCS — ✅ ĐẠT, next5 ĐÓNG. Chỉ sửa docs, không đụng code ⇒ không cần chạy lại suite (Node 820/818/2 · Flutter 333/333 · analyze 0 giữ nguyên từ D4). Chưa commit.
+
+4 mục của  prompt-D5-docs.md :
+1.  .plan/next5/next5-drawer-done.md  (mới) — đối chiếu §8 exit criteria 10/10 ĐẠT từng dòng, mỗi dòng kèm bằng chứng trỏ về result tương ứng; khai thẳng 2 mục không fake PASS: row-level permission NO-GO môi trường (D1.5), dedupe D3 chỉ unit test; mục "còn lại" ghi rõ commit chờ duyệt + phát hiện ngoài-scope D4 + backlog §10.
+2.  features.md  mục Trụ D — đổi tiêu đề thành "Drawer READ (plan4 V1 → next5 hoàn thiện)", cập nhật drill-down (9 id, bỏ "5 id"), thêm block next5: 5 entry có drill id · REAL-only/provenance · footnote công nợ verbatim "Theo sổ ERPNext đã ghi nhận (chưa trừ phiếu thu/chi nháp)" · polish D4 · verify thật + số đo cuối (820/818/2 · 333/333 · falsify 37 ca).
+3.  docs/how-to-test.md  (mới) — checklist test tay 8 nhóm: cấu trúc drawer · từng mục so số ERPNext · deep-link ngày + tiêu đề · refresh (gồm ca list ngắn — bug đã sửa) · error/empty/config kho ( STOCK_WAREHOUSE_UNPINNED ) · đổi server/user · badge · ranh giới CẤM (không  /execute , không free-text).
+4. README next5 — trỏ ✅ ĐÃ ĐÓNG (2026-09-26) + bảng kết quả từng phase (D0.7 ghi SKIP).
+
+Kèm theo:  checklist.md  (tiêu đề section D0→D5, block D4 + D5 mới, dòng commit gộp +D5) ·  next.md  (mục "Trạng thái mới nhất" ghi next5 đóng 10/10) ·  working.md  (mục D5 lên đầu).
+
+Chờ user quyết:
+- Duyệt commit toàn bộ diff (A3 + D0.5 + D1→D4 + docs) — có phần chạm số tiền công nợ nên AI không tự commit.
+- Phát hiện ngoài scope D4 (D4-result §8): Tóm tắt ngày "Hôm qua" — thẻ HĐ/Tiền khách trả đổi tiêu đề sang hôm qua nhưng con số vẫn hôm nay. 2 hướng sửa đều làm đỏ/đổi nghĩa test P4-6, là số tiền ⇒ không tự sửa.

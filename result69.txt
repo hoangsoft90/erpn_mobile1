@@ -1,0 +1,108 @@
+# result69.txt — Workstream A3: HĐĐT **PDF có lớp chữ** → cùng schema slots → cùng pipeline nháp, 2026-09-25
+
+Task: `.plan/next3/implementation.md` §A3 ("PDF text-layer → cùng schema slots"; "Scan → OCR path C").
+Deliverable: `.plan/next4/A3-result.md` (+ spike format `.plan/next4/A3-pdf-spike.md`).
+Phạm vi đã giữ: KHÔNG mở đường ghi mới · KHÔNG auto-create master · KHÔNG auto-submit · KHÔNG làm OCR trong
+luồng này · KHÔNG chạm B/M1.
+Trạng thái: **CODE + TEST XONG, ĐO ĐƯỢC TRÊN SITE THẬT (chỉ ĐỌC) — CHỜ USER duyệt commit**
+(vùng tài liệu ⇒ AI không tự ký duyệt).
+
+## 0. Nguyên tắc chi phối
+
+> Một con số KHÔNG đọc được thì KHÔNG bao giờ được điền vào.
+Một dòng mà `qty × rate ≠ amount` (số học của chính nó không khớp) là **problem** ⇒ cấp request TỪ CHỐI,
+KHÔNG thành một dòng "trông-hợp-lý" để user bấm xác nhận mà không thấy lỗ hổng. Cùng A1, cùng lý do (mất tiền thật).
+
+## 1. Đã làm
+
+### Server (4 file: 1 mới + 3 sửa)
+- **MỚI `src/einvoice/einvoice-pdf.mjs` (~1148 dòng)**, thuần & đồng bộ, không I/O:
+  - `PDF_CODES` = NOT_A_PDF · TOO_LARGE · ENCRYPTED · NO_TEXT · COMPRESSED_OBJECTS · TEXT_UNMAPPED ·
+    UNSUPPORTED_FILTER · BROKEN ; `PDF_WARNING_CODES` = MST_UNLABELLED · UNIT_GUESSED_FROM_TEXT.
+  - `extractPdfText(bytes)` → dòng thị giác: quét object (KHÔNG tin xref), **FlateDecode bằng stdlib `zlib`**
+    (package giữ 0 dependency — operating_rules §13), toán tử text của content stream, **ToUnicode CMap**
+    (đường DUY NHẤT để mã 2 byte của font CID/Type0 thành Unicode ⇒ dấu tiếng Việt đúng). Ngắt dòng theo
+    **VỊ TRÍ y** (`PDF_SPACE_GAP = -250`); font composite KHÔNG CMap ⇒ `unmappedFont` ⇒ TEXT_UNMAPPED.
+  - `extractEinvoiceFields(lines)` → header/lines/problems: `foldVietnamese` (giữ độ dài + lowercase + bỏ dấu/đ),
+    `pdfNumberReadings` (**trả MỌI cách đọc**, lọc NaN), `pdfDateToIso` (kiểm lịch thật), `readInvoiceNo`
+    (nhãn cùng dòng / dòng kế / **dính liền ký hiệu**), `readSeller` (theo **KHỐI** `Người bán` — người mua in
+    trước KHÔNG cướp MST; fallback chỉ dòng MST **có nhãn**), `parseRowLine` (**số học của dòng phân xử** mơ hồ).
+  - **KHÁC A1**: KHÔNG tái dùng `strictNumber` — trên giấy `.` là phân cách nghìn, `,` là thập phân (ngược XML).
+- `src/einvoice/einvoice-slots.mjs`: `EINVOICE_SLOTS_CODES.INPUT_AMBIGUOUS`.
+- `src/http-ask.mjs` `/input/einvoice`: nhánh **XOR** `hasXml`/`hasPdf` (cả hai ⇒ 400, **KHÔNG** chạy pipeline);
+  chọn reader theo payload; **map status** 413 (XML_TOO_LARGE/PDF_TOO_LARGE) · 422 (INVOICE_INCOMPLETE, NO_TEXT,
+  ENCRYPTED, COMPRESSED_OBJECTS, TEXT_UNMAPPED, UNSUPPORTED_FILTER, BROKEN) · còn lại 400; `provenance.source`;
+  log thêm `source`. **KHÔNG route mới.**
+- `capabilities.json`: `einvoice_policy` += `max_pdf_bytes 650000`, `pdf_reader "text_layer_only"`, `comment_pdf`.
+
+### Test / fixture
+- **MỚI `test/fixtures/einvoice/make-pdf-fixtures.mjs`** (idempotent) sinh 6 PDF, mỗi cấu trúc một file:
+  `hd-pdf-tounicode.pdf` (Type0/Identity-H + ToUnicode, FlateDecode, `Tm` tuyệt đối, cột `Td`) ·
+  `hd-pdf-winansi.pdf` (Type1/WinAnsi, không nén, `TJ` có kerning, `*`, `'`) ·
+  `hd-pdf-tounicode-nomap.pdf` (composite **thiếu** CMap) · `hd-pdf-no-textlayer.pdf` (chỉ graphics) ·
+  `hd-pdf-encrypted.pdf` (`/Encrypt`) · `hd-pdf-objstm.pdf` (object trong ObjStm nén).
+  Cùng MỘT hoá đơn: số **0000049**, ký hiệu **1C25TAA**, **20/09/2026**, MST bán **0300000002**,
+  MST mua **0300000009**, `10×295.000=2.950.000` + `5×250.000=1.250.000`, tổng **4.200.000**.
+- **MỚI `test/a3-einvoice-pdf.test.mjs` — 15/15 pass**: contract/policy · fixture tự-đúng (chữ ký + xref) ·
+  CID↔WinAnsi ra **cùng dòng** · base64/`data:`/junk/quá ngưỡng · **4 từ chối theo tên** · nhãn dòng-kế ·
+  người mua in trước · bẫy số điện thoại + MST_UNLABELLED · số học phân xử (kể cả thập phân + dòng vỡ) ·
+  PDF rỗng · bảng `pdfNumberReadings` · 2 render **cùng định danh** · route happy-path (resolve theo MST, 2 dòng,
+  **không** bề mặt ghi) + **7 ca từ chối route**.
+- `test/a1-einvoice-parser.test.mjs`: sửa để chỉ lặp fixture `.xml` (thư mục nay có PDF).
+
+## 2. Đo được
+
+### Mock (toàn repo)
+```
+mcp-erpnext$ COPILOT_MOCK_OK=1 node --test
+ℹ tests 782   ℹ pass 780   ℹ fail 2
+```
+2 ca đỏ = test môi trường dsh (`dshGatewayHealth`, `verifyDshRuntime`, timeout 30 s) — **đỏ sẵn từ B0**,
+không liên quan A3. Flutter: **304/304**, `flutter analyze` **0**.
+
+### Site THẬT — chỉ ĐỌC (`/input/einvoice` chỉ đọc items + suppliers ⇒ không cần quyền ghi)
+`.plan/next4/loop-a3-pdf-real.mjs`, `ERPNEXT_*` thật, KHÔNG `COPILOT_MOCK_OK`:
+```
+target: https://prevail-pantyhose-overvalue.ngrok-free.dev  (READ ONLY)
+hd-pdf-tounicode.pdf → 200 (1270 ms)
+  source=einvoice_pdf  capability=purchase_order.create  kind=purchase
+  party: matched_by=tax_id  claimed=0300000002  resolved=<Đại lý Cám Bình Dương THẬT>  ambiguous=false
+  source_document: {invoice_no 0000049, series 1C25TAA, date 2026-09-20, seller 0300000002, buyer 0300000009,
+                    net_total_vnd 4200000, total_vnd 4200000}
+  lines: [CAM-HEO-25KG / Bao / qty 10] [CAM-GA-25KG / Bao / qty 5]     (item THẬT trong kho)
+  warnings: []
+hd-pdf-no-textlayer.pdf → 422 EINVOICE_PDF_NO_TEXT
+  "… PDF không có lớp chữ đọc được (bản scan/ảnh) — dùng nút camera để đọc hoá đơn, hoặc nhập tay"
+```
+⇒ Ra **đúng shape** như XML · resolve **NCC THẬT theo MST** · item khớp kho thật · **không lộ bề mặt ghi**
+(không command id / proposal) · scan **TỪ CHỐI 422** và chỉ đúng sang camera, **không bịa số**.
+
+## 3. Lỗi do CHÍNH spike bắt được (đã sửa, có test)
+
+`foldVietnamese` thiếu `lowercase` ⇒ MỌI regex nhãn trượt · `readLiteralString` độ sâu bắt đầu 0 ⇒ dấu `)`
+nuốt stream · số trong `[ ]` không vào array ⇒ `TJ` vỡ · kerning −150 cắt đôi từ ⇒ `PDF_SPACE_GAP` −250
+(fixture gap −278) · `/Contents` trỏ sai object + `dictOf` trả text dict thay vì stream CMap ⇒ thêm `refTarget` ·
+`readSeller` fallback tham chiếu `rows` chưa định nghĩa · `pdfNumberReadings` trả NaN cho chuỗi nhiều `.`.
+(1 hook debug `A3_DEBUG` đã thêm rồi gỡ.)
+
+## 4. Giới hạn đã biết (KHÔNG tô hồng)
+
+1. **Không có PDF thật của NCC** trong repo ⇒ fixture **do spike dựng** theo cấu trúc provider thật dùng.
+2. **ObjStm chưa giải nén** ⇒ nhận diện + **từ chối theo tên** (`COMPRESSED_OBJECTS`), không báo sai là scan.
+3. **PDF scan** ⇒ không xử lý ở A3, đẩy sang **đường camera C** (đúng spec).
+4. **Flutter CHƯA có nút chọn `.pdf`** (`einvoice_file_picker.dart` chỉ `.xml`) ⇒ A3 hôm nay đo qua **route**,
+   **chưa với tới được từ UI app**.
+5. **Chưa có falsify harness riêng cho A3** (A1/A2 cũng không có) — guard ghim bằng 15 test, chưa mutate.
+
+## 5. CHỜ USER
+
+- **Duyệt commit** — A3 chạm **đường tài liệu** (dù chỉ đọc) và nằm chung diff với **B + M1-site + A2 Flutter**;
+  vùng loại trừ an toàn ⇒ AI **không tự commit**.
+- Việc CHƯA làm, chờ user quyết: **nút chọn `.pdf` Flutter** (thay đổi UI ⇒ cần UI-checkpoint) · **falsify A3** ·
+  **giải nén ObjStm** · **vòng ghi THẬT 2 lần cùng file** (tạo 1 nháp thật, cần cho phép riêng).
+
+## 6. Đọc thêm
+
+`.plan/next4/A3-pdf-spike.md` (format: cấu trúc → fixture, bản đồ nhãn → field, quyết định số học) ·
+`.plan/next4/A3-result.md` (kết quả đầy đủ + §9 review) · `.plan/next3/implementation.md` §A3 ·
+`.plan/next3/A-result.md` (A1/A2 + vòng thật `PUR-ORD-2026-00006`).

@@ -1,0 +1,64 @@
+========================================================================
+RESULT 36 — BẢO TRÌ NHẸ: HEAD SẠCH + SUITE XANH + DEVICE CHECKLIST + MVP ĐÓNG
+Timestamp: 2026-09-16 (giờ shell)
+Chỉ đạo user: (1) xác nhận HEAD sạch + full test; (2) dọn docs cuối MVP +
+mục "Việc người thật" rõ; (3) tuỳ chọn docs/device-test-checklist.md.
+KHÔNG: Phase 4/8/10/11/15 · saga/REVERSAL · submit/delete PE thật ·
+VPS design · GitHub Settings · rotate key · đề xuất sprint phase mới.
+========================================================================
+
+== 1. HEAD SẠCH (lệnh + output thật) ==
+  git log --oneline -3:
+    31d485c feat: phase 9 UI — stale/expired banner via real HTTP 409 (dio);
+            params round-trip so confirm works from the app
+    bda54cf feat: phase 7b wire — "thu tiền..." builds a HIGH proposal;
+            /execute/cancel (reconcile-verified) for zombie PENDING intents
+    eea0411 feat: phase 7/9 payment write — reconcile-by-reference,
+            fail-closed gate, expiry/drift/intent-lock + fix numeral-name &
+            kinship-identity bugs
+  branch: change/flutter-chat-mvp
+  git status: 5 docs modified (checklist · features · next · working ·
+  docs/demo-payment-draft.md — docs-sync result35 + fix uuidgen, CHƯA commit,
+  sẽ đi cùng result36 evidence lần duyệt kế) + untracked: result35.txt ·
+  handoff_20260916-result35.md · result36 + handoff mới + rác
+  .gemini/.opencode/initp (không stage).
+
+== 2. FULL TEST SAU COMMIT (lệnh + output thật) ==
+  PYTHON   PYTHONPATH=src python3 -m unittest discover -s tests (repo root)
+           → Ran 60 tests — OK
+  NODE     node --test (mcp-erpnext) → ℹ tests 119 · pass 119 · fail 0
+  FLUTTER  flutter test → 00:04 +34: All tests passed!
+           flutter analyze → No issues found!
+  ⇒ PASS — không đụng code tiền.
+
+== 3. DOCS CUỐI MVP ==
+- Marker "CHỜ DUYỆT" đợt UI STALE: grep 4 docs → hit duy nhất là dòng mô tả
+  chính việc xóa marker (working.md result35) — SẠCH.
+- checklist.md mục "Bị chặn — chờ người thật": bổ sung link 2 runbook
+  (device-test-checklist + demo-payment-draft) vào dòng APK.
+- Mục "Việc người thật" đầy đủ (đã có sẵn, xác nhận nguyên văn):
+  checklist.md:80 (3 giá trị GitHub Settings) · :93 (APK + checklist) ·
+  :181 (duyệt saga §7) · rotate key · audio 150 câu · SUBMIT phiếu thu.
+
+== 4. DEVICE CHECKLIST (docs/device-test-checklist.md — MỚI, 1 trang) ==
+A. Cài đặt (APK từ artifact, footer COPILOT_BASE_URL, mạng khác VPS)
+B. Đọc (hỏi nợ · tên gần giống hỏi lại · không tồn tại không bịa · tắt
+   tunnel → SnackBar giữ input)
+C. Ghi (proposal HIGH → xác nhận → phiếu DRAFT, KHÔNG submit · bấm lại →
+   "chống trùng" — không phiếu thứ hai)
+D. Khôi phục/An toàn (kill app → history + replay 1 phiếu · STALE khi đổi
+   nợ → banner 🔄 · EXPIRED quá 10 phút → banner ⏰ · lỗi luôn toast, không crash)
+Kết thúc: ghi APK run # + giờ + step FAIL + screenshot; phiếu nháp giữ
+bằng chứng hoặc xoá tay trên UI ERPNext.
+Secret scan 2 runbook: CLEAN (0 hit — chỉ tham chiếu tên biến).
+
+== 5. KHÔNG LÀM (đúng cấm) ==
+0 lệnh ERPNext thật · không saga/REVERSAL · không Phase 4/8/10/11/15 ·
+không VPS design · không đụng GitHub Settings/rotate key · không đề xuất
+sprint phase mới.
+
+== 6. KẾT LUẬN PHIÊN ==
+MVP kỹ thuật ĐÓNG (HEAD 31d485c, suite xanh đầy đủ). Từ đây chờ:
+user demo (demo-payment-draft.md) / APK thật (device-test-checklist.md) /
+duyệt saga §7 / submit / audio / GitHub Settings / rotate key.
+DỪNG — không đề xuất sprint phase mới.

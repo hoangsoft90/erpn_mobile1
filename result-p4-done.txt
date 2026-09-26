@@ -1,0 +1,199 @@
+# P4-done — Đóng plan4 V1: đối chiếu §7 (12/12) + chốt docs
+
+**Nguồn:** `.plan/plan4_final.md` §7 · §8 (lộ trình P4-0→P4-6) · §10 (quyết định đã chốt)
+**Trạng thái:** plan4 V1 **KỸ THUẬT KHÉP** — P4-0 → P4-6 xong, P4-7 đóng bằng chứng.
+**Việc P4-7 không làm (đúng lệnh dừng):** không skill WRITE mới (P9) · không Redis · **không WRITE vào két**.
+
+---
+
+## 0. P4-7 là gì (và không là gì)
+
+§7 nói rõ: *"V1 xong khi các case này xanh"* — nên việc còn lại **không phải thêm code** mà là **chứng minh**:
+từng case §7 phải chỉ ra được **test/bằng chứng cụ thể**. Nên phiên này đi từng case một, và khi một case
+không tìm thấy test thì **đó là phát hiện**, không phải chi tiết nhỏ.
+
+---
+
+## 1. Ma trận §7 — 12 case → bằng chứng thật
+
+| §7 | Case | Test / bằng chứng | KQ |
+|----|------|-------------------|----|
+| 1 | SO và SI **khác** số tiền cùng ngày → 2 block khác nhau | `test/p4-ops-summary.test.mjs` — "**P4 §7.1**: SO and SI amounts differ for the same day (two blocks, two truths)" | ✅ |
+| 2 | PE có allocate HĐ vs PE advance → `against_invoice` ≠ `advances` | "**P4 §3.2 + §1.3**: receipts split against_invoice vs advances, cash vs bank" | ✅ |
+| 3 | PE Cash vs Bank → tách `cash` / `bank` | "§3.2 + §1.3" và "**P4 §7.3 + P4-0 lesson**: 'Chuyển khoản' (mode type=Cash) lands in BANK by account_type" — phân loại theo **`account_type` của tài khoản tiền**, không theo tên mode | ✅ |
+| 4 | SI `docstatus=0` **không** vào `sales_invoices` | "**P4 §7.4**: draft SI never enters sales_invoices (policy is submitted-only)" | ✅ |
+| 5 | Return/credit **không** làm tăng `sales_invoices.amount` | "**P4 §3.5**: returns/credit notes never inflate the invoice amount" | ✅ |
+| 6 | **Thiếu quyền một doctype → partial, không crash, không số bịa** | ⚠️ **THIẾU — đã bổ sung phiên này** (xem §2) | ✅ (mới) |
+| 7 | Biên timezone local (23:30 vs 00:30) | `test/p42-read-daily-summary.test.mjs` — "**P4-2 date**: the day is the SHOP's (Asia/Ho_Chi_Minh), not the host's — 23:59 vs 00:00 VN" (16:59Z→09-21 · 17:00Z→09-22 · 17:30Z = **00:30 VN** → 09-22, kèm control rằng formatter là `YYYY-MM-DD`). Biên **chặt hơn** spec đòi (23:59 thay 23:30) | ✅ |
+| 8 | Không double-count cùng một PE | "**P4 §7.8**: the same PE cannot be counted twice (idempotent aggregation)" | ✅ |
+| 9 | Flutter: tap drill **không** gọi `/execute` | `apps/mobile/test/drill_list_test.dart` ("tapping a metric sends ONE structured drill request and **ZERO /execute**" — assert trên **log request**, không phải trên việc thiếu nút) + `daily_summary_test.dart` ("the summary screen offers no write affordance and no /execute") + static "**P4 §7.9/§7.10**: the ops path carries no /execute, no callWriteTool, no command_id" | ✅ |
+| 10 | Regress: `payment.create`, SO/QT/PO, OCR C0–C2 **không đổi hành vi ghi** | `payment-write` · `b2-sales-order` · `b3-quotation` · `b4-purchase-order` · `c0-ocr-foundation` · `c1-camera-ocr-endpoint` · `c2-ocr-proposal` · `http-execute` — **toàn bộ xanh** trong suite đầy đủ (§3) | ✅ |
+| 11 | Huỷ + amend cùng ngày → tính đúng **1 lần** (INV-0003→INV-0004) | "**P4 §3.1b**: cancelled excluded, amended counted once (INV-0003 → INV-0004)" | ✅ |
+| 12 | Dùng **nguyên bộ 20 chứng từ** `plan4_review3.md` §1.2 làm fixture; **không chép mù SQL** | Fixture trong `p4-ops-summary.test.mjs`: **đếm được đúng 20 entry** (không tin comment — đếm bằng `grep`), đầu file ghi rõ nguồn §1.2, kỳ vọng **dẫn xuất từ fixture**. Filter "advance" (`references` rỗng) mà review3 chưa verify: đã **kiểm lại với site thật** ở vòng lặp P4-4/P4-6 (tách được `Theo hóa đơn` / `Ứng trước` trên dữ liệu thật) | ✅ |
+
+**Kết luận: 12/12.** Trước phiên này là **11/12**.
+
+---
+
+## 2. Case §7.6 — cái đã thiếu, và vì sao nó không phải "đã bao phủ"
+
+§7.6 đòi: *"Thiếu quyền một doctype → partial, không crash, không số bịa."*
+
+Đã có sẵn một test cho **failure nói chung** ("a REAL failing invoices branch"). Rất dễ kết luận "đã bao phủ".
+Nhưng **một trang rỗng và một lần bị từ chối là hai chuyện khác nhau, và khác nhau bằng TIỀN**:
+
+| Site trả về | Sự thật | Màn phải nói |
+|---|---|---|
+| trang rỗng | "hôm nay không có hóa đơn nào" | `0đ` — một câu trả lời thật |
+| **PermissionError / 403** | "user này **không được xem** hóa đơn" | **`null`** — "chưa đọc được", **không** được là 0 |
+
+Gộp hai thứ này là **bịa số 0 về tiền** — đúng loại lỗi §4.3 cấm, và chủ tiệm sẽ đọc thành "hôm nay chưa bán được gì".
+
+**Việc đã làm (3 phần, không chỉ thêm test):**
+
+1. **Fixture không thể tái hiện trạng thái này** ⇒ thêm sentinel `__FORBIDDEN__` vào `src/mock-server.mjs`
+   (ngay sau khi parse fixture): một doctype có giá trị `"__FORBIDDEN__"` sẽ throw
+   `PermissionError: Not permitted to read <doctype>` kèm `status = 403`, `excType = "PermissionError"`.
+   *Đây là trạng thái site thật; mock tồn tại để tái hiện đúng những trạng thái đó, nên đây là chỗ đúng.*
+2. **Test** `"P4 §7.6: a doctype the user may NOT read is a NULL block — never an empty 0-day"` khẳng định:
+   `partial === true` (trả lời vẫn về, không crash) · `sales_invoices === null` và **`!== 0`** ·
+   `receivables === null` (nó đọc **cùng** doctype ⇒ bị từ chối cùng lúc; hai block null từ một lần từ chối
+   là **trung thực**, bịa 0 cho một trong hai thì không) · lý do từ chối **sống tới UI**
+   (`detail` khớp `/permitted|permission/i`) · **không cascade** (`sales_orders`, `receipts` giữ số thật).
+3. **Falsify ca O** — mutation: wrapper nuốt `PermissionError` thành `return []` (đúng lỗi dễ ship nhất).
+   Chứng minh test **đỏ được**: `RED  O. a PermissionError is swallowed into an empty page (a denial becomes 0)`.
+
+---
+
+## 3. Số thật cuối cùng (chạy trong phiên này)
+
+| Runtime | Kết quả |
+|---|---|
+| **Node** (`npm test`) | **524 — 522 pass, 2 fail** (2 fail là `dsh-*` có từ B0, không liên quan P4) |
+| **Flutter** | **248/248** · `flutter analyze` **0 issue** |
+| **Python** | **62 OK** — `PYTHONPATH=src python3 -m unittest discover -s tests -q` |
+| **Falsify** | p4-ops **15/15 RED** (thêm ca O) · p42 **15/15 RED** · p44 **20/20 RED** · p43 **11/11 RED** — **0 PROBLEM** |
+| Mutation sót trên đĩa | **0** (kiểm bằng grep từng anchor + `if (false)`/`return []` = 0) |
+
+---
+
+## PHỤ LỤC — rà harness TOÀN REPO (cùng ngày, sau khi đóng P4-7)
+
+Yêu cầu: chạy đủ **10/10** harness (c0/c1/c2 · execute-id-types · issue1×2 · p4-ops/p42/p43/p44), tìm
+anchor trôi/ca yếu còn lại. Hai phát hiện:
+
+**A. c2-ocr CHẾT IM — 0/10 ca được kiểm mà không ai hay.** Harness spawn `node --test`
+**không truyền `COPILOT_MOCK_OK=1`** (mà `npm test` đặt) ⇒ 3 test route fail ngay **baseline** ⇒
+harness dừng đúng quy tắc "baseline phải xanh" ⇒ exit trước mọi case. Lần chạy đầu còn bị
+`timeout 240` của tôi kill khi đang baseline (không sót mutation vì chưa áp ca nào).
+Nếu harness này chỉ nhìn `status !== 0` thay vì baseline-check, **10 guard C2 sẽ "được chứng
+minh" trên nền đỏ sẵn**. Sửa: `env: { ...process.env, COPILOT_MOCK_OK: "1" }` như `npm test`
+⇒ chạy lại ⇒ **ALL C2 GUARDS FALSIFIED (10/10)**.
+
+**B. Sentinel 403 bám thêm contract client THẬT.** Grep `node_modules/@casys/mcp-erpnext`
+(pin 3.0.4): client **throw `FrappeAPIError`** khi `!response.ok`, message dạng
+`[FrappeClient] <METHOD> <path> failed: <msg> (HTTP <status>)` — hình thái **throw** của
+sentinel là đúng, nhưng message sentinel là tự chế. Thêm test thứ hai dùng **đúng text thật**
+để regex UI (`/permitted|permission/i`) không chỉ khớp wording mock ⇒ p4-ops **25/25**.
+Bằng chứng vòng thật cùng loại (P4-5: 417 "Trường không được phép" đi đúng đường
+`branch()` → `ERP_UNAVAILABLE`, message giữ nguyên) xác nhận đường throw là đường thật.
+
+| Harness (sau sửa) | Kết quả |
+|---|---|
+| c0 · c1 · c2 · execute-id-types · issue1-mock-optin · issue1-resolver | **ALL FALSIFIED / ALIVE** ✓ |
+| p4-ops-summary · p42 · p43 · p44 | **15/15 · 15/15 · 11/11 · 20/20** ✓ |
+| Mutation sót | **0** (`find . -name '*.falsify-bak'` rỗng; `if (false)`/`return []` = 0) |
+
+**Số sau đợt rà:** Node **525 — 523 pass, 2 fail (dsh từ B0)** · Flutter 248/248 (không đụng) ·
+10/10 harness ALL ALIVE.
+
+**Bài học:** LESSONS `Đợt rà harness toàn repo` (5 bullet) · skill `erpn-verify-first` +2 hàng
+(harness kế thừa env của lệnh test chính thức · sentinel bám contract client thật).
+
+---
+
+## 4. Phát hiện thật trong phiên (4)
+
+**4.1 — Hai anchor falsify bị TRÔI, và dòng tóm tắt trông y hệt "đã pass".**
+Ca **L** (`app_drafts` nuốt lỗi) trôi ở P4-5 khi tôi thêm `"company"` vào field list.
+Ca **F** (guard công ty) trôi ở P4-4 khi tôi chuyển guard vào helper dùng chung `resolveReadCompany()`.
+Cả hai có tên đề bài đúng, chỉ có **đoạn code nó bám vào** là không còn.
+⇒ Chỉ phát hiện được vì harness **in `anchor missing` và tính là PROBLEM**, chứ không `continue` im lặng.
+Đã sửa cả hai (kèm ghi chú ngay tại ca về việc anchor phải bám code). *Ca bị bỏ qua ≈ ca đã pass trong mọi bản tóm tắt.*
+
+**4.2 — "Chưa có test" phải đi tìm cho từng case.** Xem §2.
+
+**4.3 — Lệnh trong handoff P4-6 SAI.** Tôi ghi `PYTHONPATH=src python3 -m pytest tests -q`, nhưng máy
+**không cài pytest** (`No module named pytest`); lệnh đúng của repo là `python3 -m unittest discover -s tests`.
+Nếu phiên sau chép nguyên handoff, nó sẽ báo "suite Python đỏ" **oan** rồi đi tìm bug không tồn tại.
+⇒ Đã sửa cả 2 handoff + ghi LESSONS + **kiểm chứng bằng cách chạy lại đúng lệnh trước khi viết vào docs**.
+
+**4.4 — Case §7.12 "đúng 20 chứng từ" phải ĐẾM.** "Dùng nguyên bộ 20 chứng từ" là một con số ⇒ đếm từ
+fixture (`grep -cE "^  (so|si|pe|gl)\("` = **20**), không tin comment hay trí nhớ.
+
+---
+
+## 5. Docs đã chốt (người dùng + phiên sau đọc được)
+
+| File | Nội dung mới |
+|---|---|
+| `faq.md` | **§10 — Màn `Tóm tắt ngày` đọc thế nào**: từng mục nghĩa gì (bảng nhãn thật) · **3 thứ không được đọc sai** (không có chữ "Doanh thu" — chủ ý; `Lỗi · chưa đọc được mục này (MÃ)` **không phải 0**; `DỮ LIỆU CŨ` = số lần đọc trước) · `Hôm qua` chỉ đổi **bán/thu**, **công nợ luôn hiện tại**, delta **tuyệt đối không %** · bấm chỉ số ⇒ list ≤10 (cũng chỉ đọc) · footer `REAL｜MOCK` đọc trước tiên khi thấy số lạ. **Sửa 2 chỗ đã lỗi thời**: §4.3 và §7 đang nói "tổng hợp theo ngày chưa có" ⇒ nay **đã có ở drawer** (chat thì vẫn chưa) |
+| `features.md` | Trụ D / plan4 V1 vào **Hoàn thành** (kèm bằng chứng + **ranh giới còn lại**: két chỉ READ, không Redis, không tuần/tháng) |
+| `checklist.md` | Section **P4-7** + **ma trận §7 12 dòng** (đây là chỗ tra nhanh "case nào có test nào") |
+| `next.md` | P4-7 + chốt: plan4 V1 khép, việc còn lại **không phải code** (commit · idempotency thật · APK) |
+| `LESSONS_LEARNED.md` | **Đợt P4-7** (4 bài học) |
+| `.agents/skills/erpn-verify-first/SKILL.md` | +2 hàng: anchor trôi / "chưa có test phải đi tìm từng case" |
+| `working.md` | Entry P4-7 |
+
+---
+
+## 6. Trạng thái & việc chờ user
+
+- **plan4 V1: KHÉP** (P4-0 → P4-6 code xong, P4-7 đóng bằng chứng 12/12).
+- **CHƯA commit** — hàng chờ **P4-1→P4-6**; đây là vùng **đọc SỐ TIỀN** ⇒ **AI không tự ký duyệt**, chờ user.
+  Máy này **không có git** (`fatal: not a git repository`) nên chưa commit được kể cả khi đã được duyệt.
+  ⚠️ Khi repo có git: **đừng push thô** (history không chung gốc + bản local thiếu file ⇒ push cả cây sẽ XOÁ
+  file trên branch duy nhất).
+- **Còn treo (không thuộc V1):** B2/B3/B4 idempotency trên site thật (field đã có ⇒ giờ mới chứng minh được,
+  cần user cho phép chạy ghi thật) · APK debug (user đã chốt "để sau").
+
+================================================================================
+PHỤ LỤC 2026-09-22 — plan5 (P5-0 → P5-4) + push lần 2
+================================================================================
+Bằng chứng đầy đủ từng phase nằm ở .plan/result-p5-0.md … result-p5-4.md (.plan/ bị
+gitignore ⇒ KHÔNG commit; đây là bản tóm tắt sống cùng repo).
+
+- P5-0 ĐIỀU TRA 3 BUG: bug #2 (auto-send không tự gửi) và #3 (draft dù bật nộp thật)
+  ĐÃ ĐÓNG ở tầng logic (voice_input_test thêm 3 test biên; payment-write 25/25).
+  /execute timeout KHÔNG tự reconcile nhưng AN TOÀN (retry_same_command_id + 4 lớp
+  chống trùng) ⇒ không phải P0.
+- P5-1 KHÔNG thực thi (tiền đề prompt sai — file nó Depends vào kết luận ngược lại).
+  Trong lúc verify tìm ra bug THẬT: 5 test P4-6 hard-code ngày ⇒ đỏ khi lịch sang ngày
+  mới dù không dòng code nào đổi (đã sửa bằng helper dùng cùng thuật toán ngày VN).
+- P5-2 submit_error_kind (permission | period_locked | workflow | other) + posting_date
+  đóng băng vào snapshot lúc PROPOSE. REVIEW phát hiện chính P5-2 mở 1 lỗ: giá trị ngày
+  do CLIENT gửi lên ở /execute không ai validate ⇒ probe chứng minh ghi được ngày lùi 5
+  tháng; USER CHỐT "sửa ngay" ⇒ thêm readPostingDate() fail-closed (dạng ngày · ngày có
+  thật · cửa sổ ±1 ngày) đặt TRƯỚC setReference ⇒ probe lại = BỊ TỪ CHỐI.
+- P5-3 badge NHÁP/ĐÃ NỘP + gợi ý theo loại lỗi + copy setting rõ OFF/ON (storage key
+  giữ nguyên). USER CHỐT đổi glyph dòng kết quả theo cùng trạng thái (⚠️ khi submit bị
+  từ chối) vì ✅ vô điều kiện mâu thuẫn với badge vàng.
+- P5-4 voice-first layout THỨ HAI: OFF giữ nguyên; ON mic CTA cùng vùng input bar, ô
+  nhập chữ vẫn luôn dùng được, thêm Huỷ (bỏ câu vừa nói — khác tap-to-dừng giữ
+  transcript), cap ghi 25s, VAD 2.2s đọc từ AppConstants (trước là literal 30s/3s).
+  Bất biến giữ nguyên: tự gửi chỉ đi qua onSend() → /ask, không tự xác nhận proposal.
+
+SỐ THẬT (2026-09-22): Flutter 263/263 + analyze 0 · node --test 537 (535 pass, 2 fail
+dsh có từ B0) · falsify 10/10 ALL ALIVE (p52 9/9 RED) · mutation tay cho UI guard 5/5 bắt
+đỏ đúng test, restore sha256 byte-identical.
+
+PUSH LẦN 2: commit 53e1851 (merge --allow-unrelated-histories -X theirs, KHÔNG force;
+không xoá file nào của remote) → CI android-debug-apk success, run 35688782230,
+artifact erpn-chat-debug-apk 81.4 MB.
+
+BẢO MẬT (chặn trước khi lên GitHub, chưa từng ở remote):
+  .chats/sess1.md chứa TOKEN GITHUB THẬT · .review/chat1..7.md + dsh_test.md (8
+  transcript chat) · .gemini/** (config CLI) · initp (script tạo .gitignore).
+  ⇒ .gitignore chặn .chats/.review/.gemini/.opencode/initp; .env sửa 664 → 600.
+  VIỆC CỦA USER: revoke token ghp_…7aO (đã lộ qua chat 2 lần) rồi dán token mới vào
+  .env, hoặc bật deploy key WRITE để bỏ hẳn PAT.

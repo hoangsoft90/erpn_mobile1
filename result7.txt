@@ -1,0 +1,127 @@
+========================================================================
+RESULT 7 — PHASE 3: FLUTTER CHAT MVP (apps/mobile) + HTTP /ask WRAPPER
+Timestamp: 2026-09-14 04:27
+Env: Linux VPS, Flutter 3.47.2 stable / Dart 3.13.2, Node v24, Python 3.12.
+Repo erpn_mobile1, branch change/flutter-chat-mvp (2 commits gốc: 33f9dc0,
+0ac8e61). OpenSpec change: openspec/changes/flutter-chat-mvp/ (valid 4/4).
+========================================================================
+
+== 1. SỐ LIỆU VERIFY (lệnh thật, không claim bằng lời) ==
+
+Node (mcp-erpnext):     node --test → tests 36 / pass 36 / fail 0
+                        (34 cũ + 2 test mới của http-ask: health+happy+error
+                        contracts, CLI ready-line)
+Python (NLP):           PYTHONPATH=src python3 -m unittest discover -s tests
+                        → Ran 58 tests / OK (money corpus 259/259 nguyên vẹn)
+Flutter (apps/mobile):  flutter analyze → No issues found!
+                        flutter test → +13: All tests passed!
+                        (9 unit model/client + 4 widget test)
+Git:                    branch change/flutter-chat-mvp, chưa commit Phase 3
+                        (chờ UI-checkpoint user duyệt — code chạm hiển thị
+                        số tiền nên không tự commit)
+
+== 2. ĐÃ XÂY ==
+
+2a. HTTP wrapper (Task 1):
+- mcp-erpnext/src/http-ask.mjs — POST /ask {text} → answerQuestion() →
+  {ok:true,result}; GET /health; 400/5xx trả JSON sạch không leak stack;
+  bind 127.0.0.1:8788 mặc định; CORS permissive cố ý cho MVP read-only
+  (Phase 5 gateway sẽ sở hữu origin policy thật).
+- mcp-erpnext/test/http-ask.test.mjs — spawn thật: health, happy path,
+  400 thiếu text, NLP service chết → 5xx JSON sạch, CLI ready-line.
+
+2b. Flutter app (Task 2), theo blueprint architecture skill (Riverpod
+codegen + GoRouter + Feature-First) + design tokens (openspec/config.yaml):
+- apps/mobile/lib/core/constants/app_constants.dart — base URL mặc định
+  http://127.0.0.1:8788, key lịch sử versioned chat_history_v1, timeout 15s.
+- lib/app/theme/app_theme.dart — Material 3 seed #6750A4, spacing/radius
+  tokens; widget KHÔNG dùng số magic.
+- lib/app/providers.dart — AppEnvironment (dart-define COPILOT_BASE_URL),
+  dioProvider (timeout 15s), copilotApiClientProvider,
+  sharedPreferencesProvider (override ở main; null = storage unavailable
+  nhưng app vẫn chạy — fail-safe).
+- lib/app/router/app_router.dart — GoRouter 1 route /chat (name: chat).
+- lib/features/chat/data/chat_models.dart — AskResult.fromJson xử lý ĐỦ 3
+  shape answer thật của answerQuestion(): null / String / List<String>
+  (inventory → bullet lines); ChatTurn lưu history JSON roundtrip.
+- lib/features/chat/data/copilot_api_client.dart — dio POST /ask; lỗi map
+  sang CopilotNetwork/Timeout/ServerException với message tiếng Việt;
+  4xx/5xx surface đúng error JSON của server thay vì message chung chung.
+- lib/features/chat/data/chat_history_service.dart — SharedPreferences,
+  load/save/clear swallow lỗi (history là convenience, không phải data of
+  record — mất lịch sử không crash app).
+- lib/features/chat/application/chat_controller.dart — @riverpod
+  ChatController: build() nạp history; send() trả bool (true = clear input,
+  false = GIỮ text + set lastError cho SnackBar); clearHistory().
+- lib/features/chat/presentation/widgets/chat_bubble.dart — 1 turn = CẶP
+  bubble (hỏi phải / đáp trái), bubble lỗi dùng errorContainer.
+- lib/features/chat/presentation/screens/chat_screen.dart — ListView lịch
+  sử, input + nút gửi, LinearProgressIndicator khi chờ, input disabled khi
+  đang chờ, SnackBar lỗi (không dialog chặn), footer COPILOT_BASE_URL,
+  nút xóa lịch sử có dialog xác nhận, empty-state gợi ý ví dụ.
+- tests: test/chat_data_test.dart (9), test/chat_controller_test.dart (4).
+
+2c. CI (Task 3):
+- .github/workflows/android-debug-apk.yml — push/PR paths apps/mobile/**,
+  workflow_dispatch; Java 21 + Flutter stable (subosito/flutter-action,
+  cache); pub get → analyze --fatal-infos → test → build apk --debug →
+  upload artifact erpn-chat-debug-apk; permissions contents:read.
+- Validate YAML bằng python yaml.safe_load — OK.
+- KHÔNG build APK trên VPS (quyết định user 2026-09-14).
+
+== 3. BUG THẬT LOOP CHẠY THẬT BẮT ĐƯỢC (đã sửa) ==
+
+1. ChatBubble cũ vẽ 1 bubble/turn và chỉ hiện question khi ok=true →
+   CÂU TRẢ LỜI KHÔNG BAO GIỜ HIỆN. Debug bằng widget test in toàn bộ Text
+   trong tree mới thấy. Sửa: ChatBubble render CẶP bubble hỏi+đáp.
+2. ChatTurn.fromAskResult lấy question từ server echo — server có thể trả
+   question khác text user gõ → sửa thành typedQuestion từ caller.
+3. ChatTurn.error là dead code (controller không tạo turn khi lỗi request
+   — lỗi chỉ hiện SnackBar theo tasks.md 2.5) → XÓA hẳn, không giữ code
+   chết (Ponytail).
+4. ENOSPC tạm thời trên VPS trong lúc flutter test đầu tiên → build assets
+   hỏng (impellerc/ink_sparkle.frag), gây shader exception ảo trong test;
+   df sau đó báo 52G trống → flutter clean + pub get là hết. Bài học:
+   shader exception trong flutter test trên VPS → nghi build cache hỏng
+   do ENOSPC, không vội sửa code.
+
+== 4. SKILLS ĐÃ CÀI (flutter/agent-plugins, repo chính thức Flutter team) ==
+
+7 skill theo lựa chọn user: flutter-apply-architecture-best-practices,
+flutter-setup-declarative-routing, flutter-add-widget-test,
+flutter-implement-json-serialization, flutter-fix-layout-issues,
+dart-add-unit-test, dart-run-static-analysis.
+→ .agents/skills/ + skills-lock.json. Điều kiện tiên quyết của skill
+flutter-coding ĐÃ THỎA.
+
+== 5. QUYẾT ĐỊNH THIẾT KẾ ==
+
+- Python HTTP bridge dùng stdlib http.server, KHÔNG thêm Flask dù máy có
+  cài — 2 endpoint không đáng đổi 1 dependency (user cho phép "nếu cần",
+  thực tế không cần).
+- shared_preferences null-safe: prefs load fail → app vẫn chạy, chỉ mất
+  persist (fail-safe đúng tasks.md 2.4).
+- CORS permissive trên /ask: cố ý cho MVP read-only; Phase 5 gateway sẽ
+  siết lại. Đã ghi chú trong code.
+- Lịch sử KHÔNG lưu raw JSON ERPNext — chỉ question/answer/route/ts.
+
+== 6. CHỜ USER ==
+
+1. UI-checkpoint: duyệt mô tả UI (không chạy được desktop trên VPS — thiếu
+   clang/cmake/ninja/libgtk-3-dev; widget test đã verify tree + action).
+   Screenshot thật sẽ có sau khi build APK trên GH Actions (cần user cấp
+   GitHub repo để push).
+2. Sau duyệt: commit Phase 3 trên branch change/flutter-chat-mvp, rồi
+   merge/sync OpenSpec change khi OK.
+3. Nhắc lại: ERPNext API key/secret đã đi qua plain chat — cần rotate.
+
+== 7. HẠN CHẾ ĐÃ BIẾT ==
+
+- Chưa chạy app thật trên device (VPS không có UI) — widget test là lớp
+  verify duy nhất tới lúc này.
+- Footer base URL hiển thị 127.0.0.1 mặc định — trên máy thật phải
+  --dart-define=COPILOT_BASE_URL=http://<LAN-IP>:8788 và service phải
+  chạy --host 0.0.0.0 (operator decision, đã ghi trong http-ask.mjs).
+- flutter analyze --fatal-infos trong CI sẽ chặt hơn local (info cũng
+  fail) — hiện 0 issue nên không chặn, nhưng lint mới trong tương lai
+  có thể đỏ CI.

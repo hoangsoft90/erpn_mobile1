@@ -1,0 +1,2104 @@
+{
+  "schema": "erpn.capability-contract/v1",
+  "version": 1,
+  "comment": "P0 Capability Contract (plan2_final §2 D5, §5-8, §18, §24.2). SINGLE SOURCE OF TRUTH: the router reads its trigger table from here, the skill layer reads required entities, the Safety Gateway reads risk/amount/execution policy, authorization reads permissions+scope, and the UI reads confirmation requirements. Do not hardcode the same policy in another module.",
+  "defaults": {
+    "currency": "VND",
+    "allowed_currencies": [
+      "VND",
+      "USD"
+    ],
+    "amount_precision": {
+      "VND": 0,
+      "USD": 2
+    },
+    "user_timezone": "Asia/Ho_Chi_Minh",
+    "entity_policy": {
+      "comment": "plan2_final §4.3 — policy theo resolution state, KHÔNG suy diễn ở code. READ mặc định: fuzzy single được auto (READ LOW), ambiguous thì hỏi. WRITE tự khai riêng (xem payment.create).",
+      "EXACT_MATCH": {
+        "auto_select": true,
+        "require_picker": false,
+        "block": false
+      },
+      "FUZZY_SINGLE_MATCH": {
+        "auto_select": true,
+        "require_picker": false,
+        "block": false
+      },
+      "AMBIGUOUS_MATCH": {
+        "auto_select": false,
+        "require_picker": true,
+        "block": false
+      },
+      "NO_MATCH": {
+        "auto_select": false,
+        "require_picker": false,
+        "block": false
+      }
+    },
+    "uom_policy": {
+      "comment": "B1 (plan3_review3 §B.3) — 'không quy đổi ẩn'. Tên đơn vị LUÔN lấy từ UOM doctype của ERPNext, hệ số LUÔN lấy từ UOM Conversion Factor; chỉ hệ số TRỰC TIẾP (đơn vị người nói → stock_uom của mặt hàng) mới được áp, không tự nghịch đảo / nối chuỗi. Đo thật 2026-09-20: Item.uom và UOM Conversion Factor.item_code đều HTTP 417 ⇒ hệ số là GLOBAL, không theo mặt hàng; và site KHÔNG có Kg→Bao / Tấn→Bao.",
+      "unknown_uom": "ask",
+      "ambiguous_uom": "ask",
+      "missing_factor": "ask",
+      "ambiguous_uoms": [
+        "xe",
+        "thung",
+        "bo",
+        "cuon",
+        "tam",
+        "pallet",
+        "lo"
+      ],
+      "default_uom_source": "item",
+      "always_show_conversion": true,
+      "show_factor_scope_warning": true,
+      "min_result_qty": 0.1,
+      "allow_inverse_factor": false,
+      "allow_two_hop_chain": false
+    },
+    "execution_states": {
+      "comment": "plan2_final §10.1 + §10.2 — state machine tối thiểu implement được; transition hợp lệ được enforce ở code (execution-state.mjs) và test.",
+      "states": [
+        "PROPOSED",
+        "WAITING_CONFIRM",
+        "CONFIRMED",
+        "EXECUTING",
+        "RETRYING",
+        "RECONCILING",
+        "SUCCEEDED",
+        "VERIFIED",
+        "FAILED",
+        "CANCELLED"
+      ],
+      "terminal": [
+        "VERIFIED",
+        "FAILED",
+        "CANCELLED"
+      ],
+      "unknown_execution_state": "RECONCILING"
+    }
+  },
+  "operational_controls": {
+    "kill_switch": {
+      "levels": [
+        "global_read_only",
+        "disable_capability",
+        "disable_user",
+        "disable_llm"
+      ],
+      "env": "COPILOT_GLOBAL_READ_ONLY",
+      "flag_file": "control/read-only.flag",
+      "audit": "log every toggle"
+    },
+    "rate_limit": {
+      "per_user": {
+        "read": "30/minute",
+        "write_proposal": "10/minute",
+        "write_execute": "5/minute"
+      },
+      "per_capability": {
+        "payment.create": "20/hour"
+      }
+    }
+  },
+  "ui_screens": {
+    "comment": "A1 UX-READ drill-down (plan3 §4). The CLIENT never decides which screen to open: /ask answers with a structured `ui` block built from here, and POST /read/list refuses any screen that is not declared here. `capability` is the READ capability whose skill composes the data (authorization is checked against it); `offered_by` lists the capabilities whose answer may show the button.",
+    "customer_account": {
+      "title": "Công nợ & chứng từ",
+      "capability": "customer.balance",
+      "offered_by": [
+        "customer.balance",
+        "invoice.lookup"
+      ],
+      "entity": "customer",
+      "list": "unpaid_documents",
+      "limit": {
+        "default": 5,
+        "min": 5,
+        "max": 10
+      },
+      "comment": "Màn 1 (MVP): công nợ tóm tắt + danh sách chứng từ chưa thanh toán (số, ngày, còn lại). READ-ONLY — there is no write capability behind this screen."
+    }
+  },
+  "drill_screens": {
+    "comment": "P4-4 drill-down theo NGÀY (plan4_final §4.4). `day_scoped: true` (D4) = màn đọc THEO NGÀY: `title` ở đây là tên ngày-trung-tính, server ghép thêm từ ngày thực đọc (xem drill-views.mjs `drillDayWord`) — màn không `day_scoped` giữ nguyên `title`. Khác `ui_screens` ở chỗ các màn này KHÔNG gắn với một entity khách hàng: chúng là những id CỐ ĐỊNH cho các chỉ số của màn Tóm tắt ngày, nên client gửi id chứ KHÔNG BAO GIỜ gửi câu chữ (plan4 §4.4: cấm inject free-text vào classifier làm đường chính). GET|POST /read/drill từ chối mọi id không khai ở đây. `capability` = capability READ quyết định QUYỀN đọc (authorize() chạy theo nó TRƯỚC khi chạm ERPNext) — chọn theo đúng dữ liệu màn đó đọc, không phải 'đại diện': sales_orders_today→sales.summary, invoices_today→invoice.lookup, receipts_today→payment.history, overdue_customers→customer.balance, app_drafts_today→ops.daily_summary (block nháp app của chính aggregate đó). Giới hạn 5–10 do contract quyết (clamp server-side), list không bao giờ là 'toàn bộ' mà không nói: response kèm total_documents + truncated.",
+    "sales_orders_today": {
+      "title": "Đơn hàng",
+      "day_scoped": true,
+      "capability": "sales.summary",
+      "limit": { "default": 10, "min": 5, "max": 10 },
+      "comment": "§4.4 drill.sales_orders_today — SO của ngày, TÁCH submitted vs draft (§10.1): dòng nháp không bao giờ đội lốt dòng đã ghi. `day_scoped` + title NGÀY-TRUNG-TÍNH: D4 — server tự ghép từ ngày nó THỰC ĐỌC (hôm nay / hôm qua / ngày YYYY-MM-DD), nên tiêu đề không bao giờ nói một ngày khác với danh sách đang hiện."
+    },
+    "invoices_today": {
+      "title": "Hóa đơn đã xuất",
+      "day_scoped": true,
+      "capability": "invoice.lookup",
+      "limit": { "default": 10, "min": 5, "max": 10 },
+      "comment": "§4.4 drill.invoices_today — CHỈ submitted, không cancelled, không is_return (đúng tập mà block sales_invoices cộng). `day_scoped` như sales_orders_today (D4)."
+    },
+    "receipts_today": {
+      "title": "Phiếu thu",
+      "day_scoped": true,
+      "capability": "payment.history",
+      "limit": { "default": 10, "min": 5, "max": 10 },
+      "comment": "§4.4 drill.receipts_today — PE Receive của ngày, nói rõ theo HĐ hay ứng trước (cùng cách chia với block receipts). `day_scoped` như sales_orders_today (D4)."
+    },
+    "overdue_customers": {
+      "title": "Khách quá hạn",
+      "capability": "customer.balance",
+      "limit": { "default": 10, "min": 5, "max": 10 },
+      "comment": "§4.4 drill.overdue_customers — xếp theo số quá hạn giảm dần trên CÙNG tập hóa đơn mà block receivables.overdue_total cộng ra."
+    },
+    "app_drafts_today": {
+      "title": "Nháp app hôm nay",
+      "capability": "ops.daily_summary",
+      "limit": { "default": 10, "min": 5, "max": 10 },
+      "comment": "§4.4 drill.app_drafts_today — chỉ chứng từ do copilot tạo (custom_ai_action_id set), không phải mọi draft trên site. D3 (§3.4): nay là AGGREGATE nhiều section (PE/SO/PO + Quotation) trong MỘT response, và cũng phục vụ tại alias `/read/app-drafts` (cùng một code path — id PIN trong route, client không đổi được). Một doctype không đọc được ⇒ section đó `ok:false` + `partial:true`, các section khác VẪN trả (loadedPartial) — không 500 cả màn, không 0 giả. Trùng `custom_ai_action_id` xuyên doctype ⇒ SERVER chọn canonical (chứng từ SỚM NHẤT của hành động) + đếm `duplicates_dropped`; client không tự chọn."
+    },
+    "receivable_customers": {
+      "title": "Công nợ khách hàng",
+      "capability": "customer.balance",
+      "limit": { "default": 10, "min": 5, "max": 10 },
+      "comment": "D1 (drawer-plan-final §3.1) — toàn-công ty: MỌI khách còn nợ (SI docstatus=1, outstanding>0, không cancelled), không lọc ngày. SỐ = GL/ERPNext outstanding ĐÃ GHI NHẬN, KHÔNG trừ Draft PE (CẤM §9); hint phiếu nháp đi dạng dòng phụ optional. Sort outstanding DESC, secondary tên."
+    },
+    "overdue_top": {
+      "title": "Nợ quá hạn / Nợ lâu",
+      "capability": "customer.balance",
+      "limit": { "default": 10, "min": 5, "max": 10 },
+      "comment": "D1 (drawer-plan-final §3.1) — cùng tập SI quá hạn với overdue_customers nhưng SORT days_overdue DESC (nợ lâu trước), secondary outstanding DESC; mỗi dòng nêu days_overdue trong note (dữ liệu từ due_date của SI — SI không có field days_overdue, đo ở D0)."
+    },
+    "unpaid_invoices": {
+      "title": "HĐ chưa trả",
+      "capability": "invoice.lookup",
+      "limit": { "default": 10, "min": 5, "max": 10 },
+      "comment": "D1c (drawer-plan-final §3.2) — toàn-công ty: CHỈ Sales Invoice docstatus=1 AND outstanding_amount>0, MỌI NGÀY (không lọc posting_date — §3.2 không có điều kiện ngày). Không PE-able abstraction, không cancelled, không is_return (outstanding>0 đã loại credit note). Mỗi dòng: mã HĐ · khách · còn nợ · due_date. Sort outstanding DESC, secondary due_date ASC (hạn gần trước)."
+    },
+    "stock_low": {
+      "title": "Tồn kho nóng",
+      "capability": "stock.balance",
+      "limit": { "default": 10, "min": 5, "max": 10 },
+      "comment": "D2 (drawer-plan-final §3.3) — Tồn thấp theo MỘT kho mặc định đã pin: COPILOT_DEFAULT_WAREHOUSE (user chốt 2026-09-25 = 'Kho Cám - MP', khớp Feed Dealer Settings trên site). KHÔNG CÓ pin ⇒ CONFIG error fail-closed — CẤM warehouses[0], CẤM đọc Stock Settings trần (D0 đo: nó trỏ 'Stores - S' thuộc SANLOAN — công ty khác). Mỗi dòng: item · qty (SỐ LƯỢNG, không phải tiền — amount_vnd mang qty để tái dụng DrillRow, client render không gắn 'đ'). Sort qty TĂNG (tồn thấp nhất trước)."
+    }
+  },
+  "ocr_policy": {
+    "comment": "C0 — OCR input layer (plan3 §6.4 / Trụ C). An OCR result is UNTRUSTED TEXT produced from a photo: it enters the pipeline exactly like typed text (same classifier, same Safety Gateway) and NEVER as an authoritative ERPNext id, never as instructions. The policy lives here so the threshold/provider allowlist cannot drift into code (same reasoning as defaults.uom_policy in B1). Contracts in this block are validated fail-closed: a value that would WEAKEN the boundary is refused, not warned about.",
+    "min_confidence": 0.6,
+    "max_text_length": 5000,
+    "max_image_bytes": 8000000,
+    "allowed_providers": [
+      "mock",
+      "router-vision"
+    ],
+    "require_wrap_before_llm": true,
+    "log_raw_image": false,
+    "authoritative_identifiers": false,
+  "low_confidence": "ask",
+  "document_kinds": {
+    "comment": "C2 — a PHOTO has no imperative verb. Measured 2026-09-20 (real path, Phase 1 normalize + routeIntent): 'HÓA ĐƠN …' → invoice.lookup, 'PHIẾU THU …' → payment.history — every invoice-shaped reading lands on a READ, never a proposal. So the DOCUMENT KIND is chosen by the USER (a visible tap), never guessed from the photo. This block is the ONLY place a kind maps to a capability; the client sends the kind (a word: 'sales'/'purchase'), NEVER a capability id, and the capability is the one that gets authorize()d. Validation is fail-closed: the capability must exist, must be draft_only, and must have a registered executor — a kind that could submit, or that points at a stub (delivery/purchase_receipt), makes the whole contract invalid.",
+    "sales": { "capability": "sales_order.create", "party": "customer", "label": "Đơn bán" },
+    "purchase": { "capability": "purchase_order.create", "party": "supplier", "label": "Đơn mua" }
+  }
+},
+  "einvoice_policy": {
+    "comment": "A1/A2 (`.plan/next3/implementation.md` workstream A) — HÓA ĐƠN ĐIỆN TỬ XML, the file input channel. Same stance as ocr_policy: the file is UNTRUSTED DATA that enters the ONE existing pipeline (form \u2192 composed sentence \u2192 capability \u2192 proposal \u2192 confirm \u2192 Safety Gateway \u2192 DRAFT) and never an authoritative ERPNext id, never instructions, never a second write path. Numbers are read STRICTLY in the tax authority's own format ('.' is the decimal separator, no thousands separator): '1.234.567' is refused, not rescaled \u2014 a lenient number parser is a silent \u00d71000 in a money system.\n\nmax_xml_bytes is deliberately BELOW the gateway's 1 MB HTTP body cap (`MAX_BODY` in http-ask.mjs) so the refusal always comes from this policy's own code with a reason the user can act on, rather than from an opaque transport error. A single e-invoice is a few hundred KB at most.\n\ndocument_kinds here is NOT a second mapping: it lists which of ocr_policy.document_kinds this channel offers, and validation refuses a name that mapping does not declare, so the kind \u2192 capability table stays in exactly one place.",
+    "max_xml_bytes": 950000,
+    "max_pdf_bytes": 650000,
+    "max_inflated_bytes": 8000000,
+    "pdf_reader": "text_layer_only",
+    "comment_pdf": "A3 (2026-09-25) — HÓA ĐƠN PDF CÓ LỚP CHỮ, đọc bằng `src/einvoice/einvoice-pdf.mjs` và ra ĐÚNG object slots như kênh XML, nên vẫn chỉ có MỘT pipeline (form → câu đã sửa → /ask → capability → proposal → confirm → Safety Gateway → NHÁP). PDF KHÔNG có đường ghi riêng, KHÔNG auto-create master, KHÔNG submit.\n\nmax_pdf_bytes nhỏ hơn max_xml_bytes là SỐ HỌC, không phải sở thích: PDF đi trong JSON dạng base64 nên phình 4/3 (650.000 byte → ~867.000 ký tự), vẫn dưới trần body 1 MB của gateway (MAX_BODY) — nên từ chối LUÔN đến từ policy này kèm câu tiếng Việt, không bao giờ là lỗi transport khó hiểu. Một hoá đơn PDF thật thường 50-300 KB.\n\npdf_reader=text_layer_only: chỉ đọc chữ CÓ SẴN trong file. PDF scan/ảnh KHÔNG được đoán — trả mã riêng (EINVOICE_PDF_NO_TEXT) và chỉ người dùng sang đường camera/OCR (C2) hoặc nhập tay. Không rasterize, không OCR lại trong luồng này.\n\nSố trên hoá đơn in GIẤY theo quy ước ngược với XML: '.' là phân cách nghìn ('2.950.000'), ',' là thập phân ('10,5'). Vì vậy KHÔNG dùng chung `strictNumber` của XML (một reader dùng chung sẽ âm thầm sai ở một trong hai kênh): PDF có reader riêng, và chỗ mơ hồ ('1.234') được giải quyết bằng CHÍNH phép nhân của dòng đó (qty × đơn giá = thành tiền), không giải quyết bằng cách chọn theo cảm giác.\n\nmax_inflated_bytes (M1, 2026-09-25) — trần cho MỘT stream SAU KHI giải nén, và nó KHÁC HOÀN TOÀN với max_pdf_bytes (trần cho file người dùng gửi). Một trần trên input nén KHÔNG phải trần trên output: đo thật trước khi thêm biến này — một stream 106.884 byte (dưới trần file) giải nén ra 31.457.284 byte (294×), `inflateSync` tốn 4,3 s và RSS +541 MB. `max_lines` không cứu được vì nó chỉ bắn SAU khi toàn bộ dòng đã được dựng xong. Nay `inflateSync` được gọi với `maxOutputLength` nên zlib DỪNG GIỮA chừng và trả mã riêng EINVOICE_PDF_INFLATED_TOO_LARGE (413) — tách khỏi EINVOICE_PDF_TOO_LARGE (cũng 413) vì hai cái cần hai lời khuyên khác nhau: \"gửi file nhỏ hơn\" so với \"file này không phải hoá đơn thông thường\". 8.000.000 = khoảng 12× trần file nén, thấp hơn rất nhiều so với 294× của một file bomb, và cao hơn hàng chục lần lớp chữ của một hoá đơn 90 dòng.",
+    "max_lines": 200,
+    "require_untrusted_sanitize": true,
+    "authoritative_identifiers": false,
+    "source": "einvoice_xml",
+    "document_kinds": [
+      "purchase"
+    ]
+  },
+  "routing": [
+    {
+      "group": "customer_create_write",
+      "keywords": [
+        "thêm khách",
+        "them khach",
+        "tạo khách",
+        "tao khach",
+        "thêm khách hàng",
+        "tạo khách hàng",
+        "khách mới"
+      ],
+      "startsWith": true,
+      "notIf": "công nợ|cong no|còn nợ|bao nhiêu|bao nhieu|mấy|may |xem|kiểm|kiem |tình trạng|tinh trang|\\?",
+      "capability_default": "customer.create",
+      "comment": "M1 (2026-09-23) — TẠO KHÁCH MỚI = Customer record THẬT (Customer không có nháp; policy default §5 M1-spec). PHẢI đứng trước nhóm customer (BROAD, keyword SUBSTRING 'khách'): 'thêm khách chị Hoa' mở đầu bằng mệnh lệnh tạo, không phải câu hỏi công nợ. startsWith giữ đúng luồng: câu hỏi 'khách mới công nợ bao nhiêu' vẫn rơi đường ĐỌC nhờ notIf. KHÔNG auto-create từ OCR/XML/LLM — chỉ có đề xuất + nút xác nhận."
+    },
+    {
+      "group": "sales_return_write",
+      "keywords": [
+        "trả hàng",
+        "khách trả",
+        "tra hang",
+        "khach tra",
+        "trả lại hàng",
+        "bán trả lại"
+      ],
+      "startsWith": true,
+      "notIf": "bao nhiêu|bao nhieu|mấy|may |lịch sử|lich su|đã trả hàng|da tra hang|xem|kiểm|kiem |tình trạng|tinh trang|\\?",
+      "capability_default": "sales_return.create",
+      "comment": "P9-F (2026-09-23) — KHÁCH TRẢ HÀNG = Sales Invoice NHÁP is_return=1 (Credit Note nháp). §0 ĐO THẬT trước khi thêm nhóm: 'khách trả lại 1 bao cám heo' · 'trả hàng cho chị Lan …' · 'trả 1 bao …' đều rơi vào nhóm payment ĐỌC (keyword SUBSTRING 'trả', capabilities.json payment group) ⇒ mệnh lệnh trả hàng bị trả lời bằng LỊCH SỬ THU/CHI; 'trả hàng hóa đơn …' rơi vào sales ĐỌC ('hóa đơn') ⇒ bị trả lời bằng danh sách hoá đơn (cùng lớp lỗi B4/A1/P9-D/P9-E đã đóng). NHÓM NÀY PHẢI ĐỨNG TRƯỚC payment_write (mà payment_write đứng trước payment) — startsWith: mệnh lệnh phải MỞ ĐẦU bằng cụm 'trả hàng'/'khách trả', nên 'trả tiền NCC …' (bắt đầu bằng 'trả tiền') và 'chi trả …' KHÔNG bị giành mất; notIf: câu HỎI lịch sử trả hàng giữ nguyên đường ĐỌC. Phạm vi phiên: return_against = Sales Invoice ĐÃ SUBMIT (user chốt 2026-09-23); DN-return và purchase return KHÔNG có trong phiên này."
+    },
+    {
+      "group": "stock_adjustment_write",
+      "keywords": [
+        "xuất hủy",
+        "xuất huỷ",
+        "xuất bỏ",
+        "hàng hỏng",
+        "hàng hư",
+        "hàng bị hỏng",
+        "báo hỏng",
+        "hủy hàng hỏng",
+        "huỷ hàng hỏng"
+      ],
+      "startsWith": true,
+      "notIf": "bao nhiêu|bao nhieu|mấy|may |chưa|chua |xem|kiểm|kiem |tình trạng|tinh trang|không|khong |dịch|\\?",
+      "capability_default": "stock.adjustment",
+      "comment": "P9-E (2026-09-23) — XUẤT HỦY hàng hỏng = Stock Entry Material Issue NHÁP. §0 ĐO THẬT (Phase 1 normalize + routeIntent thật, .plan/probe-p9e-routing.mjs) TRƯỚC khi thêm nhóm này: 'xuất hủy 5 bao cám heo' · 'hủy 5 bao cám heo bị ẩm' · 'huỷ hàng hỏng 3 bao cám gà' đều rơi vào nhóm `document_delete` (capability document.delete, FORBIDDEN_IN_AI_PATH — forbidden check chạy TRƯỚC stub check ở copilot-server:546) ⇒ mệnh lệnh xuất hủy bị trả lời bằng một lời TỪ CHỐI của nhóm XOÁ CHỨNG TỪ, không có đường nào cho cửa hàng; 'hàng hỏng 2 bao …' · 'báo hỏng 4 bao …' · 'xuất bỏ 10kg …' thì rơi vào `inventory` (stock.balance ĐỌC) ⇒ mệnh lệnh bị trả lời bằng một con số TỒN KHO (đúng lớp lỗi B4/A1/P9-D đã đóng cho 'nhập kho'/'giao'/'hóa đơn'). VÌ VẬY NHÓM NÀY ĐỨNG TRƯỚC `document_delete`: nhóm đó dùng keyword SUBSTRING ('hủy'/'huỷ') và KHÔNG có startsWith nên `notIf` của nó không được áp (luật đã đo ở B4) — mọi câu chứa chữ 'hủy' đều bị nó bắt trước. Từ khóa ở đây là CỤM GHÉP ('xuất hủy'/'xuất bỏ'/'hàng hỏng'/'hủy hàng hỏng'…), KHÔNG có 'hủy'/'huỷ' trần ⇒ lệnh xoá/huỷ CHỨNG TỪ thật ('xóa hoá đơn …', 'hủy đơn …') vẫn rơi vào document_delete như cũ, không bị nhóm này giành mất. startsWith: mệnh lệnh phải MỞ ĐẦU bằng cụm đó. notIf: câu HỎI ('hàng hỏng tháng này bao nhiêu' — đo được đang là inventory READ) giữ nguyên hành vi ĐỌC cũ, KHÔNG mở card HIGH; CỐ Ý KHÔNG có 'đã' trong notIf ('xuất hủy 5 bao cám đã hư' là mệnh lệnh hợp lệ — P9-D đã mắc đúng lỗi này với 'đã giao')."
+    },
+    {
+      "group": "document_delete",
+      "forbidden": true,
+      "keywords": [
+        "xóa",
+        "xoá",
+        "huỷ",
+        "hủy",
+        "delete",
+        "remove",
+        "bỏ khoản"
+      ],
+      "capability_default": "document.delete",
+      "comment": "plan2_final §8: document.delete is FORBIDDEN_IN_AI_PATH. Declared so the contract can REFUSE it explicitly instead of silently misrouting it into a READ group."
+    },
+    {
+      "group": "payment_write",
+      "keywords": [
+        "payment",
+        "chi "
+      ],
+      "startsWith": true,
+      "notIf": "bao nhiêu|bao nhieu|mấy|may |gần nhất|gan nhat|mới nhất|moi nhat|chi tiết|chi nhánh|\\?",
+      "capability_default": "payment.create",
+      "comment": "Phase 7b: a collect-money COMMAND starts with the canonical verb (Phase 1 rewrites thu tiền/trả tiền/thanh toán -> payment). Sentence-start anchor + question deny-list; a misrouted write only ever shows a HIGH card. P9-C adds 'chi ' so a PAY-OUT order reaches this group at all — measured 2026-09-23 BEFORE the change: 'chi xăng 200 nghìn' and 'chi tiền mặt 500 nghìn' were UNKNOWN_INTENT, and 'chi 2 triệu trả NCC Hà Tiên' fell into the payment READ group. 'chi ' needs the trailing space (so 'chia …' cannot match) and the two deny-list words 'chi tiết'/'chi nhánh' which begin with the same two letters. DIRECTION IS NOT DECIDED HERE: this group only says 'a payment order'; pay vs receive is derived server-side from which master list the named party belongs to (see payment.create.direction_policy)."
+    },
+    {
+      "group": "purchase_order_write",
+      "keywords": [
+        "đặt mua",
+        "mua ",
+        "đặt nhà cung cấp",
+        "đặt ncc",
+        "đặt nhà phân phối"
+      ],
+      "startsWith": true,
+      "notIf": "giao|bán|ban |hủy|huỷ|xóa|xoá|delete|bao nhiêu|bao nhieu|mấy|may |chưa|đã|da |xem|kiểm|kiem |tình trạng|tinh trang|\\?",
+      "capability_default": "purchase_order.create",
+      "comment": "B4 (plan3_review3 §52/§510) — WRITE #4: ĐẶT MUA (Purchase Order nháp). ĐO THẬT 2026-09-20 trước khi thêm nhóm này: 'đặt mua 500 bao cám heo từ Hà Tiên' và 'đặt nhà cung cấp Hà Tiên 500 bao cám heo' đều rơi vào sales_order_write ⇒ nếu tên NCC trùng tên khách thì hệ thống ghi ĐƠN BÁN cho nhà cung cấp (misroute thật, đã đóng). Nhóm này đứng TRƯỚC sales_order_write nên 'đặt mua …' không còn bị 'đặt ' của nhóm bán bắt. startsWith: mệnh lệnh bắt đầu bằng động từ mua/đặt mua. notIf: câu hỏi và thì QUÁ KHỨ ('đã mua', 'mua … bao nhiêu?') KHÔNG tạo chứng từ. LƯU Ý ĐO ĐƯỢC: 'mua hàng'/'nhập hàng'/'nhập kho'/'mua vào' bị synonyms.py (Phase 1) viết thành 'purchase' TRƯỚC router ⇒ chúng rơi vào purchase_receipt_write (stub), không phải PO — ghi ở B4-result §gap."
+    },
+    {
+      "group": "sales_order_write",
+      "keywords": [
+        "đặt hàng",
+        "dat hang",
+        "đặt đơn",
+        "lên đơn",
+        "tạo đơn",
+        "đặt "
+      ],
+      "startsWith": true,
+      "notIf": "giao|mua|nhập|nhap|nhận|nhan|báo giá|bao gia|hủy|huỷ|xóa|xoá|delete|bao nhiêu|bao nhieu|mấy|may |chưa|xem|kiểm|tình trạng",
+      "capability_default": "sales_order.create",
+      "comment": "B2 (plan3_review3): WRITE #2 — đặt hàng. Câu bắt đầu bằng động từ đặt/lên/tạo đơn + deny-list giao hàng / báo giá / huỷ / câu hỏi. ĐO THẬT 2026-09-20 trước khi thêm nhóm này: 'đặt hàng cho X 10 bao cám' rơi vào inventory/stock.balance, 'giao hàng' và 'báo giá' cũng vào inventory — nên nhóm này phải đứng TRƯỚC sales/inventory, và giao/báo giá phải có nhóm RIÊNG chứ không được rơi xuống đọc tồn kho. LƯU Ý ĐO ĐƯỢC: 'lên đơn'/'tạo đơn'/'chốt đơn' bị synonyms.py của Phase 1 viết lại thành 'sale' TRƯỚC khi router chạy ⇒ trên đường thật chúng vào nhóm sales (READ) và câu trả lời là danh sách chứng từ, KHÔNG phải đơn. Hai keyword đó vẫn giữ ở đây cho input chưa chuẩn hoá; muốn 'lên đơn' thành đơn thật thì phải sửa synonym (ngoài phạm vi B2 — ghi ở B2-result §gap). B4: thêm mua|nhập|nhận vào deny-list như LƯỚI AN TOÀN THỨ HAI — nhóm mua đứng trước đã bắt 'đặt mua', nhưng nếu một câu mua/nhập lọt qua thì nó rơi về nhóm ĐỌC thay vì thành đơn bán."
+    },
+    {
+      "group": "purchase_receipt_write",
+      "keywords": [
+        "purchase",
+        "nhận hàng",
+        "nhận từ",
+        "nhận đơn",
+        "nhận hàng po",
+        "nhập hàng",
+        "nhập đơn"
+      ],
+      "notIf": "bao nhiêu|bao nhieu|mấy|may |chưa|chua |xem|kiểm|kiem |tình trạng|tinh trang|\\?",
+      "startsWith": true,
+      "capability_default": "purchase_receipt.create",
+      "comment": "B4 disambiguation (§52) + P9-B wire: NHẬN/NHẬP hàng là phiếu nhận NHÁP theo đơn mua đã submit — KHÔNG phải đặt mua (purchase_order_write đứng trước và từ chối tên NCC sai), và KHÔNG phải Stock Entry (cả hai đang là một, xem comment B4 cũ). notIf: CÂU HỎI ('nhập hàng … bao nhiêu') giữ nguyên hành vi ĐỌC cũ — trả tồn kho, không mở card HIGH. startsWith: BẮT BUỘC cùng notIf — resolveCapability CHỈ áp notIf cho nhóm startsWith (đo được 2026-09-20, đã mắc ở B4). P9-A2 bài học áp dụng ở đây: keyword mới phải được ĐO trước khi thêm — 'nhập đơn mua 500 bao …' (dạng mệnh lệnh tự nhiên) từng rơi vào sales/stock đọc tồn kho; thêm 'nhập đơn' + 'nhận đơn' sau khi đo. P9-B TRẠNG THÁI MỚI: capability đã implement (không còn stub) — nhóm này nay mở phiếu nhận thay vì trả 'chưa làm'."
+    },
+    {
+      "group": "delivery_write",
+      "keywords": [
+        "giao hàng",
+        "giao đơn",
+        "giao cho",
+        "xuất hàng",
+        "xuat hang",
+        "xuất kho cho",
+        "giao ",
+        "delivery"
+      ],
+      "startsWith": true,
+      "notIf": "chưa|chua |đã giao|da giao|bao nhiêu|bao nhieu|mấy|may |không|khong |xem|kiểm|kiem |tình trạng|tinh trang|dịch|\\?",
+      "capability_default": "delivery.create",
+      "comment": "B2 disambiguation + P9-A2 wire: 'giao hàng' KHÔNG phải đơn bán — nay là phiếu giao NHÁP thật. startsWith: mệnh lệnh bắt đầu bằng động từ giao/xuất hàng (một câu chỉ NHẮC tới việc giao hàng, vd 'hôm qua tôi giao hàng cho Lan', không được mở card HIGH). notIf: CÂU HỎI không bao giờ tạo chứng từ — 'đã giao chưa', 'giao bao nhiêu', 'còn giao không' rơi về nhóm ĐỌC như trước. BÀI HỌC B4 đã áp ở đây: resolveCapability CHỈ áp notIf khi route có startsWith, nên hai field phải đi cùng nhau (đã đo: 2026-09-20). P9-A2 bổ sung 'giao ' (có khoảng trắng) sau khi ĐO ĐƯỢC: 'giao 5 bao cám gà cho Lan' — dạng mệnh lệnh tự nhiên nhất — rơi vào inventory/stock.balance và bị trả lời bằng một con số TỒN KHO (đúng lớp lỗi B4 đã đóng cho 'nhập kho'). 'dịch' vào notIf để 'giao dịch …' (không phải giao hàng) vẫn giữ nguyên hành vi cũ thay vì mở card HIGH."
+    },
+    {
+      "group": "sales_invoice_write",
+      "keywords": [
+        "xuất hóa đơn",
+        "xuất hoá đơn",
+        "lập hóa đơn",
+        "lập hoá đơn",
+        "viết hóa đơn",
+        "xuất hd",
+        "lập hd"
+      ],
+      "startsWith": true,
+      "notIf": "chưa|chua |bao nhiêu|bao nhieu|mấy|may |không|khong |xem|kiểm|kiem |tình trạng|tinh trang|dịch|\\?",
+      "capability_default": "sales_invoice.create",
+      "comment": "P9-D — XUẤT/LẬP hoá đơn là Sales Invoice NHÁP theo đơn bán đã submit. §0 ĐO THẬT 2026-09-23 (Phase 1 normalize + routeIntent thật) TRƯỚC khi thêm nhóm này: 'xuất hóa đơn cho Lan', 'lập hóa đơn cho Nguyễn Thị Lan' và 'xuất hóa đơn cho đơn SAL-ORD-…' đều rơi vào nhóm ĐỌC `sales` ⇒ `invoice.lookup` — MỆNH LỆNH bị trả lời bằng danh sách hoá đơn (đúng lớp lỗi B4/A1); 'xuất hoá đơn' (chính tả 'oá') thì UNKNOWN_INTENT. Nhóm này đứng TRƯỚC `sales` nên 'hóa đơn' không nuốt mệnh lệnh nữa. startsWith: mệnh lệnh phải MỞ ĐẦU bằng động từ xuất/lập/viết. notIf: CÂU HỎI không bao giờ tạo chứng từ — 'xuất hóa đơn cho Lan chưa' / '… bao nhiêu' rơi về nhóm ĐỌC như trước; hai NOT bị loại CÓ CHỦ Ý: (1) KHÔNG có 'đã' — 'xuất hóa đơn cho đơn đã giao' là mệnh lệnh hợp lệ (hoá đơn phần đã giao), thêm 'đã' sẽ đẩy nó về đường đọc; (2) KHÔNG có 'nợ' — 'hóa đơn còn nợ của Lan' vốn không bắt đầu bằng keyword nào của nhóm này (normalize thành 'hóa đơn receivable của Lan' ⇒ nhóm `sales`) nên không cần, và thêm vào sẽ chặn nhầm 'xuất hóa đơn cho Lan còn nợ'. KHÔNG dùng keyword tiếng Anh 'invoice' (khác trigger ĐỌC của invoice.lookup): câu hỏi 'invoice of Lan' mà mở card HIGH là đúng lỗi phải tránh."
+    },
+    {
+      "group": "quotation_write",
+      "keywords": [
+        "báo giá",
+        "bao gia",
+        "xin báo giá",
+        "xin bao gia",
+        "gửi báo giá",
+        "gui bao gia",
+        "hỏi giá",
+        "hoi gia",
+        "quotation",
+        "quote"
+      ],
+      "startsWith": true,
+      "notIf": "bao nhiêu|bao nhieu|mấy|may |mấy |chưa|chua |xem|kiểm|kiem |tình trạng|tinh trang|\\?",
+      "capability_default": "quotation.create",
+      "comment": "B3 disambiguation vs SO: 'báo giá' là ĐỀ NGHỊ (Quotation), 'đặt hàng' là đơn bán (Sales Order) — hai nhóm riêng, và cả hai đứng TRƯỚC nhóm đọc sales/inventory để không bị 'cám' kéo về tồn kho. startsWith: câu ra lệnh bắt đầu bằng động từ (báo giá/xin báo giá/gửi báo giá/hỏi giá). notIf: CÂU HỎI KHÔNG BAO GIỜ TẠO CHỨNG TỪ — 'báo giá cho Bảy 40 bao cám bao nhiêu?' bị chặn ở đây (đây là chủ ý KHÁC plan3_review3 §528 'hỏi … bao nhiêu → Quotation': một câu hỏi mà mở card HIGH là bài học B2 phải tránh; muốn có đề nghị thì nói dạng mệnh lệnh 'báo giá cho …'), câu hỏi rơi về nhóm ĐỌC như trước."
+    },
+    {
+      "group": "sales",
+      "keywords": [
+        "doanh thu",
+        "hóa đơn",
+        "hoa don",
+        "invoice",
+        "đơn hàng",
+        "don hang",
+        "order",
+        "bán",
+        "ban ",
+        "sale",
+        "còn thiếu",
+        "chưa trả",
+        "chua tra",
+        "doanh số",
+        "doanh so"
+      ],
+      "capability_default": "invoice.lookup",
+      "comment": "Specific groups before the broad customer group (batch-accuracy result9: most-specific-match wins)."
+    },
+    {
+      "group": "payment",
+      "keywords": [
+        "trả tiền",
+        "tra tien",
+        "thanh toán",
+        "thanh toan",
+        "phiếu thu",
+        "phieu thu",
+        "phiếu chi",
+        "phieu chi",
+        "payment",
+        "đã trả",
+        "da tra",
+        "đã chi",
+        "da chi",
+        "chi tiền",
+        "chi phí",
+        "lịch sử chi",
+        "chi hộ",
+        "trả",
+        "tra "
+      ],
+      "capability_default": "payment.history",
+      "comment": "P9-C deny-list: a QUESTION about money already paid out ('đã chi cho Hà Tiên bao nhiêu', 'lịch sử chi tiền của Hà Tiên') must land on the READ group and never build a card. Measured 2026-09-23 before this: both were UNKNOWN_INTENT (a miss), while 'chi 2 triệu trả NCC Hà Tiên' already fell here via 'trả'. A COMMAND still wins: payment_write (with 'chi ') is matched BEFORE this group, and its question deny-list ('bao nhiêu', 'mấy', '?') is what sends a question down to here."
+    },
+    {
+      "group": "inventory",
+      "keywords": [
+        "tồn kho",
+        "ton kho",
+        "stock",
+        "kho",
+        "cám",
+        "cam ",
+        "hàng",
+        "hang ",
+        "nhập hàng",
+        "nhap hang",
+        "purchase",
+        "xuất kho",
+        "xuat kho",
+        "delivery"
+      ],
+      "capability_default": "stock.balance",
+      "comment": "\"còn bao nhiêu\" deliberately ABSENT — it stole \"còn nợ\" questions (result9 fix)."
+    },
+    {
+      "group": "supplier",
+      "keywords": [
+        "nhà cung cấp",
+        "nha cung cap",
+        "nhà phân phối",
+        "ncc",
+        "supplier"
+      ],
+      "capability_default": "supplier.lookup",
+      "comment": "B1: nhóm NCC đứng TRƯỚC nhóm customer (rộng, đứng cuối). 'ncc' chỉ để nhận diện nhà cung cấp — mọi intent mua/nhập vẫn là phase sau (B4), ở đây chỉ ĐỌC."
+    },
+    {
+      "group": "customer",
+      "keywords": [
+        "khách",
+        "khach",
+        "customer",
+        "công nợ",
+        "cong no",
+        "receivable",
+        "còn nợ",
+        "còn lại",
+        "must pay",
+        "nợ",
+        "no "
+      ],
+      "capability_default": "customer.balance",
+      "comment": "BROAD group LAST — catches bare receivable questions no specific group claimed."
+    }
+  ],
+  "capabilities": {
+    "customer.create": {
+      "type": "WRITE",
+      "route_group": "customer_create_write",
+      "description": "Tạo Customer MỚI (record thật, docstatus 0) cho khách chưa có trên ERPNext — M1, chỉ bằng nút xác nhận trên card; KHÔNG auto-create",
+      "triggers": [
+        "thêm khách",
+        "them khach",
+        "tạo khách",
+        "tao khach",
+        "khách mới",
+        "new customer"
+      ],
+      "entities": {
+        "comment": "M1: entity là TÊN khách cần tạo — chưa có ERPNext id nên entity.id là business key (tên chuẩn hoá), ERPNext tự cấp id khi ghi. Policy default §5: Tên bắt buộc; SĐT/MST là field phụ (một trong hai khuyến nghị nhưng không ép cứng ở contract — skill từ chối khi cả hai đều trống và khi thiếu cả tên).",
+        "required": [
+          "customer_name"
+        ],
+        "optional": [
+          "mobile_no",
+          "tax_id"
+        ]
+      },
+      "amount_policy": null,
+      "field_policy": {
+        "comment": "M1 policy default §5 (user chưa chốt khác): Tên bắt buộc; trùng SĐT/MST (hoặc trùng TÊN chính xác) ⇒ TỪ CHỐI tạo + trả khách đã có (không clone); Customer là master data không có docstatus nháp — sau confirm nút là record thật; tạo xong KHÔNG auto SO/payment, chỉ gắn id vào session context.",
+        "business_key": [
+          "customer_name",
+          "mobile_no",
+          "tax_id"
+        ],
+        "duplicate": "refuse_return_existing",
+        "created_as": "active_record",
+        "auto_follow_up": "none",
+        "profile": {
+          "comment": "M1-site (2026-09-24): ba field PHÂN LOẠI của Customer. Bản trước hardcode customer_group=\"Múa\" + customer_type=\"Individual\" ⇒ site thật KHÔNG có nhóm \"Múa\" ⇒ LinkValidationError ⇒ MỌI lệnh tạo khách hỏng trên site (chặn go-live). CẤM ĐOÁN: mỗi field phân giải theo đúng thứ tự (1) giá trị người dùng chọn (params từ app) → (2) biến môi trường khai Ở ĐÂY → (3) CHÍNH SITE tự khai (Link: duy nhất một LÁ thì dùng; Select: theo default của DocField) → (4) hết cách ⇒ TỪ CHỐI kèm danh sách (không gửi giá trị đoán). Giá trị đến từ (1)/(2) mà site KHÔNG có ⇒ TỪ CHỐI luôn (không âm thầm rơi về nhánh khác — một biến môi trường sai chính tả phải ồn ào). Field KHÔNG bắt buộc mà không phân giải được ⇒ BỎ TRỐNG + cảnh báo trên card: null là giá trị trung thực, còn một nhóm đoán sai là dữ liệu báo cáo sai. Mọi giá trị gửi đi đều được ĐỌC LẠI từ site để kiểm (Link phải tồn tại + là lá; Select phải nằm trong options).",
+          "fields": {
+            "customer_group": {
+              "link": "Customer Group",
+              "env": "COPILOT_DEFAULT_CUSTOMER_GROUP"
+            },
+            "territory": {
+              "link": "Territory",
+              "env": "COPILOT_DEFAULT_TERRITORY"
+            },
+            "customer_type": {
+              "select_of": "Customer",
+              "env": "COPILOT_DEFAULT_CUSTOMER_TYPE"
+            }
+          }
+        }
+      },
+      "entity_policy": {
+        "comment": "M1: dùng chung luật WRITE (exact-only) cho PRE-CHECK trùng: Exact hit trên business key ⇒ trả khách có sẵn; fuzzy hit ⇒ cũng TỪ CHỐI với danh sách nghi trùng (tên khách mới không được mượn danh tính 'gần giống'); NO_MATCH ⇒ mới cho dựng đề xuất.",
+        "EXACT_MATCH": {
+          "auto_select": true,
+          "require_picker": false,
+          "block": false
+        },
+        "FUZZY_SINGLE_MATCH": {
+          "auto_select": false,
+          "require_picker": false,
+          "block": true
+        },
+        "AMBIGUOUS_MATCH": {
+          "auto_select": false,
+          "require_picker": false,
+          "block": true
+        },
+        "NO_MATCH": {
+          "auto_select": false,
+          "require_picker": false,
+          "block": false
+        }
+      },
+      "risk": {
+        "level": "HIGH",
+        "requires_confirmation": true,
+        "double_confirm": false
+      },
+      "authorization": {
+        "permissions": [
+          "Sales User"
+        ],
+        "scope": {
+          "company": "required"
+        },
+        "row_level": "optional"
+      },
+      "confirmation": {
+        "ttl": "10m",
+        "immutable": true
+      },
+      "execution": {
+        "comment": "M1: Customer là master data — KHÔNG có docstatus, KHÔNG submit. correlation_field = custom_ai_action_id: idempotency phía server; site chưa chạy migration cho Customer thì executor TỪ CHỐI ghi (CC_CORRELATION_FIELD_MISSING) thay vì ghi không chống trùng — tương tự mọi WRITE khác.",
+        "idempotent": true,
+        "verify_document": true,
+        "reconcile_on_unknown": true,
+        "write_doctype": "Customer",
+        "correlation_field": "custom_ai_action_id",
+        "reference_field": "custom_ai_action_id",
+        "allow_submit": false,
+        "draft_only": false
+      },
+      "errors": [
+        "CC_NAME_MISSING",
+        "CC_PURPOSE_UNSUPPORTED",
+        "CC_PROFILE_REQUIRED",
+        "CC_PROFILE_INVALID",
+        "CC_DUPLICATE_NAME",
+        "CC_DUPLICATE_MOBILE",
+        "CC_DUPLICATE_TAX_ID",
+        "CC_FUZZY_MATCH",
+        "CC_COMPANY_UNRESOLVED",
+        "CC_CORRELATION_FIELD_MISSING",
+        "CC_DUPLICATE_ACTION",
+        "CC_WRITE_UNVERIFIED",
+        "CC_CLIENT_UNAVAILABLE",
+        "INSUFFICIENT_PERMISSION",
+        "PROPOSAL_EXPIRED",
+        "PROPOSAL_VERSION_STALE",
+        "PROPOSAL_ENTITY_CHANGED",
+        "PROPOSAL_STALE",
+        "ERP_UNAVAILABLE",
+        "ENTITY_PICK_REQUIRED"
+      ],
+      "skill": "skills/customer-create.mjs#buildCustomerCreateProposal",
+      "proposal_action": "create_customer"
+    },
+    "customer.balance": {
+      "type": "READ",
+      "route_group": "customer",
+      "description": "Current receivable (net outstanding, credit notes included) for one customer",
+      "triggers": [
+        "công nợ",
+        "cong no",
+        "còn nợ",
+        "receivable",
+        "còn lại",
+        "nợ",
+        "balance"
+      ],
+      "entities": {
+        "required": [
+          "customer"
+        ],
+        "optional": []
+      },
+      "amount_policy": null,
+      "risk": {
+        "level": "READ",
+        "requires_confirmation": false
+      },
+      "authorization": {
+        "permissions": [],
+        "scope": {
+          "company": "optional",
+          "warehouse": "n/a"
+        },
+        "row_level": "optional"
+      },
+      "confirmation": null,
+      "execution": {
+        "idempotent": false,
+        "verify_document": false,
+        "reconcile_on_unknown": false
+      },
+      "errors": [
+        "CUSTOMER_NOT_FOUND",
+        "AMBIGUOUS_CUSTOMER",
+        "ERP_UNAVAILABLE"
+      ],
+      "skill": "skills/customer.mjs#getCustomerBalance",
+      "proposal_action": "read_balance"
+    },
+    "ops.daily_summary": {
+      "type": "READ",
+      "route_group": "ops",
+      "description": "Daily operations cockpit summary (plan4_final §4): one day, one company, server-side aggregate. READ-only — no proposal, no /execute path.",
+      "triggers": [],
+      "entities": {
+        "required": [],
+        "optional": [
+          "date_range"
+        ]
+      },
+      "amount_policy": null,
+      "risk": {
+ "level": "READ",
+        "requires_confirmation": false
+      },
+      "authorization": {
+        "permissions": [],
+        "scope": { "company": "required" },
+        "row_level": "optional"
+      },
+      "confirmation": null,
+      "execution": {
+        "idempotent": false,
+        "verify_document": false,
+        "reconcile_on_unknown": false
+      },
+      "errors": [
+        "ERP_UNAVAILABLE",
+        "COMPANY_UNRESOLVED",
+        "PARTIAL_DATA"
+      ],
+      "skill": "skills/ops-summary.mjs#getDailySummary",
+      "proposal_action": "read_daily_summary",
+      "ops_policy": {
+        "comment": "P4-1 (plan4_final §3 + §10 đã chốt). SO tách submitted/draft; SI/PE chỉ docstatus=1 AND status != 'Cancelled' (§3.1b); giá trị HĐ = grand_total (§10.5); thu/chi tách Cash|Bank theo Account.account_type của tài khoản tiền (docs/plan4-mode-map.md: 53% PE mode trống, 'Chuyển khoản' type=Cash ⇒ MoP.type không tin được), fallback Company.default_*, còn lại unclassified (không 0 giả); thu HĐ vs ứng trước theo PE.references/unallocated_amount (verify trên site thật — review3 SQL 'references is empty' KHÔNG dùng); két opening từ GL Entry trước 00:00 VN trên Company.default_cash_account, thiếu config ⇒ null (ẩn block, §3.6); chi V1 chỉ PE Pay + footnote JE; timezone Asia/Ho_Chi_Minh, ngày = calendar 00:00 VN; không ngưỡng cảnh báo cứng (§10.4).",
+        "timezone": "Asia/Ho_Chi_Minh",
+        "so_drafts_included": true,
+        "si_submitted_only": true,
+        "pe_submitted_only": true,
+        "exclude_cancelled_status": true,
+        "invoice_amount_field": "grand_total",
+        "payments_out_includes_journal_entry": false,
+        "je_footnote": "Chưa gồm chi qua Journal Entry",
+        "cash_classifier": {
+ "primary": "Account.account_type of the money account (paid_to for Receive, paid_from for Pay)",
+          "fallback": "Company.default_cash_account / default_bank_account",
+          "else": "count_unclassified_not_zero"
+ },
+        "cash_drawer": {
+ "opening_source": "GL Entry on Company.default_cash_account before 00:00 VN of the day",
+ "missing_config": "null_block_hidden"
+ }
+      }
+    },
+    "customer.lookup": {
+      "type": "READ",
+      "route_group": "customer",
+      "description": "Find a customer and show their master data",
+      "triggers": [
+        "tìm khách",
+        "tim khach",
+        "tra khách",
+        "thông tin khách",
+        "khách hàng nào",
+        "customer"
+      ],
+      "entities": {
+        "required": [
+          "customer"
+        ],
+        "optional": []
+      },
+      "amount_policy": null,
+      "risk": {
+        "level": "READ",
+        "requires_confirmation": false
+      },
+      "authorization": {
+        "permissions": [],
+        "scope": {
+          "company": "optional"
+        },
+        "row_level": "optional"
+      },
+      "confirmation": null,
+      "execution": {
+        "idempotent": false,
+        "verify_document": false,
+        "reconcile_on_unknown": false
+      },
+      "errors": [
+        "CUSTOMER_NOT_FOUND",
+        "AMBIGUOUS_CUSTOMER"
+      ],
+      "skill": "skills/customer.mjs#findCustomer",
+      "proposal_action": "read_customer"
+    },
+    "stock.balance": {
+      "type": "READ",
+      "route_group": "inventory",
+      "description": "Stock on hand for an item / warehouse",
+      "triggers": [
+        "tồn kho",
+        "ton kho",
+        "còn bao nhiêu",
+        "kho",
+        "stock"
+      ],
+      "entities": {
+        "required": [],
+        "optional": [
+          "item",
+          "warehouse"
+        ]
+      },
+      "amount_policy": null,
+      "risk": {
+        "level": "READ",
+        "requires_confirmation": false
+      },
+      "authorization": {
+        "permissions": [],
+        "scope": {
+          "company": "optional",
+          "warehouse": "optional"
+        }
+      },
+      "confirmation": null,
+      "execution": {
+        "idempotent": false,
+        "verify_document": false,
+        "reconcile_on_unknown": false
+      },
+      "errors": [
+        "ITEM_NOT_FOUND",
+        "ERP_UNAVAILABLE"
+      ],
+      "skill": "skills/inventory.mjs#listInventory",
+      "proposal_action": "read_stock_balance"
+    },
+    "invoice.lookup": {
+      "type": "READ",
+      "route_group": "sales",
+      "description": "Open (unpaid) invoices for a customer",
+      "triggers": [
+        "hóa đơn",
+        "hoa don",
+        "invoice",
+        "chưa trả",
+        "chưa thanh toán",
+        "còn thiếu"
+      ],
+      "entities": {
+        "required": [
+          "customer"
+        ],
+        "optional": [
+          "invoice"
+        ]
+      },
+      "amount_policy": null,
+      "risk": {
+        "level": "READ",
+        "requires_confirmation": false
+      },
+      "authorization": {
+        "permissions": [],
+        "scope": {
+          "company": "optional"
+        },
+        "row_level": "optional"
+      },
+      "confirmation": null,
+      "execution": {
+        "idempotent": false,
+        "verify_document": false,
+        "reconcile_on_unknown": false
+      },
+      "errors": [
+        "CUSTOMER_NOT_FOUND",
+        "AMBIGUOUS_CUSTOMER",
+        "ERP_UNAVAILABLE"
+      ],
+      "skill": "skills/sales.mjs#listUnpaidInvoices",
+      "proposal_action": "read_open_invoices"
+    },
+    "sales.summary": {
+      "type": "READ",
+      "route_group": "sales",
+      "description": "Sales summary for a period (doanh thu / bán được bao nhiêu)",
+      "triggers": [
+        "doanh thu",
+        "bán được",
+        "ban duoc",
+        "tổng bán",
+        "sales summary",
+        "hôm nay bán"
+      ],
+      "entities": {
+        "required": [],
+        "optional": [
+          "date_range",
+          "customer"
+        ]
+      },
+      "amount_policy": null,
+      "risk": {
+        "level": "READ",
+        "requires_confirmation": false
+      },
+      "authorization": {
+        "permissions": [],
+        "scope": {
+          "company": "required"
+        }
+      },
+      "confirmation": null,
+      "execution": {
+        "idempotent": false,
+        "verify_document": false,
+        "reconcile_on_unknown": false
+      },
+      "errors": [
+        "NOT_IMPLEMENTED",
+        "ERP_UNAVAILABLE"
+      ],
+      "skill": null,
+      "status": "stub",
+      "proposal_action": "read_sales_summary"
+    },
+    "payment.history": {
+      "type": "READ",
+      "route_group": "payment",
+      "description": "Payment entries already recorded for a party (customer = thu, supplier = chi)",
+      "triggers": [
+        "phiếu thu",
+        "phieu thu",
+        "phiếu chi",
+        "phieu chi",
+        "đã trả",
+        "đã chi",
+        "đã thanh toán",
+        "thanh toán gần nhất",
+        "payment"
+      ],
+      "entities": {
+        "required": [
+          "party"
+        ],
+        "optional": [
+          "direction"
+        ]
+      },
+      "amount_policy": null,
+      "risk": {
+        "level": "READ",
+        "requires_confirmation": false
+      },
+      "authorization": {
+        "permissions": [],
+        "scope": {
+          "company": "optional"
+        },
+        "row_level": "optional"
+      },
+      "confirmation": null,
+      "execution": {
+        "idempotent": false,
+        "verify_document": false,
+        "reconcile_on_unknown": false
+      },
+      "errors": [
+        "CUSTOMER_NOT_FOUND",
+        "AMBIGUOUS_CUSTOMER",
+        "ERP_UNAVAILABLE"
+      ],
+      "skill": "skills/payment.mjs#listPaymentEntries",
+      "proposal_action": "read_payment_history"
+    },
+    "payment.create": {
+      "type": "WRITE",
+      "route_group": "payment_write",
+      "description": "Record a payment (draft Payment Entry) against an open invoice: Receive from a customer (Sales Invoice) or Pay to a supplier (Purchase Invoice). The DIRECTION is derived server-side — see direction_policy.",
+      "triggers": [
+        "thu tiền",
+        "thu tien",
+        "nhận tiền",
+        "nhan tien",
+        "ghi nhận thanh toán",
+        "payment",
+        "chi tiền",
+        "chi ncc",
+        "chi nhà cung cấp"
+      ],
+      "entities": {
+        "required": [
+          "party",
+          "amount"
+        ],
+        "optional": [
+          "payment_method",
+          "note",
+          "invoice",
+          "direction"
+        ],
+        "comment": "P9-C renamed the first required slot from `customer` to `party`: the same capability now records BOTH directions, so the required thing is a resolved party id, not a customer. Which master list it came from (and therefore Pay vs Receive) is NOT a request field the client may set — see direction_policy."
+      },
+      "direction_policy": {
+        "comment": "P9-C (user decision 2026-09-23). Measure first: Phase 1 synonyms.py maps BOTH 'thu tiền' and 'trả tiền' onto the ONE label 'payment', so after normalization the verb carries NO direction — 'payment NCC Hà Tiên 2 triệu' (a pay-out order) was reaching this capability and, with a supplier name that also exists in the customer master, could have produced a phiếu THU for it. Direction is therefore derived from DATA, never from the sentence and never from the request body.",
+        "derived_at": "build (proposal) and RE-derived at execute",
+        "rule": "Resolve the named party against BOTH master lists (Customer, Supplier). Exactly one must match: Supplier ONLY => pay, Customer ONLY => receive. A name that matches BOTH, or NEITHER, is refused (PAYMENT_DIRECTION_AMBIGUOUS / MISSING_ENTITY) — guessing either way would move money in a direction the user did not ask for.",
+        "verb_check": "The pre-synonym text is read ONLY as a contradiction check, never to flip: the UNAMBIGUOUS markers 'thu/thu tiền/thu nợ/nhận tiền/khách trả' and 'chi/chi tiền/chi phí' are compared with the master-derived direction, and a disagreement refuses with PAYMENT_DIRECTION_CONFLICT. 'trả tiền'/'thanh toán' are deliberately NOT markers — in Vietnamese both are used for either direction, so they constrain nothing (this is what keeps every existing 'thu tiền/trả tiền cho <khách>' sentence on the Receive path).",
+        "client_may_not_set": "params.direction is advisory metadata for the card; the executor ignores it and re-derives from the party id (a crafted direction cannot change which document gets written)."
+      },
+      "amount_policy": {
+        "allow_explicit": true,
+        "allow_full_balance": true,
+        "allow_zero": false,
+        "allow_negative": false,
+        "clamp_to_outstanding": "refuse_not_clamp"
+      },
+      "entity_policy": {
+        "comment": "plan2_final §4.3/§8 — WRITE là Exact-only: fuzzy KHÔNG bao giờ auto-select (kể cả LLM tự tin), phải để user chọn/xác nhận; no match thì block.",
+        "EXACT_MATCH": {
+          "auto_select": true,
+          "require_picker": false,
+          "block": false
+        },
+        "FUZZY_SINGLE_MATCH": {
+          "auto_select": false,
+          "require_picker": true,
+          "block": false
+        },
+        "AMBIGUOUS_MATCH": {
+          "auto_select": false,
+          "require_picker": true,
+          "block": false
+        },
+        "NO_MATCH": {
+          "auto_select": false,
+          "require_picker": false,
+          "block": true
+        }
+      },
+      "business_dedup": {
+        "comment": "plan2_final §10.5 — bổ sung cho idempotency, KHÔNG thay command_id: cùng ý định thực tế (customer+amount+capability trong 1 cửa sổ) ⇒ cảnh báo + xác nhận thêm, không block im lặng.",
+        "fingerprint": [
+          "customer_id",
+          "amount_vnd",
+          "capability",
+          "time_bucket"
+        ],
+        "time_bucket": "15m",
+        "action": "warn_extra_confirm"
+      },
+      "risk": {
+        "level": "HIGH",
+        "requires_confirmation": true,
+        "double_confirm": false
+      },
+      "authorization": {
+        "permissions": [
+          "Accounts User"
+        ],
+        "scope": {
+          "company": "required"
+        },
+        "row_level": "optional"
+      },
+      "confirmation": {
+        "ttl": "10m",
+        "immutable": true
+      },
+      "execution": {
+        "idempotent": true,
+        "verify_document": true,
+        "reconcile_on_unknown": true,
+        "write_doctype": "Payment Entry",
+        "correlation_field": "custom_ai_action_id",
+        "reference_field": "reference_no",
+        "allow_submit": true,
+        "draft_only": false,
+        "comment": "P9-C: `pay` writes payment_type=Pay / party_type=Supplier and ALLOCATES the money to the supplier's open Purchase Invoice (references[].reference_doctype = Purchase Invoice); `receive` is unchanged (payment_type=Receive / party_type=Customer / Sales Invoice). Accounts are read from the anchor document, never hardcoded: receive takes paid_from from Sales Invoice.debit_to, pay takes paid_to from Purchase Invoice.credit_to, and the money side (paid_to for receive / paid_from for pay) is the resolved Mode of Payment's account for the company."
+      },
+      "errors": [
+        "CUSTOMER_NOT_FOUND",
+        "AMBIGUOUS_CUSTOMER",
+        "INVALID_AMOUNT",
+        "INSUFFICIENT_PERMISSION",
+        "PAYMENT_INVOICE_ALREADY_SETTLED",
+        "PAYMENT_POSTING_DATE_INVALID",
+        "PAYMENT_DIRECTION_AMBIGUOUS",
+        "PAYMENT_DIRECTION_CONFLICT",
+        "PAYMENT_SUPPLIER_NO_OPEN_INVOICE",
+        "PAYMENT_EXPENSE_WITHOUT_PARTY",
+        "PROPOSAL_EXPIRED",
+        "PROPOSAL_VERSION_STALE",
+        "PROPOSAL_ENTITY_CHANGED",
+        "PROPOSAL_STALE",
+        "NLP_UNAVAILABLE",
+        "BUSINESS_DEDUP_CONFIRM_REQUIRED",
+        "ENTITY_PICK_REQUIRED",
+        "UNKNOWN_EXECUTION_STATE",
+        "SYSTEM_MAINTENANCE"
+      ],
+      "skill": "skills/payment-write.mjs#buildPaymentProposal",
+      "proposal_action": "create_payment_entry"
+    },
+    "sales_order.create": {
+      "type": "WRITE",
+      "route_group": "sales_order_write",
+      "description": "Tạo đơn bán hàng (Sales Order NHÁP) cho một khách đã xác định",
+      "triggers": [
+        "đặt hàng",
+        "dat hang",
+        "đặt đơn",
+        "lên đơn",
+        "tạo đơn",
+        "order"
+      ],
+      "entities": {
+        "required": [
+          "customer",
+          "lines"
+        ],
+        "optional": [
+          "delivery_date",
+          "note"
+        ]
+      },
+      "amount_policy": null,
+      "line_policy": {
+        "comment": "B2 — đơn hàng không có 'một số tiền' để gate như payment (nên amount_policy là null và Safety Gateway KHÔNG chạy amount gate cho capability này). Rủi ro 'số' của một đơn nằm ở DÒNG HÀNG, nên policy dòng được validate fail-closed như uom_policy.",
+        "max_lines": 20,
+        "qty_positive": true,
+        "qty_source": "nlp",
+        "rate_source": "erpnext",
+        "no_price": "ask",
+        "uom_policy_ref": "defaults.uom_policy"
+      },
+      "entity_policy": {
+        "comment": "Cùng luật WRITE như payment.create: exact-only, fuzzy thì bắt chọn, không khớp thì chặn.",
+        "EXACT_MATCH": {
+          "auto_select": true,
+          "require_picker": false,
+          "block": false
+        },
+        "FUZZY_SINGLE_MATCH": {
+          "auto_select": false,
+          "require_picker": true,
+          "block": false
+        },
+        "AMBIGUOUS_MATCH": {
+          "auto_select": false,
+          "require_picker": true,
+          "block": false
+        },
+        "NO_MATCH": {
+          "auto_select": false,
+          "require_picker": false,
+          "block": true
+        }
+      },
+      "business_dedup": {
+        "comment": "Cùng ý định đặt hàng trong 15 phút ⇒ cảnh báo + xác nhận thêm. Vân tay KHÔNG có amount_vnd nên businessFingerprint dùng vân tay DÒNG HÀNG (B2).",
+        "fingerprint": [
+          "customer_id",
+          "lines_fingerprint",
+          "capability",
+          "time_bucket"
+        ],
+        "time_bucket": "15m",
+        "action": "warn_extra_confirm"
+      },
+      "risk": {
+        "level": "HIGH",
+        "requires_confirmation": true,
+        "double_confirm": false
+      },
+      "authorization": {
+        "permissions": [
+          "Sales User"
+        ],
+        "scope": {
+          "company": "required"
+        },
+        "row_level": "optional"
+      },
+      "confirmation": {
+        "ttl": "10m",
+        "immutable": true
+      },
+      "execution": {
+        "idempotent": true,
+        "verify_document": true,
+        "reconcile_on_unknown": true,
+        "write_doctype": "Sales Order",
+        "correlation_field": "custom_ai_action_id",
+        "reference_field": "custom_ai_action_id",
+        "allow_submit": false,
+        "draft_only": true
+      },
+      "errors": [
+        "CUSTOMER_NOT_FOUND",
+        "AMBIGUOUS_CUSTOMER",
+        "SO_ITEM_UNRESOLVED",
+        "SO_QTY_MISSING",
+        "SO_QTY_AMBIGUOUS",
+        "SO_UOM_UNRESOLVED",
+        "SO_PRICE_MISSING",
+        "SO_LINE_LIMIT",
+        "SO_COMPANY_UNRESOLVED",
+        "SO_CORRELATION_FIELD_MISSING",
+        "SO_DUPLICATE_ACTION",
+        "SO_WRITE_UNVERIFIED",
+        "INSUFFICIENT_PERMISSION",
+        "PROPOSAL_EXPIRED",
+        "PROPOSAL_VERSION_STALE",
+        "PROPOSAL_ENTITY_CHANGED",
+        "PROPOSAL_STALE",
+        "ERP_UNAVAILABLE",
+        "ENTITY_PICK_REQUIRED"
+      ],
+      "skill": "skills/sales-order-write.mjs#buildSalesOrderProposal",
+      "proposal_action": "create_sales_order"
+    },
+    "purchase_order.create": {
+      "type": "WRITE",
+      "route_group": "purchase_order_write",
+      "description": "Tạo đơn MUA hàng (Purchase Order NHÁP) cho một nhà cung cấp đã xác định",
+      "triggers": [
+        "đặt mua",
+        "mua hàng",
+        "đặt nhà cung cấp",
+        "purchase order"
+      ],
+      "entities": {
+        "required": [
+          "supplier",
+          "lines"
+        ],
+        "optional": [
+          "expected_date",
+          "note"
+        ]
+      },
+      "amount_policy": null,
+      "line_policy": {
+        "comment": "B4 — như đơn bán (B2): đơn mua không có 'một số tiền' để gate (amount_policy null) nên rủi ro 'số' nằm ở DÒNG HÀNG; policy dòng validate fail-closed. ĐIỂM KHÁC SO/QT: giá của một đơn MUA là giá MUA (Item Price price_list Standard Buying), KHÔNG BAO GIỜ là giá bán — lấy giá bán làm giá mua là ghi sổ sai (trả cho NCC đúng giá mình bán cho khách). rate_source vẫn là erpnext: giá CHỈ đến từ ERPNext, không từ câu nói.",
+        "max_lines": 20,
+        "qty_positive": true,
+        "qty_source": "nlp",
+        "rate_source": "erpnext",
+        "price_side": "buying",
+        "no_price": "ask",
+        "uom_policy_ref": "defaults.uom_policy"
+      },
+      "entity_policy": {
+        "comment": "Cùng luật WRITE như payment.create/sales_order.create — exact-only, fuzzy thì bắt chọn, không khớp thì chặn. Áp cho NHÀ CUNG CẤP (party của đơn mua).",
+        "EXACT_MATCH": {
+          "auto_select": true,
+          "require_picker": false,
+          "block": false
+        },
+        "FUZZY_SINGLE_MATCH": {
+          "auto_select": false,
+          "require_picker": true,
+          "block": false
+        },
+        "AMBIGUOUS_MATCH": {
+          "auto_select": false,
+          "require_picker": true,
+          "block": false
+        },
+        "NO_MATCH": {
+          "auto_select": false,
+          "require_picker": false,
+          "block": true
+        }
+      },
+      "business_dedup": {
+        "comment": "Cùng ý định đặt mua trong 15 phút ⇒ cảnh báo + xác nhận thêm. Vân tay theo NHÀ CUNG CẤP + DÒNG HÀNG (không có amount_vnd). Lớp ADDITIVE: cảnh báo, KHÔNG chặn — khác hẳn business_doc_key bên dưới (chặn thật, theo tờ chứng từ).",
+        "fingerprint": [
+          "supplier_id",
+          "lines_fingerprint",
+          "capability",
+          "time_bucket"
+        ],
+        "time_bucket": "15m",
+        "action": "warn_extra_confirm"
+      },
+      "business_doc_key": {
+        "comment": "next3/B — chống trùng theo TỜ CHỨNG TỪ THẬT (số HĐ + ngày + MST/party + loại), không theo lệnh: cùng một tờ hóa đơn gửi 2 lần (XML bây giờ, OCR sau này) ⇒ TỪ CHỐI (409 + existing_doc), KHÔNG tạo nháp thứ hai. Khác business_dedup ở trên (cảnh báo, không chặn) và khác custom_ai_action_id (chống double-tap một lệnh, không thấy được 2 lệnh khác nhau cùng một tờ HĐ). Đây là khai báo DUY NHẤT: skill + route /ask + migration đều đọc từ đây.",
+        "field": "custom_business_doc_key",
+        "source": "source_document",
+        "document_kind": "purchase",
+        "comment_document_kind": "Loại chứng từ mà khóa này mô tả = loại chứng từ MÀ CAPABILITY NÀY GHI, không phải nhãn kênh gửi lên. Nhờ vậy XML hôm nay và OCR sau này (kể cả khi client đặt nhãn khác) vẫn ra CÙNG một khóa cho cùng một tờ hóa đơn.",
+        "composition": [
+          "document_kind",
+          "party_tax_id_or_party_id",
+          "invoice_no",
+          "invoice_date"
+        ],
+        "required_parts": [
+          "invoice_no",
+          "invoice_date"
+        ],
+        "on_missing_identity": "refuse",
+        "on_missing_field": "refuse",
+        "comment_scope": "CHỈ đơn mua (kênh hóa đơn đầu vào). Đơn bán chưa khai ⇒ không có tác dụng gì trên đường bán, và không làm đổi hành vi thu tiền."
+      },
+      "risk": {
+        "level": "HIGH",
+        "requires_confirmation": true,
+        "double_confirm": false
+      },
+      "authorization": {
+        "permissions": [
+          "Purchase User"
+        ],
+        "scope": {
+          "company": "required"
+        },
+        "row_level": "optional"
+      },
+      "confirmation": {
+        "ttl": "10m",
+        "immutable": true
+      },
+      "execution": {
+        "idempotent": true,
+        "verify_document": true,
+        "reconcile_on_unknown": true,
+        "write_doctype": "Purchase Order",
+        "correlation_field": "custom_ai_action_id",
+        "reference_field": "custom_ai_action_id",
+        "allow_submit": false,
+        "draft_only": true
+      },
+      "errors": [
+        "SUPPLIER_NOT_FOUND",
+        "AMBIGUOUS_SUPPLIER",
+        "PO_SUPPLIER_UNRESOLVED",
+        "PO_ITEM_UNRESOLVED",
+        "PO_QTY_MISSING",
+        "PO_QTY_AMBIGUOUS",
+        "PO_UOM_UNRESOLVED",
+        "PO_PRICE_MISSING",
+        "PO_WAREHOUSE_UNRESOLVED",
+        "PO_LINE_LIMIT",
+        "PO_COMPANY_UNRESOLVED",
+        "PO_PRICE_SIDE_UNSUPPORTED",
+        "PO_CORRELATION_FIELD_MISSING",
+        "PO_DUPLICATE_ACTION",
+        "PO_DUPLICATE_DOC",
+        "PO_DOC_KEY_FIELD_MISSING",
+        "PO_DOC_KEY_UNRESOLVED",
+        "PO_WRITE_UNVERIFIED",
+        "INSUFFICIENT_PERMISSION",
+        "PROPOSAL_EXPIRED",
+        "PROPOSAL_VERSION_STALE",
+        "PROPOSAL_ENTITY_CHANGED",
+        "PROPOSAL_STALE",
+        "ERP_UNAVAILABLE",
+        "ENTITY_PICK_REQUIRED"
+      ],
+      "skill": "skills/purchase-order-write.mjs#buildPurchaseOrderProposal",
+      "proposal_action": "create_purchase_order"
+    },
+    "purchase_receipt.create": {
+      "type": "WRITE",
+      "route_group": "purchase_receipt_write",
+      "description": "Tạo phiếu nhận hàng (Purchase Receipt NHÁP) theo một đơn mua đã submit — P9-B",
+      "triggers": [
+        "nhận hàng",
+        "nhập hàng",
+        "purchase"
+      ],
+      "entities": {
+        "comment": "P9-B: ĐƠN MUA là entity bắt buộc — phiếu nhận lấy dòng hàng, đơn vị, giá và kho từ chính đơn đó (mirror của delivery.create với SO). `supplier` là optional: chỉ để ĐỐI CHIẾU, không quyết định nội dung phiếu.",
+        "required": [
+          "order"
+        ],
+        "optional": [
+          "supplier"
+        ]
+      },
+      "amount_policy": null,
+      "line_policy": {
+        "comment": "P9-B — phiếu nhận KHÔNG có giá riêng: rate_source erpnext vẫn đúng vì giá là rate CỦA DÒNG PO (ERPNext chặn PR khác giá PO qua validate_rate_with_reference_doc — đo thật, recipes §'Đơn giá phải giống với Purchase Order'). Số lượng DUY NHẤT lấy từ câu nói là 'nhận bao nhiêu', trần là qty − received_qty − returned_qty của chính đơn (vượt ⇒ TỪ CHỐI, không kẹp).",
+        "max_lines": 20,
+        "qty_positive": true,
+        "qty_source": "po_pending",
+        "rate_source": "erpnext",
+        "no_price": "ask",
+        "uom_policy_ref": "defaults.uom_policy"
+      },
+      "entity_policy": {
+        "comment": "P9-B: phiếu nhận là document của NCC — entity_policy WRITE dùng chung luật exact-only (mục này giữ nguyên từ lúc còn stub).",
+        "EXACT_MATCH": {
+          "auto_select": true,
+          "require_picker": false,
+          "block": false
+        },
+        "FUZZY_SINGLE_MATCH": {
+          "auto_select": false,
+          "require_picker": true,
+          "block": false
+        },
+        "AMBIGUOUS_MATCH": {
+          "auto_select": false,
+          "require_picker": true,
+          "block": false
+        },
+        "NO_MATCH": {
+          "auto_select": false,
+          "require_picker": false,
+          "block": true
+        }
+      },
+      "risk": {
+        "level": "HIGH",
+        "requires_confirmation": true,
+        "double_confirm": false
+      },
+      "authorization": {
+        "permissions": [
+          "Purchase User"
+        ],
+        "scope": {
+          "company": "required"
+        }
+      },
+      "confirmation": {
+        "ttl": "10m",
+        "immutable": true
+      },
+      "execution": {
+        "comment": "P9-B: wired end-to-end. draft_only + allow_submit false: phiếu nhận NHÁP (docstatus 0) không cộng kho — chỉ SUBMIT mới sinh Stock Ledger Entry, và submit KHÔNG có trên đường chat. correlation_field = custom_ai_action_id (cùng Custom Field với SO/QT/PO/DN, một migration phủ cả năm). reconcile_on_unknown: true vì một phiếu nhận bị mất phản hồi vẫn nằm trong sổ ⇒ lần retry phải TÌM lại theo correlation chứ không ghi phiếu thứ hai.",
+        "idempotent": true,
+        "verify_document": true,
+        "reconcile_on_unknown": true,
+        "write_doctype": "Purchase Receipt",
+        "correlation_field": "custom_ai_action_id",
+        "reference_field": "custom_ai_action_id",
+        "draft_only": true,
+        "allow_submit": false
+      },
+      "errors": [
+        "PR_PO_UNRESOLVED",
+        "PR_PO_NOT_FOUND",
+        "PR_PO_NOT_SUBMITTED",
+        "PR_SUPPLIER_MISMATCH",
+        "PR_ITEM_UNRESOLVED",
+        "PR_ITEM_NOT_IN_PO",
+        "PR_ALREADY_RECEIVED",
+        "PR_DRAFT_COVERED",
+        "PR_UOM_MISMATCH",
+        "PR_QTY_INVALID",
+        "PR_QTY_AMBIGUOUS",
+        "PR_QTY_MISSING",
+        "PR_QTY_EXCEEDS_PENDING",
+        "PR_NOTHING_TO_RECEIVE",
+        "PR_LINE_LIMIT",
+        "PR_COMPANY_UNRESOLVED",
+        "PR_CORRELATION_FIELD_MISSING",
+        "PR_DUPLICATE_ACTION",
+        "PR_WRITE_UNVERIFIED",
+        "PR_CLIENT_UNAVAILABLE",
+        "INSUFFICIENT_PERMISSION",
+        "PROPOSAL_EXPIRED",
+        "PROPOSAL_VERSION_STALE",
+        "PROPOSAL_ENTITY_CHANGED",
+        "PROPOSAL_STALE",
+        "ERP_UNAVAILABLE",
+        "ENTITY_PICK_REQUIRED"
+      ],
+      "skill": "skills/purchase-receipt-write.mjs#buildPurchaseReceiptProposal",
+      "proposal_action": "create_purchase_receipt"
+    },
+    "sales_return.create": {
+      "type": "WRITE",
+      "route_group": "sales_return_write",
+      "description": "Khách trả hàng — Sales Invoice NHÁP is_return=1 (Credit Note nháp) liên kết return_against vào HĐ ĐÃ SUBMIT (P9-F; PHẠM VI phiên: CHỈ SI-return, không DN-return, không purchase return)",
+      "triggers": [
+        "trả hàng",
+        "tra hang",
+        "khách trả",
+        "khach tra",
+        "trả lại hàng",
+        "bán trả lại"
+      ],
+      "entities": {
+        "comment": "P9-F: entity = HÓA ĐƠN GỐC (return_against) — dòng hàng + ĐƠN GIÁ + khách lấy từ CHÍNH hoá đơn đó (đo shape thật 2026-09-23: ACC-SINV-2026-00052 return_against ACC-SINV-2026-00049, items qty ÂM, rate 90000 giữ giá gốc). Câu nói chỉ thêm: MẶT HÀNG nào và BAO NHIÊU. customer optional để đối chiếu.",
+        "required": ["invoice"],
+        "optional": ["customer"]
+      },
+      "amount_policy": null,
+      "line_policy": {
+        "comment": "P9-F — phiếu trả là NGƯỢC của hoá đơn: qty GỬI ÂM (đo thật: items qty=-1/-8), rate là GIÁ CỦA HĐ GỐC (rate_source erpnext), trần = số còn LẠI được trả của từng dòng HĐ gốc (đã trừ phiếu trả submitted + nháp đang treo — user chốt trừ nháp như delivery). update_stock=1 TƯỜNG MINH: trả hàng phải NHẬN LẠI kho (khác hoá đơn bán update_stock=0 — P9-D) — là THỨ đã được duyệt trên card. max_lines 20 như SI.",
+        "entry_type": "credit_note",
+        "qty_negative": true,
+        "max_lines": 20,
+        "qty_source": "si_returnable",
+        "rate_source": "erpnext",
+        "no_price": "from_invoice",
+        "update_stock": 1,
+        "uom_policy_ref": "defaults.uom_policy"
+      },
+      "entity_policy": {
+        "comment": "P9-F: dùng chung luật exact-only như mọi WRITE khác.",
+        "EXACT_MATCH": {
+          "auto_select": true,
+          "require_picker": false,
+          "block": false
+        },
+        "FUZZY_SINGLE_MATCH": {
+          "auto_select": false,
+          "require_picker": true,
+          "block": false
+        },
+        "AMBIGUOUS_MATCH": {
+          "auto_select": false,
+          "require_picker": true,
+          "block": false
+        },
+        "NO_MATCH": {
+          "auto_select": false,
+          "require_picker": false,
+          "block": true
+        }
+      },
+      "risk": {
+        "level": "HIGH",
+        "requires_confirmation": true,
+        "double_confirm": false
+      },
+      "authorization": {
+        "permissions": [
+          "Sales User"
+        ],
+        "scope": {
+          "company": "required"
+        }
+      },
+      "confirmation": {
+        "ttl": "10m",
+        "immutable": true
+      },
+      "execution": {
+        "comment": "P9-F: wired end-to-end. draft_only + allow_submit false — phiếu trả NHÁP chưa sinh bút toán; update_stock=1 có chủ ý (trả hàng nhận lại kho khi submit, khác SI bán hàng update_stock=0). correlation_field = custom_ai_action_id: Sales Invoice ĐÃ có field (migration P9-D 2026-09-23) — cùng doctype nên không cần migration mới.",
+        "idempotent": true,
+        "verify_document": true,
+        "reconcile_on_unknown": true,
+        "write_doctype": "Sales Invoice",
+        "correlation_field": "custom_ai_action_id",
+        "reference_field": "custom_ai_action_id",
+        "draft_only": true,
+        "allow_submit": false
+      },
+      "errors": [
+        "SR_INVOICE_UNRESOLVED",
+        "SR_INVOICE_NOT_FOUND",
+        "SR_INVOICE_NOT_SUBMITTED",
+        "SR_INVOICE_IS_RETURN",
+        "SR_CUSTOMER_UNRESOLVED",
+        "SR_CUSTOMER_MISMATCH",
+        "SR_ITEM_UNRESOLVED",
+        "SR_ITEM_NOT_IN_INVOICE",
+        "SR_QTY_INVALID",
+        "SR_QTY_AMBIGUOUS",
+        "SR_QTY_MISSING",
+        "SR_QTY_EXCEEDS_RETURNABLE",
+        "SR_NOTHING_TO_RETURN",
+        "SR_DRAFT_COVERED",
+        "SR_RETURNABLE_UNKNOWN",
+        "SR_UOM_MISMATCH",
+        "SR_LINE_LIMIT",
+        "SR_COMPANY_UNRESOLVED",
+        "SR_CORRELATION_FIELD_MISSING",
+        "SR_DUPLICATE_ACTION",
+        "SR_WRITE_UNVERIFIED",
+        "SR_CLIENT_UNAVAILABLE",
+        "INSUFFICIENT_PERMISSION",
+        "PROPOSAL_EXPIRED",
+        "PROPOSAL_VERSION_STALE",
+        "PROPOSAL_ENTITY_CHANGED",
+        "PROPOSAL_STALE",
+        "ERP_UNAVAILABLE",
+        "ENTITY_PICK_REQUIRED"
+      ],
+      "skill": "skills/sales-return-write.mjs#buildSalesReturnProposal",
+      "proposal_action": "create_sales_return"
+    },
+    "stock.adjustment": {
+      "type": "WRITE",
+      "route_group": "stock_adjustment_write",
+      "description": "Xuất hủy hàng hỏng khỏi kho — Stock Entry Material Issue NHÁP (P9-E; PHẠM VI phiên này: CHỈ Material Issue)",
+      "triggers": [
+        "xuất hủy",
+        "xuất huỷ",
+        "xuất bỏ",
+        "hàng hỏng",
+        "hàng hư",
+        "hàng bị hỏng",
+        "báo hỏng",
+        "hủy hàng hỏng",
+        "huỷ hàng hỏng"
+      ],
+      "entities": {
+        "comment": "P9-E: KHÔNG có party — 'entity' của capability này là MẶT HÀNG (kind 'item'), và số lượng + KHO là hai slot BẮT BUỘC phải NÓI RA (xác nhận kép ở tầng dữ liệu: builder TỪ CHỐI nếu thiếu một trong hai — KHÔNG bao giờ suy ra kho từ 'kho nào cũng được' hay tự chọn kho duy nhất còn hàng). Lý do: sai kho ⇒ sai chỗ kiểm kê của tiệm, và không thể hoàn tác bằng chat.",
+        "required": [
+          "item",
+          "quantity",
+          "warehouse"
+        ],
+        "optional": []
+      },
+      "amount_policy": null,
+      "line_policy": {
+        "comment": "P9-E — phiếu xuất hủy KHÔNG có giá: giá trị hàng ra khỏi kho là do ERPNext định giá (valuation ledger), nên `rate_source: erpnext` ở đây nghĩa là 'số tiền duy nhất liên quan là con số ERPNext tự tính' và skill TỪ CHỐI nếu thấy bất kỳ `rate`/`price` nào trong params. `max_lines: 1` vì một phiếu xuất hủy là MỘT quyết định cho MỘT mặt hàng ('xuất hủy 2 bao cám heo và 3 bao cám gà' là hai phiếu).",
+        "entry_type": "Material Issue",
+        "max_lines": 1,
+        "qty_positive": true,
+        "qty_source": "stock",
+        "rate_source": "erpnext",
+        "no_price": "ask",
+        "uom_policy_ref": "defaults.uom_policy"
+      },
+      "entity_policy": {
+        "comment": "P9-E: write path dùng chung luật exact-only như mọi WRITE khác (mục này giữ nguyên hình dạng).",
+        "EXACT_MATCH": {
+          "auto_select": true,
+          "require_picker": false,
+          "block": false
+        },
+        "FUZZY_SINGLE_MATCH": {
+          "auto_select": false,
+          "require_picker": true,
+          "block": false
+        },
+        "AMBIGUOUS_MATCH": {
+          "auto_select": false,
+          "require_picker": true,
+          "block": false
+        },
+        "NO_MATCH": {
+          "auto_select": false,
+          "require_picker": false,
+          "block": true
+        }
+      },
+      "risk": {
+        "level": "HIGH",
+        "requires_confirmation": true,
+        "double_confirm": true
+      },
+      "authorization": {
+        "permissions": [
+          "Stock User"
+        ],
+        "scope": {
+          "company": "required"
+        }
+      },
+      "confirmation": {
+        "ttl": "10m",
+        "immutable": true
+      },
+      "execution": {
+        "comment": "P9-E: wired end-to-end. draft_only + allow_submit false — phiếu xuất hủy NHÁP (docstatus 0) KHÔNG trừ khoan: chỉ SUBMIT mới sinh Stock Ledger Entry, và submit không có trên đường chat. write_doctype Stock Entry ⇒ writeDoctypes() cấp quyền tạo (client.callWriteTool chỉ cho erpnext_doc_create/doc_submit, doctype-gated) và script add-correlation-field.mjs tự đưa Stock Entry vào scope migration. correlation_field = custom_ai_action_id: reconcile_on_unknown true vì một phiếu bị mất phản hồi vẫn nằm trong sổ ⇒ retry phải TÌM LẠI theo correlation chứ không ghi phiếu thứ hai.",
+        "idempotent": true,
+        "verify_document": true,
+        "reconcile_on_unknown": true,
+        "write_doctype": "Stock Entry",
+        "correlation_field": "custom_ai_action_id",
+        "reference_field": "custom_ai_action_id",
+        "draft_only": true,
+        "allow_submit": false
+      },
+      "errors": [
+        "SE_ITEM_UNRESOLVED",
+        "SE_ITEM_AMBIGUOUS",
+        "SE_QTY_MISSING",
+        "SE_QTY_AMBIGUOUS",
+        "SE_QTY_EXCEEDS_STOCK",
+        "SE_UOM_UNRESOLVED",
+        "SE_WAREHOUSE_MISSING",
+        "SE_WAREHOUSE_NOT_FOUND",
+        "SE_WAREHOUSE_AMBIGUOUS",
+        "SE_NOTHING_TO_ISSUE",
+        "SE_DRAFT_COVER_UNKNOWN",
+        "SE_PURPOSE_UNSUPPORTED",
+        "SE_PRICE_FORBIDDEN",
+        "SE_COMPANY_UNRESOLVED",
+        "SE_CORRELATION_FIELD_MISSING",
+        "SE_DUPLICATE_ACTION",
+        "SE_WRITE_UNVERIFIED",
+        "SE_CLIENT_UNAVAILABLE",
+        "INSUFFICIENT_PERMISSION",
+        "PROPOSAL_EXPIRED",
+        "PROPOSAL_VERSION_STALE",
+        "PROPOSAL_ENTITY_CHANGED",
+        "PROPOSAL_STALE",
+        "ERP_UNAVAILABLE",
+        "ENTITY_PICK_REQUIRED"
+      ],
+      "skill": "skills/stock-adjustment-write.mjs#buildStockAdjustmentProposal",
+      "proposal_action": "create_stock_adjustment"
+    },
+    "delivery.create": {
+      "type": "WRITE",
+      "route_group": "delivery_write",
+      "description": "Tạo phiếu giao hàng (Delivery Note NHÁP) theo một đơn bán đã submit — P9-A1 có builder proposal; wiring + executor là P9-A2",
+      "triggers": [
+        "giao hàng",
+        "giao đơn",
+        "delivery"
+      ],
+      "entities": {
+        "comment": "P9-A1: ĐƠN BÁN là entity bắt buộc — phiếu giao lấy dòng hàng, đơn vị và khách từ chính đơn đó, nên không có đơn thì không có gì để đề xuất. `customer` là optional: nó chỉ để ĐỐI CHIẾU (đơn thuộc khách nào) chứ không quyết định nội dung phiếu.",
+        "required": [
+          "order"
+        ],
+        "optional": [
+          "customer"
+        ]
+      },
+      "amount_policy": null,
+      "line_policy": {
+        "comment": "P9-A1 — phiếu giao KHÔNG có giá riêng: dòng hàng, đơn vị và giá là của ĐƠN BÁN (rate_source erpnext vẫn đúng vì giá đến từ chứng từ ERPNext, không bao giờ từ câu nói). Số lượng DUY NHẤT được lấy từ câu nói là 'giao bao nhiêu', và nó bị chặn trần bởi qty − delivered_qty của chính đơn (vượt ⇒ TỪ CHỐI, không kẹp).",
+        "max_lines": 20,
+        "qty_positive": true,
+        "qty_source": "so_pending",
+        "rate_source": "erpnext",
+        "no_price": "ask",
+        "uom_policy_ref": "defaults.uom_policy"
+      },
+      "entity_policy": {
+        "comment": "Cùng luật WRITE như payment/SO: exact-only, fuzzy thì bắt chọn, không khớp thì chặn.",
+        "EXACT_MATCH": {
+          "auto_select": true,
+          "require_picker": false,
+          "block": false
+        },
+        "FUZZY_SINGLE_MATCH": {
+          "auto_select": false,
+          "require_picker": true,
+          "block": false
+        },
+        "AMBIGUOUS_MATCH": {
+          "auto_select": false,
+          "require_picker": true,
+          "block": false
+        },
+        "NO_MATCH": {
+          "auto_select": false,
+          "require_picker": false,
+          "block": true
+        }
+      },
+      "risk": {
+        "level": "HIGH",
+        "requires_confirmation": true,
+        "double_confirm": false
+      },
+      "authorization": {
+        "permissions": [
+          "Sales User"
+        ],
+        "scope": {
+          "company": "required"
+        }
+      },
+      "confirmation": {
+        "ttl": "10m",
+        "immutable": true
+      },
+      "execution": {
+        "comment": "P9-A2: wired end-to-end. draft_only + allow_submit false: phiếu giao NHÁP (docstatus 0) không trừ kho — chỉ lúc SUBMIT mới sinh Stock Ledger Entry, và submit KHÔNG có trên đường chat. correlation_field = custom_ai_action_id (cùng Custom Field với SO/QT/PO, một migration phủ cả bốn). reconcile_on_unknown: true vì một phiếu giao bị mất phản hồi vẫn nằm trong sổ ⇒ lần retry phải TÌM lại theo correlation chứ không ghi phiếu thứ hai.",
+        "idempotent": true,
+        "verify_document": true,
+        "reconcile_on_unknown": true,
+        "write_doctype": "Delivery Note",
+        "correlation_field": "custom_ai_action_id",
+        "reference_field": "custom_ai_action_id",
+        "draft_only": true,
+        "allow_submit": false
+      },
+      "errors": [
+        "DN_SO_UNRESOLVED",
+        "DN_SO_NOT_FOUND",
+        "DN_SO_NOT_SUBMITTED",
+        "DN_CUSTOMER_UNRESOLVED",
+        "DN_CUSTOMER_MISMATCH",
+        "DN_ITEM_UNRESOLVED",
+        "DN_ITEM_NOT_IN_SO",
+        "DN_ALREADY_DELIVERED",
+        "DN_DRAFT_COVERED",
+        "DN_UOM_MISMATCH",
+        "DN_QTY_INVALID",
+        "DN_QTY_AMBIGUOUS",
+        "DN_QTY_MISSING",
+        "DN_QTY_EXCEEDS_PENDING",
+        "DN_NOTHING_TO_DELIVER",
+        "DN_LINE_LIMIT",
+        "DN_COMPANY_UNRESOLVED",
+        "DN_CORRELATION_FIELD_MISSING",
+        "DN_DUPLICATE_ACTION",
+        "DN_WRITE_UNVERIFIED",
+        "DN_CLIENT_UNAVAILABLE",
+        "INSUFFICIENT_PERMISSION",
+        "PROPOSAL_EXPIRED",
+        "PROPOSAL_VERSION_STALE",
+        "PROPOSAL_ENTITY_CHANGED",
+        "PROPOSAL_STALE",
+        "ERP_UNAVAILABLE",
+        "ENTITY_PICK_REQUIRED"
+      ],
+      "skill": "skills/delivery-write.mjs#buildDeliveryProposal",
+      "proposal_action": "create_delivery_note"
+    },
+    "sales_invoice.create": {
+      "type": "WRITE",
+      "route_group": "sales_invoice_write",
+      "description": "Xuất hoá đơn bán (Sales Invoice NHÁP) theo một đơn bán đã submit — P9-D",
+      "triggers": [
+        "xuất hóa đơn",
+        "xuất hoá đơn",
+        "lập hóa đơn",
+        "lập hoá đơn",
+        "viết hóa đơn",
+        "xuất hd",
+        "lập hd"
+      ],
+      "entities": {
+        "comment": "P9-D: ĐƠN BÁN là entity bắt buộc — hoá đơn lấy dòng hàng, đơn vị và ĐƠN GIÁ từ chính đơn đó (ERPNext chặn hoá đơn lệch giá đơn: 417 \"Đơn giá phải giống với Sales Order\" — đo thật trong erpnext-rest-api-recipes). `customer` là optional: chỉ để ĐỐI CHIẾU đơn thuộc khách nào. Hoá đơn KHÔNG có đơn (tự doanh mục + giá) là bước sau, cần chính bộ resolve mặt hàng/giá của `sales_order.create` — xem P9-D-result §gap.",
+        "required": [
+          "order"
+        ],
+        "optional": [
+          "customer"
+        ]
+      },
+      "amount_policy": null,
+      "line_policy": {
+        "comment": "P9-D — hoá đơn lấy giá từ ĐƠN (rate_source erpnext, không bao giờ từ câu nói; thiếu/0 ⇒ HỎI, không mặc định 0). Số duy nhất lấy từ câu nói là 'xuất hoá đơn bao nhiêu', bị chặn trần bởi qty − (đã hoá đơn) của chính đơn: `billed_amt / rate` (recipes §436) — vượt ⇒ TỪ CHỐI, không kẹp. Thiếu cả `billed_amt`/`per_billed` ⇒ TỪ CHỐI (SI_PENDING_UNKNOWN), vì đoán 'chưa hoá đơn gì' là ghi thừa tiền.",
+        "max_lines": 20,
+        "qty_positive": true,
+        "qty_source": "so_billed_pending",
+        "rate_source": "erpnext",
+        "no_price": "ask",
+        "uom_policy_ref": "defaults.uom_policy"
+      },
+      "entity_policy": {
+        "comment": "Cùng luật WRITE như payment/SO/DN: exact-only, fuzzy thì bắt chọn, không khớp thì chặn.",
+        "EXACT_MATCH": {
+          "auto_select": true,
+          "require_picker": false,
+          "block": false
+        },
+        "FUZZY_SINGLE_MATCH": {
+          "auto_select": false,
+          "require_picker": true,
+          "block": false
+        },
+        "AMBIGUOUS_MATCH": {
+          "auto_select": false,
+          "require_picker": true,
+          "block": false
+        },
+        "NO_MATCH": {
+          "auto_select": false,
+          "require_picker": false,
+          "block": true
+        }
+      },
+      "risk": {
+        "comment": "HIGH hơn SO ở hệ quả: một hoá đơn ĐÃ SUBMIT vào sổ doanh thu + công nợ (SO submit chưa sinh bút toán nào). Bản thân đường chat vẫn chỉ tạo NHÁP.",
+        "level": "HIGH",
+        "requires_confirmation": true,
+        "double_confirm": false
+      },
+      "authorization": {
+        "permissions": [
+          "Sales User"
+        ],
+        "scope": {
+          "company": "required"
+        }
+      },
+      "confirmation": {
+        "ttl": "10m",
+        "immutable": true
+      },
+      "execution": {
+        "comment": "P9-D: wired end-to-end. draft_only + allow_submit false — submit là bước riêng trên ERPNext (và chỉ lúc submit mới có bút toán doanh thu); `update_stock` gửi TƯỜNG MINH 0 vì hoá đơn tạo từ chat KHÔNG được phép dịch chuyển kho (recipes §704: mapper cũng để 0 khi hoá đơn gốc không nhập kho). correlation_field = custom_ai_action_id — một Custom Field dùng chung cho SO/QT/PO/DN/PR/PI ⇒ cần migration trên Sales Invoice trước khi dùng thật.",
+        "idempotent": true,
+        "verify_document": true,
+        "reconcile_on_unknown": true,
+        "write_doctype": "Sales Invoice",
+        "correlation_field": "custom_ai_action_id",
+        "reference_field": "custom_ai_action_id",
+        "draft_only": true,
+        "allow_submit": false
+      },
+      "errors": [
+        "SI_SO_UNRESOLVED",
+        "SI_SO_NOT_FOUND",
+        "SI_SO_NOT_SUBMITTED",
+        "SI_CUSTOMER_UNRESOLVED",
+        "SI_CUSTOMER_MISMATCH",
+        "SI_ITEM_UNRESOLVED",
+        "SI_ITEM_NOT_IN_SO",
+        "SI_ALREADY_BILLED",
+        "SI_DRAFT_COVERED",
+        "SI_PENDING_UNKNOWN",
+        "SI_RATE_MISSING",
+        "SI_UOM_MISMATCH",
+        "SI_QTY_INVALID",
+        "SI_QTY_AMBIGUOUS",
+        "SI_QTY_MISSING",
+        "SI_QTY_EXCEEDS_PENDING",
+        "SI_NOTHING_TO_BILL",
+        "SI_LINE_LIMIT",
+        "SI_COMPANY_UNRESOLVED",
+        "SI_CORRELATION_FIELD_MISSING",
+        "SI_DUPLICATE_ACTION",
+        "SI_WRITE_UNVERIFIED",
+        "SI_CLIENT_UNAVAILABLE",
+        "INSUFFICIENT_PERMISSION",
+        "PROPOSAL_EXPIRED",
+        "PROPOSAL_VERSION_STALE",
+        "PROPOSAL_ENTITY_CHANGED",
+        "PROPOSAL_STALE",
+        "ERP_UNAVAILABLE",
+        "ENTITY_PICK_REQUIRED"
+      ],
+      "skill": "skills/sales-invoice-write.mjs#buildSalesInvoiceProposal",
+      "proposal_action": "create_sales_invoice"
+    },
+    "quotation.create": {
+      "type": "WRITE",
+      "route_group": "quotation_write",
+      "description": "Tạo báo giá (Quotation NHÁP) cho một khách đã xác định — ĐỀ NGHỊ, không phải đơn đã chốt",
+      "triggers": [
+        "báo giá",
+        "bao gia",
+        "quotation",
+        "quote"
+      ],
+      "entities": {
+        "required": [
+          "customer",
+          "lines"
+        ],
+        "optional": []
+      },
+      "amount_policy": null,
+      "entity_policy": {
+        "comment": "Stub nhưng VẪN khai policy WRITE (xem delivery.create).",
+        "EXACT_MATCH": {
+          "auto_select": true,
+          "require_picker": false,
+          "block": false
+        },
+        "FUZZY_SINGLE_MATCH": {
+          "auto_select": false,
+          "require_picker": true,
+          "block": false
+        },
+        "AMBIGUOUS_MATCH": {
+          "auto_select": false,
+          "require_picker": true,
+          "block": false
+        },
+        "NO_MATCH": {
+          "auto_select": false,
+          "require_picker": false,
+          "block": true
+        }
+      },
+      "risk": {
+        "level": "HIGH",
+        "requires_confirmation": true,
+        "double_confirm": false
+      },
+      "authorization": {
+        "permissions": [
+          "Sales User"
+        ],
+        "scope": {
+          "company": "required"
+        }
+      },
+      "confirmation": {
+        "ttl": "0m",
+        "immutable": true
+      },
+      "line_policy": {
+        "comment": "B3 — như đơn hàng (B2): báo giá không có 'một số tiền' để gate (amount_policy null) nên rủi ro 'số' nằm ở DÒNG HÀNG; policy dòng validate fail-closed. Giá vẫn CHỈ từ ERPNext — một báo giá cũng không được lấy giá từ câu nói.",
+        "max_lines": 20,
+        "qty_positive": true,
+        "qty_source": "nlp",
+        "rate_source": "erpnext",
+        "no_price": "ask",
+        "uom_policy_ref": "defaults.uom_policy"
+      },
+      "execution": {
+        "idempotent": true,
+        "verify_document": true,
+        "reconcile_on_unknown": true,
+        "write_doctype": "Quotation",
+        "correlation_field": "custom_ai_action_id",
+        "reference_field": "custom_ai_action_id",
+        "allow_submit": false,
+        "draft_only": true
+      },
+      "errors": [
+        "CUSTOMER_NOT_FOUND",
+        "AMBIGUOUS_CUSTOMER",
+        "QT_CUSTOMER_UNRESOLVED",
+        "QT_ITEM_UNRESOLVED",
+        "QT_QTY_MISSING",
+        "QT_QTY_AMBIGUOUS",
+        "QT_UOM_UNRESOLVED",
+        "QT_PRICE_MISSING",
+        "QT_LINE_LIMIT",
+        "QT_COMPANY_UNRESOLVED",
+        "QT_CORRELATION_FIELD_MISSING",
+        "QT_DUPLICATE_ACTION",
+        "QT_WRITE_UNVERIFIED",
+        "INSUFFICIENT_PERMISSION",
+        "PROPOSAL_EXPIRED",
+        "PROPOSAL_VERSION_STALE",
+        "PROPOSAL_ENTITY_CHANGED",
+        "PROPOSAL_STALE",
+        "ERP_UNAVAILABLE",
+        "ENTITY_PICK_REQUIRED"
+      ],
+      "skill": "skills/quotation-write.mjs#buildQuotationProposal",
+      "proposal_action": "create_quotation"
+    },
+    "supplier.lookup": {
+      "type": "READ",
+      "route_group": "supplier",
+      "description": "Find a supplier and show its master data (B1 resolver for the later PO path)",
+      "triggers": [
+        "nhà cung cấp",
+        "nha cung cap",
+        "ncc",
+        "supplier",
+        "nhà phân phối"
+      ],
+      "entities": {
+        "required": [
+          "supplier"
+        ],
+        "optional": []
+      },
+      "amount_policy": null,
+      "risk": {
+        "level": "READ",
+        "requires_confirmation": false
+      },
+      "authorization": {
+        "permissions": [],
+        "scope": {
+          "company": "optional"
+        },
+        "row_level": "optional"
+      },
+      "confirmation": null,
+      "execution": {
+        "idempotent": false,
+        "verify_document": false,
+        "reconcile_on_unknown": false
+      },
+      "errors": [
+        "SUPPLIER_NOT_FOUND",
+        "AMBIGUOUS_SUPPLIER",
+        "ERP_UNAVAILABLE"
+      ],
+      "skill": "skills/purchasing.mjs#findSupplier",
+      "proposal_action": "read_supplier"
+    },
+    "document.delete": {
+      "type": "WRITE",
+      "route_group": "document_delete",
+      "description": "Deleting an ERPNext document",
+      "triggers": [
+        "xóa",
+        "xoá",
+        "huỷ",
+        "hủy",
+        "delete",
+        "remove"
+      ],
+      "entities": {
+        "required": [
+          "document"
+        ],
+        "optional": []
+      },
+      "amount_policy": null,
+      "risk": {
+        "level": "CRITICAL",
+        "requires_confirmation": true,
+        "double_confirm": true
+      },
+      "authorization": {
+        "permissions": [
+          "System Manager"
+        ],
+        "scope": {
+          "company": "required"
+        }
+      },
+      "confirmation": {
+        "ttl": "0m",
+        "immutable": true
+      },
+      "execution": {
+        "idempotent": false,
+        "verify_document": false,
+        "reconcile_on_unknown": false,
+        "forbidden_in_ai_path": true,
+        "reason": "plan2_final §8 — document.delete has no legitimate use case in the AI UI; needs a separate admin UI"
+      },
+      "errors": [
+        "FORBIDDEN_IN_AI_PATH",
+        "UNSUPPORTED_OPERATION"
+      ],
+      "skill": null,
+      "proposal_action": "delete_document"
+    }
+  }
+}

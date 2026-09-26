@@ -1,0 +1,16 @@
+1-site HOÀN TẤT — E2E thật đạt
+
+Customer thật đã tạo (theo confirm của user):  Khách Test App M1  — trên site ngrok, name == customer_name.
+
+Làm trong phần cuối này
+
+1. Bug thật thứ 2 (chặn toàn bộ feature): site có customer tên "A" — luật fuzzy cũ  name.includes(have)  khiến  "...app...".includes("a")  đúng ⇒ mọi lệnh thêm khách bị  CC_FUZZY_MATCH . Fix: so khớp theo từ nguyên vẹn (token run) — "A" chỉ chặn tên thật sự dùng từ "A".
+2. Suite: M1 30/30 (+1 test mới) · Node full 755/753/2 (2 fail = DSH env từ B0) · falsify 16/16 RED (A–P, ca D neo lại + thêm ca P; restore byte-identical) · Flutter 281/281 + analyze 0 · Python 63 OK.
+3. E2E thật (NLP + http-ask + curl cùng 1 lệnh):  /ask "thêm khách Khách Test App M1"  → card HIGH, profile  Individual/Vietnam/Individual  từ env, hết bị "A" chặn →  /execute  →  {ok:true, replay:false}  + verify đọc lại PASS →  /ask "công nợ Khách Test App M1"  ⇒ "không còn nợ gì" (resolve ngay sau tạo) → đếm site 123 → 124.
+4. Review thủ công + secret scan: diff soi null/validate/race thủ công (OCR/AgentMemory/codebase-memory/Simplenote không có trong env, không tự cài); grep secret trong diff = chỉ khớp chữ "token" trong code mới,  .env  git-ignored ✓.
+5. Docs:  .plan/next4/M1-site-result.md  (deliverable) ·  result66.txt  (phần M1-SITE, số suite + nhật ký lệnh) ·  working.md  +  checklist.md  +  next.md  cập nhật. Không ghi AgentMemory (dịch vụ không khả dụng trong env này).
+
+Chờ user
+
+- Duyệt commit — vùng master data + ghi record thật: AI không tự ký duyệt. 16 file đang unstaged ( customer-create.mjs , test, falsify,  capabilities.json , mock, router, Flutter offer card, docs).
+- Checklist máy thật 28 case cần APK + điện thoại (phiên sau)

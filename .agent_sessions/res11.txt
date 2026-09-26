@@ -1,0 +1,25 @@
+Xong cả 3 việc. Chưa push gì.
+
+1) Commit next5 — ✅  17d6f9b  (39 file)
+
+ feat(ops): drawer READ REAL-only + provenance, hoàn tất next5 (D0–D5)  — gồm drawer READ + provenance, A3 HĐĐT PDF, test/falsify, docs D5. Secret scan sạch.
+- Loại khỏi commit (rác/personal):  syncode ,  checklist1.md ,  faq1.md ,  icon.png ,  query_customer.py  — vẫn dirty trong tree.
+- ⚠️  .plan/**  gitignored ⇒  next5-drawer-done.md  +  D*-result.md  không vào commit (chỉ nằm local).
+
+2) Fix bug P4-6 "Hôm qua" — ✅  ed79f77  (8 file)
+
+ fix(ops): Tóm tắt ngày "Hôm qua" hiện ĐÚNG số của ngày đó [VÙNG SỐ TIỀN] 
+- Thẻ bán/thu chọn "Hôm qua" nay hiện đúng số của hôm qua; đọc lỗi ⇒ "Chưa đọc được ngày hôm qua" +  Thử lại  (fail-closed, không hiện số hôm nay); drill mang  date = d.meta.date .
+- Bỏ dòng delta theo bạn chốt. Docs khớp lại ( features.md ,  checklist.md ,  next.md ,  faq.md §10.3 ,  working.md ).
+- Kiểm chứng: Flutter 333/333 · analyze 0 · falsify  p44-read-drill  38/38 RED (3 ca mới bảo vệ fix).
+
+3)  .env  — ✅ ĐẠT
+
+-  .env  được gitignore ( .gitignore:52 ) → an toàn.
+-  COPILOT_COMPANY="Minh Phát Cám & VLXD"  (dòng 33) ·  COPILOT_DEFAULT_WAREHOUSE="Kho Cám - MP"  (dòng 36).
+- ⚠️  COPILOT_ERP_TARGET  không có trong  .env .
+
+Còn lại / cần bạn biết
+
+- Chưa kiểm tay trên máy cho fix UI — nên tự test theo  docs/how-to-test.md .
+- falsify  p43-drawer-summary  có 1 ca đỏ từ trước ("the route stops passing the target" — anchor  erpTarget:  trong  http-ask.mjs ), không do sửa này; tôi để nguyên vì ngoài scope.

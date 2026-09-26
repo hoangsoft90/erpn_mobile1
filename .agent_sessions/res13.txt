@@ -1,0 +1,50 @@
+NEXT6 Prompt-2 — Session Isolation & Lifecycle: XONG code+test, chưa commit
+
+OpenSpec change  next6-session-isolation  tạo trước khi code,  openspec validate  = valid.
+
+Bằng chứng theo từng yêu cầu (dòng code + kết quả test)
+
+┌─────┬─────────────────────────────────┬───────────────────────────────────────────────┬─────────────────────┐
+│ #   │ Yêu cầu                         │ Code                                          │ Test                │
+├─────┼─────────────────────────────────┼───────────────────────────────────────────────┼─────────────────────┤
+│ 2   │ Session key = principal +       │ dsh-gateway.mjs:485 dshSessionKey(); :573 get │ ✅ §9.1 + §9.4      │
+│     │ conversation (không chỉ         │ / :598 set / :629 touch / :661 delete / :675  │                     │
+│     │ conversation_id)                │ clear                                         │                     │
+│ 2.2 │ Identity server-authoritative   │ http-ask.mjs:594 principalId: userId;         │ ✅                  │
+│     │ (không lấy từ body)             │ copilot-server.mjs:63 contextScopeFor         │                     │
+│ 3   │ Lifecycle: id ổn                │ conversation_id_service.dart;                 │ ✅ 5/5 conversation │
+│     │ định/persist/new/clear          │ chat_controller.dart build()+clearHistory();  │ _id_service_test.da │
+│     │                                 │ settings_screen.dart                          │ rt                  │
+│ 4   │ Cap từ env + LRU + không evict  │ dsh-gateway.mjs:503/519/532/478/689;          │ ✅ §3.0 (2 test)    │
+│     │ active + SESSION_LIMIT_EXCEEDED │ markActive                                    │                     │
+│ 4   │ Same-conversation serialize     │ dsh-gateway.mjs:710 withDshConversationLock,  │ ✅ §9.2 (trace star │
+│     │                                 │ :866                                          │ t,end,start,end)    │
+│ 5   │ Clear chỉ namespace caller,     │ session-context.mjs:130; dsh-gateway.mjs:675  │ ✅ §3.1 (2 test)    │
+│     │ không xoá principal khác        │                                               │                     │
+│ 6   │ WRITE isolation cross-user      │ idempotency.mjs:133 COMMAND_ID_FOREIGN;       │ ✅ §9.6 (2 test)    │
+│     │                                 │ safety-gateway.mjs:573                        │                     │
+│     │                                 │ PROPOSAL_PRINCIPAL_MISMATCH                   │                     │
+│ 4/6 │ Retry-After 429 +               │ http-ask.mjs:93/618/2213                      │ ✅ (full suite)     │
+│     │ conversation_id log             │                                               │                     │
+│ 10  │ Không thêm mock runtime         │ không đụng mock-server.mjs/REAL               │ ✅                  │
+└─────┴─────────────────────────────────┴───────────────────────────────────────────────┴─────────────────────┘
+
+Kết quả test thật
+
+mcp-erpnext: node --test test/next6-session-isolation.test.mjs → tests 14 · pass 14 · fail 0
+mcp-erpnext: npm test (full) → tests 834 · pass 832 · fail 2
+   (2 fail = dshGatewayHealth + verifyDshRuntime — MÔI TRƯỜNG DSH, đã biết từ B0.
+    baseline 820/818/2 → +14 test mới, KHÔNG hồi quy)
+apps/mobile: flutter analyze --no-pub → No issues found!
+apps/mobile: flutter test → +338: All tests passed!
+openspec validate next6-session-isolation → Change is valid
+
+Deliverable:  .plan/next6-result2.md  (files+reason+criterion, session-key design, identity source, lifecycle, tests, structural gate, files audited-unchanged, limitations, PASS/FAIL §11 — tất cả PASS).
+
+Báo cáo tồn đọng (thay vì tự ký duyệt)
+
+- Vùng nhạy cảm:  idempotency.mjs  +  safety-gateway.mjs  = authz/trust boundary (Ponytail vùng loại trừ) → theo AGENTS.md tôi KHÔNG tự commit. Cần bạn xác nhận.
+- Code Review thủ công (OCR/AgentMemory/MCP đều không khả dụng): 0 High/Medium. 1 Low:  SESSION_LIMIT_EXCEEDED  trả 503 sau khi DSH đã chạy xong (discard answer) — thực tế gần như không xảy ra vì global concurrency=1 ⇒ tối đa 1 session active, cap 200 luôn tìm được ứng viên evict.
+- Limitation: không thêm server-side clear endpoint (đúng §3.1); memory-only ⇒ clean restart in-memory;  begin()  chỉ chặn khi cả 2 phía có  user_id  (record cũ bỏ qua).
+
+Chưa commit và chưa push. Bạn muốn tôi commit  next6-session-isolation  (tách riêng khỏi 2 commit next5/P4-6) khi nào?

@@ -1,0 +1,90 @@
+========================================================================
+RESULT 47 — P3 (phases2): LLM CLASSIFIER (ASYNC) + REGRESSION CI GATE
+Timestamp: 2026-09-17 (giờ shell)
+Phạm vi: classifier semantic-only qua LLM Router + wire vào /ask khi keyword
+router = unknown + golden classifier regression (mock LLM, deterministic).
+KHÔNG: agent loop, DSH trên /ask, tool-call từ LLM, WRITE tự động, vector routing,
+sửa 3 gap Golden k18/m15/k36.
+Cây thật KHÔNG bị đụng bởi falsify (chạy trên /tmp copy, đã xoá).
+========================================================================
+
+== 1. FILE MỚI / SỬA ==
+MỚI:
+  mcp-erpnext/src/classifier.mjs                 (module classifier)
+  mcp-erpnext/test/p3-classifier.test.mjs        (13 test: unit + E2E mock LLM)
+  mcp-erpnext/test/p3-classifier-regression.test.mjs  (CI gate, 9 case)
+  mcp-erpnext/test/golden/classifier-cases.json  (bộ case pinned)
+SỬA:
+  mcp-erpnext/src/router.mjs                     (+ routeByCapability(id))
+  mcp-erpnext/src/copilot-server.mjs             (wire classifier khi !route)
+  mcp-erpnext/test/p1-entity-state.test.mjs      (fix flaky: ghim now vào bucket)
+
+== 2. THIẾT KẾ (đọc code thật, không đoán API) ==
+LLM Router (Phase 5) = OpenAI-compatible: POST http://127.0.0.1:8900/v1/chat/completions
+  (scripts/llm-router.mjs:25-26). Classifier gọi đúng endpoint này.
+Classifier CHỈ cấp route: routeByCapability(intent) trả {group, factory, capability}
+  → đi tiếp forbidden check/stub check/Safety Gateway/entity resolver Y HỆT keyword.
+Config: COPILOT_CLASSIFIER=off|on (mặc định on) + URL/MODEL/TIMEOUT_MS/MIN_CONFIDENCE.
+
+== 3. UNIT — validate fail-closed (output semantic-only) ==
+  $ env -u ERPNEXT_* node --test test/p3-classifier.test.mjs
+  ✔ never surfaces an ERP id (id-like keys stripped)   ← 2 lớp: regex + allowlist
+  ✔ intent outside the contract is rejected
+  ✔ forbidden capabilities are not offerable           ← document.delete không được nêu
+  ✔ invalid confidence fails closed (null/true/2/"high")
+  ✔ low confidence / empty intent ⇒ low_confidence, not a route
+  ✔ keeps only allowlisted TEXT slots
+  ✔ parses fenced/padded JSON
+  ✔ non-2xx / unparseable / abort all fail closed
+  ✔ disabled classifier never touches the network
+  → 13/13 pass
+
+== 4. E2E — pipeline thật + mock LLM (không provider, không quota) ==
+  ✔ unknown sentence routed by classifier: matched="classifier", group=customer,
+    answer "Nguyễn Thị Lan … 2.500.000đ"
+  ✔ low confidence → LOW_CONFIDENCE + needs_clarification
+  ✔ LLM down (port 1) → UNKNOWN_INTENT (rule-only), KHÔNG crash/500 mù
+  ✔ write intent → proposal action=create_payment_entry risk=HIGH (vẫn cần confirm)
+
+== 5. REGRESSION CI GATE (golden-classifier) ==
+  $ node --test test/p3-classifier-regression.test.mjs
+  classifier regression: 9/9 cases passed
+  (cls06: "xóa toàn bộ dữ liệu" → FORBIDDEN_IN_AI_PATH — keyword router chặn TRƯỚC
+   classifier ⇒ classifier KHÔNG BAO GIỜ bật được delete.)
+
+== 6. FALSIFY (trên BẢN SAO /tmp/falsify-p3 — cây sống không đụng) ==
+F4 allowedIntents bỏ filter !isForbidden
+   → unit "forbidden capabilities are not offerable" FAIL  ✅
+F1 gỡ CẢ 2 lớp guard (regex ID_LIKE + allowlist SLOT_KEYS)
+   → unit "never surfaces an ERP id" FAIL  ✅
+   (ghi chú: chỉ gỡ 1 lớp KHÔNG đủ để đỏ — 2 lớp độc lập cùng bảo vệ; bài học mới)
+F3 ép low_confidence = false
+   → regression cls04 FAIL ("tình hình của hai" thay vì LOW_CONFIDENCE)  ✅
+Sau mỗi lần: khôi phục; `diff -q` bản sao vs cây thật = IDENTICAL; xoá /tmp/falsify-p3.
+
+== 7. TEST FLAKY CÓ SẴN (không do P3) — ĐÃ SỬA ==
+p1-entity-state.test.mjs "same real intent in the window" dùng Date.now() rồi now+60s
+  ⇒ rơi 2 mốc bucket 15-phút khác nhau khi chạy gần biên.
+  Đo thật: $ node -e "now%B=897122/900000 ⇒ còn 2.9s tới mốc"  → sameBucket=false
+  Fix: const now = Math.floor(Date.now()/DEDUP_BUCKET_MS)*DEDUP_BUCKET_MS + 60_000;
+  (test-only; cần để CI gate đáng tin — P3 là phase về CI gate.)
+
+== 8. SUITE CUỐI (lệnh + output thật) ==
+  $ env -u ERPNEXT_URL -u ERPNEXT_API_KEY -u ERPNEXT_API_SECRET node --test
+      (mcp-erpnext)  → ℹ tests 195 · ℹ pass 195 · fail 0   (181 → 195, +14)
+  $ PYTHONPATH=src python3 -m unittest discover -s tests
+                     → Ran 60 tests — OK
+  $ flutter test     → +69: All tests passed!
+  $ flutter analyze  → No issues found!
+(env -u ERPNEXT_* vì shell còn biến từ probe — bài học mock/real.)
+
+== 9. COMMIT ==
+- ✅ P3 ĐÃ COMMIT `c38e4ea` + PUSH (`59dcc54..c38e4ea`, branch change/flutter-chat-mvp)
+  13 file +1025/−7; secret scan staged diff CLEAN; .env/store/.plan/.agents không vào commit.
+- Review sau commit: thêm guard fail-closed `routeByCapability` (capability runnable thiếu
+  factory ⇒ null, không crash) + test phủ mọi capability (Node 195 → 196); falsify trên /tmp
+  bằng cách chèn route_group 'sales2' không factory ⇒ coverage test đỏ.
+- CÒN LẠI:
+- Bước kỹ thuật tiếp theo = P4 (learning loop) theo README phases2 — chỉ khi có lệnh.
+- Việc chỉ user: SUBMIT phiếu thu thật · rotate key · audio 150 câu · APK thật ·
+  GitHub Settings · review ai-rules.md · duyệt app icon · smoke upstream thật (optional).

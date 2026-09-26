@@ -1,0 +1,157 @@
+Xong cả hai việc.
+
+1) Vòng XML thật 2 lần cùng file — ✅ ĐẠT
+
+Script mới  .plan/next4/loop-xml-dedupe-real.mjs  (1 lệnh: NLP + gateway + đếm PO qua REST độc lập, không qua copilot). File:  tt78-basic.xml  (C26TYY/0000123) — đúng file của vòng A2 trước.
+
+LẦN 1  /input/einvoice 200  → /ask 200 (key bdk_ca5eaafe…) → /execute 200 ⇒ NHÁP PUR-ORD-2026-00007
+LẦN 2  ĐÚNG file đó         → /ask 200 (CÙNG key)          → /execute 409 PO_DUPLICATE_DOC
+        existing_doc = PUR-ORD-2026-00007  +  "…đã được nhập vào đơn mua PUR-ORD-2026-00007 — KHÔNG ghi thêm đơn thứ hai"
+ĐẾM PO (REST, độc lập): 6 → 7  ⇒ TĂNG ĐÚNG 1
+
+Kiểm chứng bản ghi bằng REST (không tin response ghi): docstatus 0 (nháp, không submit), company  Minh Phát Cám & VLXD , supplier  Đại lý Cám Bình Dương ,  custom_business_doc_key  chỉ 1 đơn mang, items CAM-GA-25KG×10 + CAM-HEO-25KG×5, tổng 4.175.000 VND (rate lấy từ ERPNext, không lấy từ file).
+
+⚠️ 2 phát hiện vòng thật bắt được (không phải review giấy)
+
+1. Deployment thiếu  COPILOT_COMPANY  ⇒ bấm [Xác nhận] trên app sẽ HỎNG. Lần chạy đầu  /execute  trả 500  PO_COMPANY_UNRESOLVED : site có 3 company (DEMO POC CO, Minh Phát Cám & VLXD, SANLOAN) mà chưa pin. Scope company là server-first và app không gửi  company  ⇒ phải đặt trong  .env . Fail-closed (không ghi sai) nhưng chặn mọi lần xác nhận đơn mua. Việc cần bạn làm: thêm  COPILOT_COMPANY="Minh Phát Cám & VLXD"  vào  .env  + restart server. (Vòng A2 trước tạo được 00006 vì khi đó site chỉ có 1 company.)
+2.  source_document  của  /input/einvoice  không dùng trực tiếp cho  /ask  — thiếu  kind  ⇒ 400  SOURCE_DOCUMENT_INVALID ; client phải thu hẹp. Và  slots.text  không phải câu để hỏi (nó là mô tả, không route tới đường ghi) — câu thật do client ghép  'đặt mua {goods} từ {party}' .
+
+Giới hạn đo được:  PUR-ORD-2026-00006  (cùng tờ, tạo trước migration) có key  null  ⇒ không được dedupe — lớp này chỉ phủ tờ nhập sau migration. Nháp  00007  còn nguyên trên site, tôi không tự huỷ.
+
+2) L1 + L3 — đã sửa nốt
+
+- L1 ( max_lines  chặn muộn): cap nay chạy trong lúc dựng ( flush() ), mã riêng  EINVOICE_PDF_TOO_MANY_LINES  ⇒ 413, trần  max_lines × 100  = 20.000 dòng chữ (suy ra từ policy, không thêm knob). Là từ chối, không cắt ngắn. Test dựng file 20.100 dòng mà qua mọi trần khác (nén nhỏ/phình nhỏ/có chữ thật) ⇒ chỉ cap dòng chặn được; + control 1 dòng.
+- L3 (guard tĩnh chỉ canh 1 file):  a1-einvoice-parser.test.mjs  nay áp  await|async  cho MỌI module  src/einvoice , không gọi tên riêng  einvoice-xml.mjs .
+
+Số đo:  a3  29/29 ·  a1 + a2 + a3  54/54 · Node full 807 / 805 pass / 2 fail (2 fail  dshGateway*  có sẵn từ B0) · falsify  a3-einvoice-pdf.mjs  12/12 RED (thêm ca L cho L1, M cho L3 — ca M tiêm  async  vào module PDF và test tĩnh ĐỎ).
+
+Trạng thái
+
+Chưa commit gì (cả H1/M1/M2 + L1/L3 lẫn vòng thật): 8 file tracked đã sửa +  scripts/falsify/a3-einvoice-pdf.mjs  mới +  result71/72.txt . Secret scan diff: sạch (chỉ còn dòng nhắc cũ  ghp_…7aO  — bạn nên revoke token đó). Docs:  .plan/next4/A3-result.md  §9.6 ·  B-dedupe-result.md  §10 ·  result71.txt  ·  result72.txt  ·  next.md  ·  checklist.md  ·  working.md 
+-------------------------
+Đọc  prompt-D0-spike.md  để chắc D0 khớp yêu cầu gốc:
+• Read .plan/next5/prompt-D0-spike.md, .plan/next5/prompt-D0.7-index.md, .plan/next5/README.md
+Xong D0. Khớp đúng  prompt-D0-spike.md  (4 mục + bảng 6 cột), chỉ đọc —  AppDrawer  còn nguyên 5 mục  soon , không WRITE, không  /execute .
+
+1. READ surface hiện có (đo, không suy từ docs)
+
+┌─────────────────────┬──────────┬────────────────────────────────────────────────────────────────────┐
+│ Route               │ Method   │ Envelope thật                                                      │
+├─────────────────────┼──────────┼────────────────────────────────────────────────────────────────────┤
+│ /read/daily-summary │ GET|POST │ phẳng {ok, meta, receivables, app_drafts, …}                       │
+│ /read/drill         │ GET|POST │ payload TRẦN (không {ok,result}) · date không bắt buộc → vnToday() │
+│ /read/list          │ POST     │ {ok,result} · bắt buộc entity_id (per-khách)                       │
+└─────────────────────┴──────────┴────────────────────────────────────────────────────────────────────┘
+
+5 drill id:  sales_orders_today  ·  invoices_today  ·  receipts_today  ·  overdue_customers  ·  app_drafts_today  · 1 ui_screen:  customer_account  (entity-bound).
+Fail-closed đo được:  UNKNOWN_DRILL_SCREEN  /  MISSING_DRILL_ID  /  INVALID_DATE  /  UNKNOWN_READ_SCREEN  — đều 400.
+
+2. Bảng mapping (bản đầy đủ trong  D0-result.md  §2)
+
+┌──────────┬────────────────────┬───────────────────────────┬───────────────────┬────────────┬────────────────┐
+│ Drawer   │ Endpoint?          │ drillId đề xuất           │ REAL verified     │ Perm       │ Screen reuse   │
+│ item     │                    │                           │                   │            │                │
+├──────────┼────────────────────┼───────────────────────────┼───────────────────┼────────────┼────────────────┤
+│ Công nợ  │ ❌ thiếu list toàn │ receivable_customers      │ phép đọc đã       │ READ ⇒ aut │ ✅ nguyên      │
+│          │ công ty (chỉ có số │ (mới) — tái dùng đúng     │ verified 2 chỗ;   │ horize() p │ trạng          │
+│          │ tổng + per-khách)  │ filter docstatus=1 &      │ route chưa có     │ ass-throug │                │
+│          │                    │ outstanding>0             │                   │ h          │                │
+│ Nợ quá   │ ⚠️ có, khác §3.1   │ giữ overdue_customers +   │ ✅ 6 khách · 11   │ như trên   │ ✅             │
+│ hạn /    │ (sort overdue_vnd, │ thêm days_overdue, sort   │ HĐ · 17.764.500đ  │            │                │
+│ Top      │ không có           │ mới                       │                   │            │                │
+│          │ days_overdue)      │                           │                   │            │                │
+│ HĐ chưa  │ ❌ thiếu           │ unpaid_invoices (mới)     │ filter đã         │ invoice.lo │ ✅             │
+│ trả      │ (invoices_today    │                           │ verified; tập     │ okup       │                │
+│          │ theo NGÀY, gồm cả  │                           │ thật 282 HĐ / 46  │            │                │
+│          │ HĐ đã trả)         │                           │ khách             │            │                │
+│ Tồn kho  │ ❌ thiếu hoàn toàn │ stock_low — nhưng phải    │ ❌ chưa verify    │ D2 fail-cl │ ⚠️ được, nhưng │
+│ nóng     │                    │ chốt nguồn kho trước      │                   │ osed, cấm  │ DrillRow không │
+│          │                    │                           │                   │ warehouses │ có cột qty/kho │
+│          │                    │                           │                   │ [0]        │                │
+│ Nháp hôm │ ⚠️ có              │ giữ drill + D3 thêm GET   │ ✅ 3 nháp PO      │ ops.daily_ │ ✅             │
+│ nay      │ app_drafts_today,  │ /read/app-drafts          │ 00007/08/09, khớp │ summary    │                │
+│          │ khác §3.4 (không   │                           │ daily-summary.app │            │                │
+│          │ partial/dedupe)    │                           │ _drafts           │            │                │
+└──────────┴────────────────────┴───────────────────────────┴───────────────────┴────────────┴────────────────┘
+
+⇒ 2/5 dùng được ngay · 3 thiếu drill id · 1 cần đổi contract.
+
+3. Đo site thật
+
+- Company: 3 (SANLOAN ·  Minh Phát Cám & VLXD  ← pin, hợp lệ · DEMO POC CO).
+- Default warehouse: CÓ nhưng mâu thuẫn —  Stock Settings  =  Stores - S  ⚠️ thuộc SANLOAN,  CAMVLXD Settings  =  Kho VLXD - MP ,  Feed Dealer Settings  =  Kho Cám - MP ;  Company.default_warehouse  không tồn tại; 11 kho leaf của MP. ⇒ D2 không thể "đọc default rồi dùng" — cần pin tường minh ( COPILOT_DEFAULT_WAREHOUSE ) và cần bạn quyết.
+-  custom_ai_action_id : CÓ trên 9 doctype (PE, SO, PO, Quotation, SI, PR, DN, SE, Customer) ·  fieldtype=Data  ·  search_index=1  +  unique=1  ⇒ D0.7 KHÔNG cần làm (đúng mục "có thể bỏ qua nếu D0 xác nhận index đã đủ"). Dữ liệu: chỉ PO có 4 bản ghi.
+
+4. Nói thẳng — 3 lỗi của chính probe, đã sửa (giữ cả 2 bản để đối chiếu)
+
+1. Lần 1 báo  Custom Field  = 0 dòng, thực ra request thất bại (space trong tên doctype không encode) và guard  if data is not None  của tôi biến lỗi đọc thành "0" → lần 2 ra 9 dòng.
+2. Lần 1 kết luận "Stock Settings 500" — sai cách gọi: nó là Single, phải  /api/resource/Stock Settings/Stock Settings ; Single đọc được.
+3. Probe drill đầu in 5 dòng "✗ HTTP 200" vì tôi giả định envelope  {ok,result} ; đo ra payload trần → sửa reader, không sửa server.
+
+Deliverable:  .plan/next5/D0-result.md  + 4 script đo ( .plan/next5/d0-*.py ). Chưa chạy D0.5 (gate kế tiếp). Không đụng file sản phẩm ⇒ không cần chạy suite; chưa commit gì
+-------------------------------
+D0.5 — PASS · cổng D1 đã mở
+
+Điều đã xảy ra theo đúng trình tự
+
+Bản D0.5 đầu tiên kết luận FAIL và dừng (đúng luật "FAIL → không D1") vì 1 vi phạm đúng chữ §2.1/§2.2: payload  MOCK /không rõ nguồn vẫn render số tiền như số thật (4 path —  daily-summary  chỉ dán nhãn rồi vẫn hiện đủ số;  null  bị coi như REAL;  /read/drill  +  /read/list  không mang provenance nào). Bạn chốt (A) §2.2 nguyên văn: ẩn số ⇒ đã sửa và re-verify.
+
+Đã sửa (11 file, đúng 6 mục của phương án A)
+
+┌─────┬────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ Tần │ Việc                                                                                                   │
+│ g   │                                                                                                        │
+├─────┼────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│ Ser │ erp_target tới /read/drill + /read/list (drill-views.mjs, read-views.mjs, http-ask.mjs) — cùng biểu    │
+│ ver │ thức erpTargetLabel(process.env) mà /read/daily-summary và dòng log khởi động dùng, nên màn từ chối và │
+│     │ log không thể nói khác nhau. Mặc định null ⇒ field luôn có mặt (= chưa rõ nguồn, không bao giờ là      │
+│     │ "chắc là thật")                                                                                        │
+│ Cli │ core/widgets/data_provenance.dart (mới): isRealProvenance() + InvalidProvenancePanel, gắn vào 3 màn    │
+│ ent │ tiền. MOCK/unknown ⇒ panel THAY số liệu, không dán nhãn trên số                                        │
+│ Tes │ +5 ca Flutter (MOCK ⇒ không còn số; thiếu field ⇒ không số) · +3 assertion Node (payload phải mang     │
+│ t   │ erp_target) · 3 test cache đổi seed MOCK→REAL (chúng kiểm cache, không kiểm provenance)                │
+└─────┴────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+Verify trên site THẬT (không phải mock, không phải suy luận)
+
+Gateway restart bằng code mới, env từ  .env  (PID 139961 ·  10.88.0.4:8788  · auth thật 401/200):
+
+/read/drill  overdue_customers  → erp_target "REAL" · 6 khách · P1G-INTEGRITY C1  6.834.500
+/read/list   customer_account   → erp_target "REAL" · outstanding 42.692.500 · 5 dòng · truncated
+process MOCK (COPILOT_MOCK_OK=1, ERPNEXT_* bỏ hẳn):
+   /read/daily-summary            → "MOCK"            200  ✅ nhãn đi cùng số
+   /read/drill sales_orders_today → "MOCK"            200  ✅
+   /read/drill overdue_customers  → 503 ERP_UNAVAILABLE    ✅ LỖI, không bịa số
+   /read/list  customer_account   → 404 CUSTOMER_NOT_FOUND ✅ như trên
+
+⇒ Đúng thứ §2.2 cấm: "ERP fail → MOCK success trên client" KHÔNG xảy ra.
+
+§2.5 — trả lời (sau sửa)
+
+┌────────────────────┬────────────────────────────────────────────────────────────────────────────────────────┐
+│ Câu hỏi            │ Trả lời                                                                                │
+├────────────────────┼────────────────────────────────────────────────────────────────────────────────────────┤
+│ Còn MOCK success   │ KHÔNG                                                                                  │
+│ path trên UI?      │                                                                                        │
+│ Provenance/state   │ Provenance: đã tách (cổng riêng ở cả 3 route; MOCK không phải load state) · LoadState: │
+│ tách chưa?         │ hành vi có, kiểu chung CHƯA — xem dưới                                                 │
+│ Error ≠ empty ≠ 0  │ ĐẠT (khối lỗi = null+meta.errors → _BlockError; rỗng là câu trả lời; 503/404 ở trên,   │
+│ giả?               │ không zero-fill)                                                                       │
+│ Authz / fallback   │ Cơ chế ĐẠT (authorize() trước khi chạm ERP; pickServerScript() throw ⇒ không boot nếu  │
+│ ngầm?              │ cấu hình sai) · nhưng chưa có dữ liệu quyền để test negative                           │
+└────────────────────┴────────────────────────────────────────────────────────────────────────────────────────┘
+
+Nói thẳng phần CHƯA làm (không phải điều kiện cổng)
+
+1.  LoadState  kiểu chung: cố ý chưa tạo — chưa có consumer nào (3 màn hiện đã có đủ hành vi), tạo bây giờ là code chết. Nó sẽ vào cùng màn mới đầu tiên của D1. (Cách tách §2.1 thực sự cần — không lẫn provenance với load state — nay đã đúng.)
+2.  /read/drill  chưa hiện mốc thời gian (summary ✅, read-list ✅, drill ❌).
+3. 403 hiện message của server nguyên văn, chưa có câu riêng "Không có quyền".
+4. ⚠️ Fixture chưa hỗ trợ toán tử  >  ( mock supports only = (got >) ) ⇒ mục "Nợ quá hạn/Top" (D1) không thể test bằng mock, chỉ verify được trên site thật — cần biết trước khi lập kế hoạch D1.
+
+Số đo
+
+ flutter test  315/315 (trước 310) ·  dart analyze  0 issue · Node full 807 / 805 pass / 2 fail (2 fail  dshGateway*  có sẵn từ B0, do môi trường).
+
+Deliverable:  .plan/next5/D0.5-result.md  (rewrite: PASS + bằng chứng + trả lời §2.5 + lịch sử FAIL→chốt A→sửa). Docs:  checklist.md  (mục next5 mới) ·  next.md  ·  working.md . Chưa commit gì — diff đang gộp chung với đợt A3 chờ bạn duyệt. Credential tạm dùng để probe đã xoá khỏi  /tmp . Gateway thật đang chạy lại ở PID 139961 (dừng:  kill 139961 ).
+
+Một minh bạch: khi ghi docs tôi thấy artifact  \"  (escape lọt vào markdown) ở file kết quả và đã sửa bằng  sed , kiểm lại cả 4 file đều sạch.

@@ -1,0 +1,292 @@
+========================================================================
+RESULT 1 — PHASE 0 (foundation verification) + PHASE 1 (Vietnamese NLP pipeline)
+Timestamp: 2026-09-13 13:32
+Env: Linux VPS / cloud shell, Python 3.12.3, Node v24.20.0, pytest KHÔNG có sẵn.
+     Repo erpn_mobile1, branch master, git CHƯA có commit nào (0 commit).
+     AgentMemory DOWN. MCP cocoindex-code / codebase-memory-mcp KHÔNG expose.
+========================================================================
+
+SCOPE phiên này
+  - Phase 0: verify external dependency + quyết định reuse (KHÔNG viết code production)
+  - Phase 1: Vietnamese NLP pipeline (Python, rule-based, test độc lập)
+  - KHÔNG đụng: dsh, MCP server, ERPNext, STT
+
+
+========================================================================
+PHASE 0 — FOUNDATION VERIFICATION
+========================================================================
+
+Cách verify: npm registry (npm view), GitHub API (đã kiểm chứng API thật bằng
+1 repo control trả 404), docs chính thức của từng provider. Không suy đoán.
+
+1) @casys/mcp-erpnext — CÓ THẬT
+   - npm latest stable = 3.0.4 (publish 2026-09-07); dist-tag next = 3.1.0-beta.10
+   - JSR @casys/mcp-erpnext latest = 3.0.4 (khớp npm)
+   - MIT, Node >= 20, maintainer đơn lẻ (bus-factor = 1)
+   - BREAKING CHANGE 3.0.0 (2026-07-31): HTTP transport chuyển stateless, mọi
+     request phải mang MCP-Protocol-Version: 2026-07-28 + Mcp-Method +
+     params._meta["io.modelcontextprotocol/protocolVersion"] + clientCapabilities
+     dạng object. Client dựng trên spec 2025-06-18 (vd TypeScript SDK v1) bị
+     REJECT ở MỌI call kể cả initialize. GET /mcp -> 405.
+     stdio KHÔNG bị ảnh hưởng (chỉ gate HTTP handler).
+   -> QUYẾT ĐỊNH: pin cứng 3.0.4 + dùng transport STDIO để né hẳn breaking change.
+      Không dùng @next. Tắt auto-update.
+
+2) DeepSeek Harness (dsh) — CÓ THẬT, đúng repo chính thức
+   - github.com/deepseek-ai/deepseek-harness, MIT, ~222k sao, cập nhật 2026-09-11
+   - Trạng thái: DEVELOPER PREVIEW, README ghi đậm "THERE WILL BE
+     COMPATIBILITY-BREAKING CHANGES." Có thêm SAFETY.md
+   - npm @deepseek-ai/dsh: latest = 0.1.5-rc.1, next = 0.1.5-rc.2
+     => 20/20 version publish là rc/alpha, CHƯA CÓ BẢN STABLE NÀO (kể cả tag latest)
+   - MCP client: @deepseek-ai/dsh-mcp-client — có thật VÀ LÀ BUILT-IN
+     (@deepseek-ai/dsh khai báo dependency ^0.1.5-rc.1). Mô tả: "MCP client
+     bridge: connects to MCP servers and registers their tools on ctx.tools"
+   - Không có GitHub Release (releases/latest rỗng) -> chỉ phân phối qua npm
+   -> QUYẾT ĐỊNH: giữ dsh làm Agent Runtime, pin version rc cụ thể, KHÔNG dùng
+      `npx @deepseek-ai/dsh` trần trong production.
+
+3) STT
+   a) Web Speech API — CÓ, có điều kiện chặn
+      - Chrome desktop full support từ Chrome 139
+      - caniuse: Chrome for Android CHỈ "partial support" VÀ CHỈ TỪ bản 152
+        (bản cũ hơn không có) -> BẮT BUỘC feature-detect + test máy đích
+      - Chrome hỗ trợ vi-VN (Vietnamese) trong danh sách on-device
+      - API on-device: SpeechRecognition.available()/.install(), options.langs,
+        options.processLocally -> dùng processLocally:true thì audio không rời máy
+        (tốt cho PII / Nghị định 13)
+   b) Cohere Transcribe — CÓ THẬT
+      - model cohere-transcribe-03-2026, 2B, Apache-2.0, 14 ngôn ngữ CÓ tiếng Việt
+      - max 25MB/file; KHÔNG auto-detect ngôn ngữ (phải set vi); không timestamp/diarization
+      - QUOTA THẬT: trial key 1.000 API call/THÁNG (tổng); Audio Transcriptions
+        trial = 5 req/phút. Production không rate limit = Model Vault (trả theo giờ)
+      => ~33 call/ngày -> đủ cho pilot, KHÔNG đủ cho production hằng ngày
+      -> QUYẾT ĐỊNH: chỉ dùng làm FALLBACK
+   c) Whisper API — có; giá ~$0.006/phút CHƯA verify lại (TODO)
+   d) PhoWhisper / whisper.cpp CPU — có nhưng không có bản tối ưu CPU chính thức;
+      tham chiếu Whisper Small trên CPU ~1.5-2x real-time -> cạnh tranh CPU với
+      ERPNext + dsh trên cùng VPS -> CHỈ thử nghiệm, phải đo latency thật
+
+4) LLM free tier
+   - Gemini: docs chính thức ghi FREE TIER = "Used to improve our products: Yes",
+     PAID = No. => BLOCKER PHÁP LÝ cho PII (Nghị định 13/2023)
+     Trang rate-limit chính thức KHÔNG còn bảng RPD tĩnh (chỉ nói xem trong AI
+     Studio) -> số thật phải đọc từ project của user lúc build.
+     Tham chiếu bên thứ ba (không đảm bảo): Flash ~10-15 RPM / ~1.500 RPD;
+     từ 2026 model Pro đã bị bỏ khỏi free tier.
+   - OpenCode Zen big-pickle: có, giá Free cho input/output/cached-read. NHƯNG docs
+     ghi "free on OpenCode for a LIMITED TIME", KHÔNG công bố rate limit/SLA.
+     Tham chiếu bên thứ ba: ~50 request/ngày.
+     -> chỉ dùng làm dev/low-cost mode, không phải architecture requirement
+
+5) Repo "DSH mobile client" — PHÁT HIỆN NGƯỢC VỚI REVIEW6
+   plan1_review6.md khẳng định 5 repo trong plan1_review1.md là BỊA (không tồn tại).
+   Verify lại 2026-09-13 bằng GitHub API: TẤT CẢ 5 ĐỀU TỒN TẠI, là repo thật
+   (không phải fork), có commit thật:
+     Venompool888/deepseek-harness-mobile       created 2026-08-15   14 sao  Kotlin
+     woaiys3/deepseek-harness-android-app       created 2026-08-16  204 sao  Java
+     Hongtwenfive1226/DSH-Mobile-for-Android    created 2026-08-14   12 sao  TS
+     201222-L/dsh-mobile-remote                 created 2026-08-15   59 sao  Dart
+     monster-echo/deepseek-harness-pocket       created 2026-08-18    0 sao  TS
+   Và 2 repo mà review6 đề xuất thay thế CŨNG tồn tại:
+     sorsama/deepseek-harness-mobile (71 sao), xxccdl/DeepSeek-Harness-Mobile (3 sao)
+   -> KẾT LUẬN ĐÚNG: review6 SAI ở kết luận "bịa", không phải review1 bịa.
+      Các repo mọc trong 08-14..08-21, ngay sau khi dsh open-source (08-13).
+      Việc loại bỏ chúng VẪN nên làm — nhưng vì lý do THẨM ĐỊNH AN TOÀN
+      (third-party, maintainer nhỏ, xử lý tiền/PII), KHÔNG phải vì "không tồn tại".
+      Đã ghi rõ trong phase-00-result.md để agent sau không báo cáo sai / không clone.
+
+6) Reuse decision
+   - OmniRoute/9Router: KHÔNG tìm thấy trên máy (find full-FS theo tên + grep
+     config + /opt /srv /var/www /usr/local /root + /home/*). Chỉ có tên trong
+     .plan/*.md và log chat.
+   - TAXPRO: KHÔNG tìm thấy (tương tự)
+   - AGENTS.md template + Capability Matrix + Decision Rules: CÓ SẴN trong repo
+     (AGENTS.md 52KB ở root) -> REUSE trực tiếp, KHÔNG tạo AGENTS.md thứ hai
+   -> User xác nhận chốt: coi như CHƯA CÓ SẴN -> XÂY MỚI cả 2. Nếu sau này mang
+      code từ máy local sang thì refactor thành shared lib. Không block phase sau.
+
+7) PII sign-off (user yêu cầu ghi rõ)
+   - Đã thêm mục "C.1. MANDATORY SIGN-OFF — TRƯỚC KHI IMPLEMENT LLM ROUTER" vào
+     .plan/phases/phase-05-ai-gateway-core.md, gồm bảng 4 câu hỏi chặn phải điền
+     + tên người chịu trách nhiệm, và điều kiện giải phóng gate.
+   - Đã đưa vào Exit Criteria của Phase 6: thiếu sign-off -> KHÔNG được qua Phase 6.
+   - Nội dung chốt: "Free tier Gemini dùng content để improve products -> KHÔNG
+     được gửi PII thật. Phải có PII scrubbing hoặc route sang paid/self-host
+     trước khi production."
+
+
+========================================================================
+PHASE 1 — VIETNAMESE NLP PIPELINE
+========================================================================
+
+QUYẾT ĐỊNH CHỐT VỚI USER TRƯỚC KHI CODE
+  - Ngôn ngữ: PYTHON (đúng như task mô tả `normalize(text: str) -> NormalizedResult`)
+  - Client stack đích: FLUTTER (theo checklist.md "Code ở Flutter" + template initp)
+  - TAXPRO: xây mới (Phase 0 xác nhận không có)
+
+  ⚠️ HỆ QUẢ CÒN TỒN (chưa xử lý, đúng phạm vi): pipeline là Python nhưng client là
+     Flutter (Dart) và runtime là dsh (Node/TS) -> 3 ngôn ngữ CHƯA CÓ CẦU NỐI.
+     Phải chốt trước Phase 5: (a) HTTP service nội bộ, (b) subprocess từ dsh,
+     (c) port sang Dart.
+
+CẤU TRÚC CODE
+  src/vietnamese_nlp/
+    __init__.py    public API (normalize, find_amounts, strip_kinship, ...)
+    result.py      dataclass frozen+slots: NormalizedResult, MoneyMatch,
+                   QuantityMatch, SynonymMatch
+    money.py       Number Normalizer (348 dòng — phần lớn là vocab + guard an toàn)
+    kinship.py     Kinship Stripper (21 title)
+    synonyms.py    Domain Synonym Mapper (10 nhóm intent, 45 phrase)
+    quantity.py    trích xuất số lượng (20 bao, 25 ký, tấn, tạ, yến, ...)
+    pipeline.py    normalize() — ghép 4 lớp
+    cli.py         CLI JSON
+    __main__.py    python -m vietnamese_nlp
+  tests/  test_money.py · test_kinship.py · test_synonyms.py · test_pipeline.py
+          test_dialect_set.py · data/dialect_cases.json
+  pyproject.toml · README.md
+
+THỨ TỨC PIPELINE (có lý do, không tùy tiện)
+  text gốc -> money -> quantity -> kinship -> synonyms -> NormalizedResult
+  - money/quantity chạy trên TEXT GỐC để MoneyMatch.start/end trỏ đúng vào
+    result.original (UI cần offset để highlight số tiền user vừa nói)
+  - kinship stripping làm lệch offset -> phải chạy SAU
+  - vì vậy SynonymMatch CỐ Ý không có offset (trả offset nửa vời còn tệ hơn không trả)
+
+TEST — OUTPUT THẬT
+  Lệnh: PYTHONPATH=src python3 -m unittest discover -s tests
+  Output: "Ran 49 tests in 0.312s / OK"
+
+  Corpus 3 miền (tests/data/dialect_cases.json):
+    money_cases    : 234
+    kinship_cases  : 30
+    synonym_cases  : 45
+    challenge_cases: 11  (KHÔNG tính vào gate)
+
+  MONEY ACCURACY: 234/234 = 100.00%   (gate phase-01: >= 95%)  -> ĐẠT
+    miền Bắc  : 87/87  = 100.0%
+    miền Trung: 54/54  = 100.0%
+    miền Nam  : 93/93  = 100.0%
+    case CÓ amount      : 209/209
+    case KHÔNG được có  : 25/25 (fail-safe)
+  KINSHIP: 30/30        SYNONYM: 45/45
+
+  ⚠️ CON SỐ 100% PHẢI ĐỌC CHO ĐÚNG: corpus do chính tôi viết nên 100% là kết quả
+     MONG ĐỢI, KHÔNG phải bằng chứng mạnh. Tôi tách riêng challenge set 11 case để
+     phơi chỗ parser thật sự thất bại thay vì trộn vào điểm số. Nó chỉ có nghĩa:
+     "các dạng phase-01 yêu cầu đều chạy đúng", KHÔNG có nghĩa sẵn sàng cho
+     giọng nói thật.
+
+DẠNG ĐÃ HỖ TRỢ (đủ 14 dạng bắt buộc của phase-01 + mở rộng)
+  "mười triệu" · "10 triệu" · "10tr" · "1tr5" · "230k" · "1k5" · "mười củ" ·
+  "một chục triệu" · "hai trăm ba mươi nghìn" · "một trăm hai mươi lăm triệu" ·
+  "năm trăm nghìn" · "500 ngàn" · "0.5 triệu" · "230.000" · "1,500,000" ·
+  "1 500 000" (phân cách bằng dấu cách) · "10 triệu 500 nghìn" · "2 triệu rưỡi" ·
+  "nửa triệu" · "một trăm linh/lẻ năm nghìn" · "1 tỷ 200 triệu" ·
+  hậu tố đồng/đ/vnd/₫
+
+3 BUG THẬT ĐÃ PHÁT HIỆN + SỬA (đều là bug IM LẶNG CHO SỐ TIỀN SAI, không crash)
+  1. Gộp nhầm số tiền của cụm sau vào cụm trước.
+     "Bác Hai lấy 100 bao cám, giá 320 nghìn một bao" -> trả 320001 (cộng nhầm "một")
+     FIX: sau khi đã có 1 big-scale hoàn chỉnh, số trần chỉ được gộp nếu nó tự có
+          scale theo sau ("10 triệu 500 nghìn"). Số trần ở cuối câu/trước dấu câu
+          -> TỪ CHỐI ("2 triệu 500" -> None). Nếu phía sau là từ khác -> coi là cụm
+          mới, giữ đúng phần trước (320.000).
+  2. "không triệu" -> 1.000.000. Từ "không" (0) + scale vẫn sinh ra tiền.
+     FIX: thêm cờ has_nonzero; scale word KHÔNG tự nó tạo ra số lượng.
+  3. Guard chỉ áp cho chữ số, bỏ sót số viết bằng chữ ("một" là word token, không
+     phải digit token) -> bug #1 tái phát ở dạng khác.
+     FIX: áp cùng một luật cho cả ONES.
+  (Lỗi thứ 4 không phải bug code mà là TEST SAI: case "1tr 500" tôi kỳ vọng 1000500;
+   thực tế đây là dạng nhập nhằng cùng nhóm với "1 triệu 5" -> đã chuyển sang
+   challenge set và cho parser từ chối.)
+
+CHALLENGE SET — 11 DẠNG CHƯA HỖ TRỢ (không tính vào gate, lấy từ lần chạy cuối)
+  ch-001 "Anh Nam trả hai trẹo"            -> None   tiếng lóng trẹo = triệu
+  ch-002 "Chị Lan trả một chai"            -> None   tiếng lóng chai = triệu
+  ch-003 "Bác Tâm trả hai chục bạc"        -> None   bạc = tiền, không rõ mệnh giá
+  ch-004 "Anh Nam trả 2m5"                 -> None   m = triệu (đụng m = mét)
+  ch-005 "muoi trieu"                      -> None   không dấu — CỐ Ý không hỗ trợ
+  ch-006 "Anh Nam trả 1 triệu 5"           -> None   ý là 1,5 triệu — đoán là nguy hiểm
+  ch-007 "Anh Nam trả khoảng 10 triệu"     -> 10000000  chưa gắn cờ approximate
+  ch-008 "Anh Nam trả hơn 10 triệu"        -> 10000000  chưa gắn cờ so sánh
+  ch-009 "Bác Hai trả ba mươi ngàn đồng"   -> 30000     ĐÚNG (hậu tố tiền tệ)
+  ch-010 "Chị Lan trả 2 ngàn 5"            -> None      ý là 2.500 — từ chối
+  ch-011 "Ông Sơn trả 1tr 500"             -> None      cùng nhóm ch-006
+
+QUYẾT ĐỊNH THIẾT KẾ QUAN TRỌNG
+  1. AN TOÀN SỐ TIỀN > ĐỘ PHỦ. Thà không trả gì còn hơn trả số sai. Amount chỉ
+     sinh khi: big scale word, HOẶC >= 4 chữ số, HOẶC hậu tố tiền tệ.
+     "Bác Hai" / "hai trăm" / "anh Nam trả 10" -> None. Đây là test riêng.
+  2. Match từ số CÓ DẤU. "năm" (5) ≠ "Nam" (tên). Không nhận không dấu.
+  3. Nickname thứ tự sinh là TÊN, "mươi" thì KHÔNG. Allowlist tường minh
+     NICKNAMES = {hai, ba, tư, năm, sáu, bảy, tám, chín, mười, mốt, lăm}.
+     Nếu đưa "mươi" vào thì "ba mươi nghìn" -> "mươi nghìn" (hỏng text sạch).
+  4. SẢN PHẨM KHÔNG bị map thành intent. "cám heo" giữ nguyên, KHÔNG đổi thành
+     "feed" — vì cám heo là Item cần tra ERPNext, đổi đi là mất tên hàng.
+  5. Kết quả trả CẢ amount LẪN amounts. "còn nợ 15 triệu, hôm nay trả 5 triệu"
+     có 2 số -> amount = số đầu, amounts = tất cả. Phase 6 tự quyết, Phase 1 không đoán hộ.
+  6. KHÔNG dùng thư viện ngoài. Không tìm thấy thư viện chuẩn hóa số tiền tiếng
+     Việt nào đủ tin cậy cho ngữ cảnh tiền thật -> rule-based thuần stdlib.
+     Lợi ích kèm theo: ZERO runtime dependency.
+  7. unittest (stdlib) là runner chính, KHÔNG phải pytest. pytest không có trong
+     env này -> dùng unittest nghĩa là KHÔNG CẦN CÀI GÌ để chạy CI.
+  8. "công nợ" NHẬP NHẰNG TRONG CHÍNH SPEC. phase-01 liệt kê nó ở 2 nhóm
+     (= credit VÀ = residual). Không thể là cả hai -> map về "receivable" và ghi
+     rõ ở đầu synonyms.py. Việc phân biệt ý định là của Phase 6.
+
+EXIT CRITERIA PHASE 1
+  [x] Number normalizer >= 95%            -> 234/234 = 100% (nhưng xem cảnh báo)
+  [x] Kinship + synonym có unit test       -> 21/21 title, 45/45 phrase
+  [x] Pipeline chạy độc lập bằng CLI       -> python -m vietnamese_nlp, có test subprocess
+  [x] phase-01-result.md đã tạo            -> có
+  [ ] Test set AUDIO THẬT 3 miền           -> CHƯA CÓ (phase-01 yêu cầu "thu âm thật,
+                                              không dùng TTS"). Hiện chỉ có text.
+  => ĐẠT về kỹ thuật. ĐƯỢC SANG PHASE 2 (không phụ thuộc audio).
+     CHẶN Ở PHASE 4: không được đo "STT accuracy theo miền" khi corpus còn là text.
+
+MISSES / ĐÃ BỎ SÓT (ghi thẳng)
+  - Chưa có audio thật -> mọi lỗi thuộc về STT (mất dấu, tách cụm sai, nhiễu cửa
+    hàng/kho) CHƯA ĐƯỢC ĐO LẦN NÀO. Bằng chứng rủi ro là thật: kịch bản
+    "một trăm hai mươi lăm triệu" bị STT tách rời chính là điều phase-01 cảnh báo.
+  - Tiếng lóng miền Nam (trẹo/chai/bạc) + viết tắt m chưa hỗ trợ — đây là vùng
+    bán cám trọng điểm, đáng bổ sung khi có dữ liệu thật.
+  - Tiếng lóng miền Trung chưa khảo sát (mới có "ngàn", "chục").
+  - Chưa có số âm / hoàn tiền ("trả lại 500 nghìn" luôn ra dương).
+  - Chưa phân biệt câu hỏi vs câu lệnh (việc Phase 6).
+  - Chưa có entity resolution đầy đủ (đúng phạm vi, để Phase 6).
+
+TOOL HỎNG TRONG ENV NÀY (graceful degradation, KHÔNG tự khởi động lại)
+  - AgentMemory: health http://localhost:3111/agentmemory/health không phản hồi
+    (đã thử lại 1 lần) -> Phase 0 + Phase 1 KHÔNG ghi được memory/session
+  - MCP cocoindex-code / codebase-memory-mcp: có trong ~/mcp.json nhưng KHÔNG
+    expose trong tool list của session -> bước Code Review theo AGENTS.md (OCR,
+    detect_changes, search_graph) KHÔNG chạy được
+  - OCR (/open-code-review:review): không khả dụng -> thay bằng review thủ công
+    đọc code (đó chính là cách tìm ra 3 bug ở trên)
+  - Simplenote MCP: không có trong tool list -> chưa ghi được bài học dùng chung
+    (3 bug parse số tiền VN rất đáng ghi cross-project)
+
+FILES CHÍNH PHIÊN NÀY
+  Code:  src/vietnamese_nlp/{money,kinship,synonyms,quantity,pipeline,result,cli}.py
+         + __init__.py, __main__.py
+  Test:  tests/{test_money,test_kinship,test_synonyms,test_pipeline,test_dialect_set}.py
+         tests/data/dialect_cases.json
+  Config: pyproject.toml, README.md, .gitignore (thêm __pycache__/, *.py[cod], .venv/)
+  Docs:   .plan/phases/phase-00-result.md, .plan/phases/phase-01-result.md,
+          .plan/phases/phase-05-ai-gateway-core.md (thêm mục C.1 sign-off),
+          result1.txt, checklist.md, features.md, next.md, handoff_20260913-1332.md
+
+
+========================================================================
+CẦN USER QUYẾT
+========================================================================
+  1. COMMIT hay không? Toàn bộ src/, tests/, pyproject.toml, README.md đang
+     untracked; repo còn 0 commit. Code chạm VÙNG TIỀN nên theo AGENTS.md AI
+     KHÔNG được tự ký duyệt -> không tự commit.
+  2. Xác nhận "công nợ" -> receivable (spec ghi nhập nhằng ở 2 nhóm).
+  3. Monetization (pro + xem ads theo checklist.md gốc) CHƯA có phase nào phụ trách.
+  4. Client stack chốt Flutter -> phải sửa phase-03 (đang viết PWA).
+  5. Có làm tiếng lóng miền Nam không?
+  6. Vị trí OmniRoute/9Router + TAXPRO nếu có ở máy khác.
+
+========================================================================

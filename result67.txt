@@ -1,0 +1,126 @@
+# result67.txt — A2 phần FLUTTER: upload HĐĐT XML trong app (2026-09-25)
+
+Task: `.plan/next3/implementation.md` §1/A2 (dòng "upload Flutter tối thiểu CHƯA làm").
+Deliverable: `.plan/next4/flutter-xml-upload-result.md`.
+Trạng thái: **CODE + TEST XONG — CHỜ USER DUYỆT** (thêm dependency + chạm UI đường GHI ⇒ AI không tự ký duyệt).
+
+## 0. Contract đọc TRƯỚC khi code (không đoán)
+
+- `mcp-erpnext/src/http-ask.mjs:1819` — `POST /input/einvoice` đọc **JSON** `{xml, kind}` (KHÔNG multipart),
+  trả `{ok:true, result:{kind, capability, label, text, party{role,resolved,ambiguous,candidates,matched_by,claimed_tax_id},
+  lines[{item_code,item_name,qty,uom,raw_quantity}], money_vnd, warnings[], source_document, provenance}}`.
+- `kind` là TỪ của contract (`einvoice_policy.document_kinds = ["purchase"]`), KHÔNG phải capability id;
+  capability id bị từ chối `EINVOICE_KIND_UNKNOWN`.
+- Response **không có** `proposal`/`command_id`/`params`/`price` (test `a2-einvoice-input.test.mjs` khẳng định).
+- Điểm bắt chước UI: `ocr_sheet.dart` + `chat_screen.dart::_openCamera()` + `photo_picker_service.dart`.
+
+## 1. Đã làm (Dart)
+
+- **MỚI** `apps/mobile/lib/features/chat/data/einvoice_file_picker.dart` — seam `EinvoiceFilePicker`
+  (giống `PhotoPicker`), `SystemEinvoiceFilePicker` dùng `file_selector` lọc đuôi `xml`, và hàm THUẦN
+  `decodeEinvoiceXml()` (rỗng / vượt trần 950.000 byte mirror `einvoice_policy.max_xml_bytes` / không
+  UTF-8 ⇒ **từ chối có câu tiếng Việt**; BOM UTF-8 strip; BOM UTF-16 → giải mã).
+- **MỚI** `apps/mobile/test/chat_einvoice_xml_test.dart` — **18 test** (17 + 1 test layout voice-first thêm ở vòng review 2).
+- **ĐỔI** `pubspec.yaml` (+`file_selector: ^1.1.0`, user duyệt 2026-09-25) · `pubspec.lock` ·
+  `app/providers.dart` (+`einvoiceFilePickerProvider`) ·
+  `copilot_api_client.dart` (+`einvoiceSlots()` → parse bằng `OcrSlots` sẵn có, fail-closed) ·
+  `chat_screen.dart` (nút "HĐĐT XML" **cạnh camera ở CẢ 2 layout** + `_openEinvoiceFile()` +
+  dòng "Đang đọc file XML…") ·
+  `ocr_slots_form.dart` (enum `OcrSlotsSource.photo|file` — **chỉ wording**).
+- **Server / skill / capability: 0 dòng đổi.**
+
+## 2. Ba CẤM của task — chặn bằng cấu trúc, có test
+
+| CẤM | Bằng chứng |
+|---|---|
+| Parser XML thứ hai | Picker chỉ trả TEXT; **tripwire tĩnh repo-wide** quét `lib/**.dart` tìm `package:xml/`/`XmlDocument`/`XmlElement`/`parseXml(` |
+| Auto-execute | test `rec.paths` = `['/input/einvoice','/ask']`, không có `execute` |
+| Auto-create master | MST lạ = warning nêu MST + chip ứng viên; KHÔNG có nút tạo NCC |
+| (thêm) Không auto-send | sau form phải bấm "Gửi để lập Đơn mua NHÁP"; setting auto-send là của dictation |
+| (thêm) Không lấy giá từ file | câu gửi không chứa `4.427.500` và không khớp `\d\s*đ` |
+
+## 3. Lệnh + output THẬT
+
+```
+$ cd apps/mobile && flutter pub get
++ file_selector 1.1.0 · file_selector_android 0.5.2+11 · file_selector_ios 0.5.3+6 · file_selector_web 0.9.5
+Changed 4 dependencies!            # linux/macos/windows + platform_interface ĐÃ có sẵn từ image_picker
+
+$ cd apps/mobile && flutter analyze
+No issues found! (ran in 6.8s)
+
+$ cd apps/mobile && flutter test test/chat_einvoice_xml_test.dart
+00:06 +18: All tests passed!
+
+$ cd apps/mobile && flutter test
+01:13 +299: All tests passed!      # baseline trước task 281 ⇒ +18, 0 regression
+
+$ node .plan/next4/capture-einvoice-slots.mjs      # dựng gateway MOCK + NLP, POST fixture thật
+status=200 ok=true
+top-level result keys: capability, kind, label, lines, money_vnd, party, provenance, source_document, text, warnings
+kind=purchase capability=purchase_order.create
+party={"id":"SUP-BINH-DUONG","name":"Đại lý Cám Bình Dương"} by=tax_id
+lines=2 money_vnd=4427500
+# → file .plan/next4/einvoice-slots.real.json được parse bằng chính model Dart (OcrSlots.fromJson):
+#   kind/capability/label/party/qty/uom/money_vnd/warnings OK,
+#   OcrCompose.compose → "đặt mua 10 Bao Cám gà thịt 10kg + 5 Bao Cám heo tăng trọng 25kg từ Đại lý Cám Bình Dương"
+
+# tripwire kiểm SỐNG
+$ printf 'class P { XmlDocument d = XmlDocument(); }' > lib/__guard_probe.dart
+$ flutter test test/chat_einvoice_xml_test.dart --plain-name 'no XML parser'
+  Expected: empty
+    Actual: ['lib/__guard_probe.dart']     # RED đúng file; xoá probe ⇒ GREEN
+```
+
+## 4. SAI SÓT THẬT mà bước (3) bắt được
+
+Fixture trong widget test **tôi tự gõ tay** ghi dòng 1 = `CAM-GA-25KG`/"Cám gà thịt 25kg", nhưng payload
+**thật** của route trả `CAM-GA-10KG`/"Cám gà thịt 10kg" ⇒ test đỏ ngay khi parse bytes thật. Đã sửa
+fixture theo payload thật. **Bài học:** fixture tự chế có thể đồng ý với client mà không đồng ý với
+server — hợp đồng liên ngôn ngữ (JS→Dart) phải parse **bytes thật** ít nhất 1 lần.
+
+## 5. Review tự làm (OCR/AgentMemory/codebase-memory/Simplenote KHÔNG có trong phiên ⇒ review mặc định)
+
+- Đọc `git diff` toàn bộ phần Dart mới; soi thủ công: null/undefined sau `await`, fail-closed khi payload
+  thiếu shape, không có input user đi thẳng vào eval/shell, không lộ secret.
+- **2 finding tự sửa:** (a) `PickedXmlFile.byteLength`/`kiloBytes` **không ai dùng** ⇒ **xoá** (dead flex,
+  Ponytail); (b) guard parse chỉ kiểm `capability`, nhưng `OcrSlots.fromJson` cast cả `kind` ⇒ payload
+  thiếu `kind` sẽ ném `TypeError` thô ⇒ **thêm `kind` vào guard** để ra 1 refusal tiếng Việt sạch.
+- **Sau khi sửa ⇒ chạy lại analyze + TOÀN BỘ Flutter suite** (298/298, 0 issue) — bước "OCR re-check"
+  thay thế bằng re-run vì OCR không khả dụng.
+- Secret scan: `git diff | grep -iE "api_key|api_secret|password *=|secret *=|PRIVATE KEY|authorization: basic …"`
+  ⇒ **0 khớp**; `.env` vẫn `git check-ignore` ✓.
+- Pattern consistency: seam + provider + notice + `_failFromDio` đều theo đúng khuôn `photo_picker_service.dart`
+  / `_openCamera()`.
+- Dead code: chỉ có mục (a) ở trên; không xoá hàm nào của code cũ.
+- **Impact:** `showOcrSlotsForm`/`OcrSlotsForm` có **2 call site** (camera + file) — tham số `source` có
+  default `photo` ⇒ đường camera **không đổi 1 chuỗi** (test cũ `Ảnh → Đơn mua (NHÁP)` + `trên ảnh: "10 Bao"`
+  vẫn xanh nguyên).
+
+## 5b. Vòng review thứ 2 (user yêu cầu "review code") — 4 finding ĐÃ SỬA, 3 quan sát
+
+1. **[TB] Lời hứa "nút có ở CẢ 2 layout" không được test ghim** — test cũ chỉ chạy layout mặc định; bỏ nút
+   khỏi row voice-first sẽ không làm test nào đỏ ⇒ thêm test (override `appSettingsServiceProvider` +
+   assert `ValueKey('input-voice-first')` để chắc chắn đang test ĐÚNG row) và **đột biến 2 chiều**:
+   (A) `onPressed: null` ⇒ **RED**, (B) xoá hẳn block nút ⇒ **RED** (không tìm thấy widget), restore
+   **byte-identical**. *(Lần đột biến ĐẦU của tôi neo sai: `false ? a : a` vẫn trả về callback ⇒
+   test vẫn xanh — đúng lại bẫy "anchor không làm điều mình tưởng" đã ghi trong LESSONS/erpn-verify-first;
+   làm lại đúng thì RED.)*
+2. **[Thấp]** `xmlTypeGroup` public ⇒ rò type plugin ra API ⇒ đổi `_xmlTypeGroup`.
+3. **[Thấp]** `decodeEinvoiceXml` (hàm thuần) đọc trần qua class gắn plugin ⇒ tách hằng top-level
+   `einvoiceMaxXmlBytes`.
+4. **[Thấp]** `einvoiceSlots({kind = 'purchase'})` — tham số **không ai truyền** ⇒ bỏ, gửi literal + comment.
+5. **[Thấp, không sửa]** trần so theo byte thô còn body lên là JSON đã escape — chỉ vượt `MAX_BODY` ở file
+   dị dạng; XML xuống dòng thường ~950 KB thô ≈ 974 KB escape < 1 MB.
+6. **[Thấp, không sửa]** `_notice` in tên file (dữ liệu không tin cậy) — render `Text` thuần, không injection;
+   rủi ro chỉ là tên file dài/nhiều dòng, giống mọi tên khách/NCC đang hiển thị.
+7. **[Quan sát, không sửa]** nút vẫn bật ở chế độ AI (DSH) — câu compose khi đó đi `_sendDsh` → `/dsh/ask`
+   (**chỉ ĐỌC**) ⇒ không mở đường ghi; nút camera hiện có **y hệt** ⇒ không phải vấn đề mới.
+
+## 6. Còn lại
+
+- E2E ERPNext THẬT của task này **không chạy lại** (server đã cover ở `A-result.md` §3 — `PUR-ORD-2026-00006`);
+  chạy lại sẽ **tạo thêm 1 nháp thật** ⇒ cần user cho phép riêng.
+- Test tay trên máy Android thật: §6 của `.plan/next4/flutter-xml-upload-result.md`.
+- Giới hạn ghi rõ: chỉ kind `purchase`; UTF-16 không BOM bị từ chối (hướng dẫn user lưu lại dạng UTF-8);
+  nit `OcrSlots.fromJson` cast `kind` ở đường `/ocr/slots` cũ (có từ trước, ngoài phạm vi).

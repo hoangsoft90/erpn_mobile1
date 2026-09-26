@@ -1,0 +1,139 @@
+========================================================================
+RESULT 32 — COMMIT `bda54cf` + UI STALE (Phase 9) + RÀ AN TOÀN + PLAN SAGA
+Timestamp: 2026-09-16 11:00 (giờ shell)
+Thứ tự đúng chỉ đạo: ① commit (user đã duyệt trong chat) ② dọn docs
+③a Flutter ProposalCard STALE/EXPIRED ③b rà 4 điểm an toàn ③c plan saga.
+KHÔNG: submit/cancel/delete ERPNext thật · Phase 4/8/11 · production design.
+========================================================================
+
+== 1. COMMIT `bda54cf` — ĐÃ PUSH ✅ ==
+Lệnh + output thật:
+  git add <15 file modified> + result31.txt + handoff_20260916-0915.md
+          + handoff_20260916-0944.md   (untracked mới, thuộc đợt result31)
+  git commit -m "feat: phase 7b wire — \"thu tiền...\" builds a HIGH proposal; /execute/cancel
+  (reconcile-verified) for zombie PENDING intents" + body chi tiết
+  → [change/flutter-chat-mvp bda54cf] 18 files changed, 978 insertions(+), 66 deletions(-)
+  git push origin change/flutter-chat-mvp
+  → eea0411..bda54cf  change/flutter-chat-mvp -> change/flutter-chat-mvp
+Secret scan trên staged diff: CLEAN (grep API_KEY/API_SECRET/ghp_/Bearer → 0 hit;
+hit duy nhất là dòng mô tả chính scan trong result31).
+Git-ignored xác nhận: `git check-ignore .env` → .env; `mcp-erpnext/idempotency-store/`
+có trong .gitignore:62. Không stage: .gemini/ · .opencode/ · initp (rác).
+Message body liệt kê: router payment_write (notIf F1) · /execute/cancel + bọc
+store.cancel (F2) · rawText (F3) · tests · result31 + faq + docs.
+
+== 2. DỌN DẸP DOCS — 0 marker CHỜ DUYỆT còn sót ==
+Quyết định user trong prompt: "Nếu user đã duyệt rõ trong chat → commit + push"
+— user ĐÃ duyệt (phiên trước: "Đã duyệt commit đợt result29 §6 (a/b/c) — commit +
+push riêng từng cụm" và "1. Đã duyệt 3 commit result29 §6 (a/b/c) — commit + push";
+sau đó quyết gộp 1). Đợt này commit theo đúng quy trình đó.
+- checklist.md:72  → `- [x] COMMIT đợt result31 — ✅ bda54cf (đã push)` + chi tiết
+- working.md:7     → `✅ COMMIT bda54cf ĐÃ PUSH (18 files +978/−66; secret scan CLEAN)`
+- next.md:105      → mục 6 ✅ + mục mới "Bước kỹ thuật tiếp theo (KHÔNG Phase 4/8/11)":
+                     **UI STALE trên Flutter** + **Phase 9 saga — "undo ≠ delete"**
+- features.md:117/118 → Phase 9 + Phase 7b đánh dấu ✅ commit bda54cf
+- openspec tasks.md 6.3-6.6 → [x] với commit hash + result32 pointer (đã commit trong bda54cf)
+
+== 3. (3a) UI STALE — ProposalCard hiện rõ lý do từ chối ==
+Server-side shape đã verify trước khi code (không suy đoán):
+  - /execute 409 PROPOSAL_STALE → { code, error, problems[] } (http-ask.mjs:449-453)
+  - 409 PROPOSAL_EXPIRED → { code: freshness.code, error } (http-ask.mjs:321-323)
+  - assertFresh reject cả created_at tương lai (clock skew) — proposal-freshness.mjs:70
+
+3.1. chat_models.dart — ActionProposal thêm:
+  - `rejectionCode` (String?, from json['rejection_code'])
+  - `rejectionProblems` (List<String>, from json['rejection_problems'] — map toString)
+  - `isRejected` getter; toJson GHI 2 field này ⇒ banner sống qua khôi phục history.
+  - (rejection do CONTROLLER gắn sau 409 — không phải server trả trong proposal.)
+
+3.2. chat_controller.dart — `attachRejection(proposal, {code, problems})`:
+  - Tìm turn theo `proposal.commandId` (đúng identity mà idempotency gate dùng);
+    chỉ gắn 1 lần (`p.isRejected` guard); persist vào history service.
+  - Lỗi tự sửa: bản đầu dùng `turn.askResult`/`typedQuestion` KHÔNG tồn tại trong
+    ChatTurn — đọc lại model thật rồi sửa thành question/answer/ok/ts/routedGroup.
+
+3.3. proposal_card.dart:
+  - `_confirm()` nhánh `body['ok'] != true`: đọc `code` + `problems`; nếu
+    PROPOSAL_STALE/EXPIRED → gọi attachRejection (banner bền qua restart).
+  - build(): nhánh `if (proposal.isRejected)` HIỂN THỊ BANNER thay nút confirm:
+    ⏰ "Đề xuất đã hết hạn — hãy hỏi lại…" (EXPIRED) / 🔄 "Đề xuất đã lệch so với
+    dữ liệu thật — KHÔNG ghi, hãy hỏi lại" (STALE) + bullet từng problem.
+    Màu = scheme.errorContainer (theme, không hex cứng).
+  - Sau banner là `else if (proposal.confirmable)` — nút [Xác nhận] biến mất trên
+    thẻ bị từ chối (fail-closed: không confirm trên số cũ).
+
+3.4. Test + falsify:
+  - 3 widget/model test mới (proposal_card_test.dart):
+    ① STALE banner + 2 problems + KHÔNG còn nút 'Xác nhận thu tiền'
+    ② EXPIRED banner
+    ③ toJson→fromJson giữ rejection + commandId (banner sống qua restart)
+  - Flutter: **32/32 pass** (29 → 32) · analyze **0 issue**.
+  - FALSIFY: patch `if (false && proposal.isRejected)` (assert đổi thật, count=1)
+    → test ① FAIL đúng tên (output nguyên văn:
+    "...Phase 9 UI: a PROPOSAL_STALE 409 renders the reason banner..."); khôi phục
+    → **18/18 pass**. (Bài học marker: lần này đọc đúng dòng tail của flutter test.)
+
+== 4. (3b) RÀ NHANH 4 ĐIỂM AN TOÀN — 4/4 PASS ==
+① notIf không nuốt câu LỆNH GHI thật (probe normalize + routeIntent):
+   WRITE  'payment cho chị Lan 500 ngàn'        => payment_write ✓
+   WRITE  'payment chị Lan 500 ngàn'            => payment_write ✓
+   WRITE  'payment cho Lan' (thiếu tiền)        => payment_write ✓ (thẻ HIGH thu hết nợ)
+   READ   'payment gần nhất của chị Lan...'     => payment ✓
+   READ   'payment bao nhiêu rồi'               => payment ✓
+   READ   'payment mấy lần rồi'                 => payment ✓
+   (Câu 'thu tiền cho chị Lan bao nhiêu' — nghi vấn trong lệnh ghi — amount=None,
+   được notIf đưa về nhóm đọc: chấp nhận được vì đề xuất thu-hết-nợ không nên sinh
+   từ một câu hỏi; user hỏi lại lệnh rõ sẽ ghi được.)
+② cancel không xoá document ERPNext: `erpnext_doc_delete|doc_delete` grep trong
+   readonly-guard.mjs/client.mjs/http-ask.mjs/skills/payment-write.mjs → 0 hit.
+   Route /execute/cancel chỉ đọc (reconcilePaymentEntry) + store.cancel().
+③ store không nằm /tmp: DEFAULT_DIR = ERPN_IDEM_DIR ?? <repo>/idempotency-store
+   (idempotency.mjs:29); gitignored (.gitignore:62).
+④ double-tap không crash (probe Node trực tiếp):
+   - cancel 2 lần: lần 2 throw REFUSED ✓ (handler maps 409 — try/catch F2)
+   - confirm 2 lần: replay1 = replay2 = true, cùng erpnext_doc ✓
+
+== 5. (3c) PHASE 9 SAGA "UNDO ≠ DELETE" — PLAN ONLY (chưa code production) ==
+Đã viết §7 vào .plan/phases/phase-09-proposal-state-machine.md (7.1→7.5):
+- 7.1 Bảng hoàn tác theo docstatus: Draft=cancel ý định (app KHÔNG xoá draft);
+  Submitted=REVERSAL (PE ngược chiều, reference REVERSAL-<command_id>, risk
+  CRITICAL double-confirm); Cancelled=chỉ đọc.
+- 7.2 Gate: submit chưa ship ⇒ reversal chưa có nghĩa; command_id phải gắn cả
+  2 PE; store cần trạng thái REVERSED (terminal, 1 lần duy nhất).
+- 7.3 State machine: PENDING→COMPLETED→REVERSING→REVERSED (+REVERSING retry);
+  bất biến 1 command_id ⇒ ≤1 PE gốc + ≤1 PE đảo.
+- 7.4 5 test mock tối thiểu khi được duyệt (đảo đúng chiều / từ chối đảo khi
+  chưa ghi / retry 1 đảo / REVERSED terminal / UI double-confirm).
+- 7.5 Ranh giới: không tự submit/cancel/delete ERPNext thật; mọi bước qua confirm.
+
+== 6. FULL SUITE CUỐI PHIÊN (lệnh + output thật) ==
+  PYTHON   PYTHONPATH=src python3 -m unittest discover -s tests → OK (60 tests)
+  NODE     node --test → ℹ tests 119 · pass 119 · fail 0
+  FLUTTER  flutter test → 00:04 +32: All tests passed! (29 → 32)
+           flutter analyze → No issues found!
+  (So result31: Flutter +3 test UI STALE; Node/Python giữ nguyên — không đổi code
+   tiền server trong phiên này, chỉ Dart.)
+
+== 7. CHỜ USER DUYỆT COMMIT (không tự commit) ==
+File mới/sửa chưa commit: chat_models.dart · chat_controller.dart ·
+proposal_card.dart · proposal_card_test.dart · checklist/working/next/features.md ·
+.plan/phases/phase-09-proposal-state-machine.md (§7 saga plan; .plan git-ignored
+nên chỉ ở local — không vào commit) · result32.txt + handoff mới.
+Message đề xuất:
+  feat: phase 9 UI — stale/expired cards show the refusal banner (code +
+  problems[] persist through history restore); saga plan §7
++ push change/flutter-chat-mvp.
+
+== 8. CÒN THIẾU / VIỆC CHỈ USER LÀM ĐƯỢC ==
+Còn thiếu kỹ thuật: saga REVERSING/REVERSED code thật (chờ duyệt §7);
+rà soát hiển thị banner khi AskResult parse (controller wiring trên màn hình thật
+chỉ test được khi có APK trên máy — widget test đã che logic).
+Chỉ user: SUBMIT phiếu thu (quyết riêng) · dán 3 giá trị GitHub Settings
+(COPILOT_BASE_URL/AUTH_USER/AUTH_PASSWORD) · test APK thiết bị thật ·
+thu audio 150 câu (docs/audio-collection-script.md) · rotate key ERPNext ·
+review .project/ai-rules.md.
+
+== 9. RÀNG BUỘC ĐÃ GIỮ ==
+Không đụng ERPNext thật trong phiên (0 write call) · không mở delete/submit vào
+code · không Phase 4/8/11 · không tự thiết kế production · falsify patch có
+assert đổi-thật trước, khôi phục grep sau · không báo xong bằng lời.

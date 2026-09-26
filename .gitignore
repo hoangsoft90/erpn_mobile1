@@ -1,0 +1,79 @@
+.agent
+.agents
+.chats
+.review
+.gemini
+.opencode
+.claude
+.cocoindex_code
+.codegraph
+.draft
+.edits
+.plan
+.tests
+initp
+.git
+node_modules
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+build/
+*.freezed.dart
+*.g.dart
+.idea/
+*.iml
+*.ipr
+*.iws
+.modules.xml
+.vscode/
+/android/app/local.properties
+/android/key.properties
+/android/.gradle/
+/android/app/src/main/res/values/google-services.json
+/ios/.generated/
+/ios/Flutter/Generated.xcconfig
+/ios/Flutter/flutter_export_environment.sh
+/ios/Pods/
+/ios/Runner/GeneratedPluginRegistrant.h
+/ios/Runner/GeneratedPluginRegistrant.m
+/ios/Runner/GoogleService-Info.plist
+*.moved-aside
+.xcworkspace/
+xcuserdata/
+.deploy/
+/linux/flutter/ephemeral/
+/windows/flutter/ephemeral/
+.DS_Store
+Thumbs.db
+*.log
+.env
+.env.*
+
+# Python (Phase 1 — Vietnamese NLP pipeline)
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# LLM Router runtime audit (Phase 5, result14) — runtime artifacts, not source
+llm-router-audit/
+
+# Phase 7 idempotency store (command_id ledger) — runtime state, not source
+idempotency-store/
+
+# P0 kill switch (plan2_final §24.3) — the flag file is OPERATOR state:
+# creating mcp-erpnext/control/read-only.flag must never appear as a diff.
+mcp-erpnext/control/
+
+# P4 learning loop (plan2_final §12): user questions + outcomes are runtime
+# data, never committed — cluster reports are produced from them on demand.
+learning-log/
+
+# P7 background job queue (plan2_final §19 P7): parked intents + attempt
+# history are runtime state (repo-local on purpose, never /tmp), never source.
+job-queue/

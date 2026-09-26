@@ -1,0 +1,16 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <!--
+    Adaptive FOREGROUND layer: bubble + dong scaled to ~62% and centered so the
+    artwork stays inside the safe zone (the OS may mask up to 33% of the edge).
+    Identical geometry to icon.svg, scaled around the canvas center.
+  -->
+  <g transform="translate(512 512) scale(0.62) translate(-512 -512)">
+    <path d="M 380 660 L 300 800 L 492 690 Z" fill="#FFFFFF"/>
+    <rect x="252" y="292" width="540" height="400" rx="92" fill="#FFFFFF"/>
+    <g stroke="#087F72" fill="none" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="540" cy="512" r="92" stroke-width="56"/>
+      <line x1="632" y1="368" x2="632" y2="604" stroke-width="56"/>
+      <line x1="372" y1="512" x2="704" y2="512" stroke-width="48"/>
+    </g>
+  </g>
+</svg>

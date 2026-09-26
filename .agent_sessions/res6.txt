@@ -1,0 +1,18 @@
+A3 is now closed out on the server side, and the real-site proof landed. Summary:
+
+Ran the A3 real loop (read-only, real ERPNext) —  /input/einvoice  only reads items + suppliers, so no write permission was needed:
+-  hd-pdf-tounicode.pdf  → 200 (1270 ms),  source=einvoice_pdf , supplier resolved by tax_id to the real  Đại lý Cám Bình Dương  ( ambiguous=false ), 2 lines matched to real stock items ( CAM-HEO-25KG  10,  CAM-GA-25KG  5 Bao),  warnings=[] , and no write surface exposed (no command id, no proposal).
+-  hd-pdf-no-textlayer.pdf  → 422  EINVOICE_PDF_NO_TEXT  with the "use the camera" message — refuses rather than inventing numbers.
+
+Wrote the deliverables:
+-  .plan/next4/A3-pdf-spike.md  — format spike: construct → fixture map, label → field map, the number-format decision ( .  = thousands on paper vs  .  = decimal in XML ⇒ must NOT reuse A1's  strictNumber ), refusal codes, and what's deliberately out of scope.
+-  .plan/next4/A3-result.md  — full result incl. §9 independent review (OCR/AgentMemory/codebase-memory-mcp/Simplenote unavailable here ⇒ manual review on the diff per Graceful Degradation). One Low finding: a redundant condition in  preferredMoneyReading()  — kept, with the reason recorded (display-only, at most 2 readings, tested; editing money-display code for tidiness isn't worth the risk). Everything else checked and listed as "not a bug" so nobody re-litigates it.
+-  result69.txt  — evidence at repo root;  working.md  /  next.md  /  checklist.md  updated.
+
+Measured: A3 tests 15/15 · Node full 782 / 780 pass / 2 fail (the 2 are the pre-existing dsh-env tests, red since B0) · Flutter 304/304 ·  analyze 0 .
+
+⛔ Not committed. A3 touches the document path (read-only, but still the document/trust boundary) and sits in the same uncommitted diff as B + M1-site + A2 Flutter ⇒ per the safety-zone rule I'm not self-approving. Awaiting your approval.
+
+Gaps recorded honestly: no real supplier PDF exists in the repo (fixtures are built byte-by-byte); ObjStm isn't decompressed (refused by name instead); scans go to camera path C; the Flutter  .pdf  picker is not built ( einvoice_file_picker.dart  accepts only  .xml , so A3 is reachable via the route today, not from the app UI); no A3-specific falsify harness.
+
+Still open from B: (1) the  pubspec.yaml  comment claims you approved  file_selector  on 2026-09-25 — I can't verify that from here; (2)  capabilities.json 's  business_doc_key.composition / required_parts  are read by nothing (the real key is computed in  business-doc-key.mjs ) — either pin them with a test or delete them; (3) the  custom_business_doc_key  migration hasn't run, so until it does, XML/PDF sends are refused with  PO_DOC_KEY_FIELD_MISSING .

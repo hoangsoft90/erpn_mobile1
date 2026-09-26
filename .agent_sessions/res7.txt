@@ -1,0 +1,74 @@
+P9-D xong ở mức code+test+falsify — đang CHỜ bạn duyệt commit (vùng SỐ TIỀN ⇒ tôi không tự commit).
+
+Gap §5 của P9-C đã đóng (đo bằng CÙNG một probe, trước/sau)
+
+TRƯỚC  ask #1: amount = 2500000   ask #2: amount = 2500000     ← nháp 1.000.000 vô hình
+SAU    ask #1: amount = 1500000   ask #2: amount = 1500000     ← raw GL vẫn 2500000
+       warning: "đã có phiếu thu NHÁP chưa submit (PE-M901) phủ SINV-0001 1000000đ …"
+
+Cách sửa (không thêm đường ghi nào)
+
+- Builder: đọc phiếu NHÁP  docstatus=0  của đối tác ( limit 10 ) +  references[]  của từng phiếu ⇒ trừ phần đã phủ ⇒  effective_outstanding ; giữ GL RAW bên cạnh ( raw_outstanding_vnd ,  draft_cover_vnd ,  draft_cover_docs ); chọn đích trên danh sách hiệu dụng; phủ hết/phủ quá ⇒  PAYMENT_DRAFT_COVERED  (nêu tên nháp để biết đi submit/hủy phiếu nào).
+- Executor: đọc lại đúng code đó lúc xác nhận ⇒ nháp bị submit/hủy ở giữa ⇒  PROPOSAL_STALE  (không ghi im lặng). Drift so với hiệu dụng — nếu chỉ đổi một đầu thì mọi confirm có nháp đều bị từ chối oan.
+- Đọc lỗi ⇒ TỪ CHỐI ( PAYMENT_ERP_UNAVAILABLE , xảy ra trước  setReference ); bag thiếu read ⇒  PAYMENT_SKILLS_INCOMPLETE  (không đội lốt "ERP chết").
+
+Số thật
+
+┌──────────────────────────┬──────────────────────────────────────────────────────────────────────────────────┐
+│ Bộ                       │ Kết quả                                                                          │
+├──────────────────────────┼──────────────────────────────────────────────────────────────────────────────────┤
+│ Node full                │ 793 / 791 pass / 2 fail (2 fail dshGateway* có sẵn từ B0, môi trường)            │
+│ p9-pay + payment-write   │ 68/68                                                                            │
+│ p1-entity-state + b4 ·   │ 33/33 · 30/30                                                                    │
+│ p8 + p10                 │                                                                                  │
+│ Falsify p9c-payment-pay  │ 12/12 RED — thêm ca K (bỏ trừ nháp ⇒ builder đỏ) + L (bỏ đọc lại cover ⇒ E2E ghi │
+│                          │ nháp thứ hai, đỏ đúng chỗ)                                                       │
+│ Flutter                  │ không chạy lại (0 file Dart đổi); gần nhất 304/304 · analyze 0                   │
+└──────────────────────────┴──────────────────────────────────────────────────────────────────────────────────┘
+
+Ba điều bạn cần biết trước khi duyệt
+
+1. 4 test cũ phải sửa vì hành vi mới là ĐÚNG ( p8  ×2,  p10  ×2): chúng gửi lại cùng một proposal cho cùng khoản nợ để tiêu ngân sách/lấy chứng từ. Trong sản phẩm không luồng nào làm vậy (trùng  command_id  = gateway replay trước khi executor chạy) ⇒ mỗi test dùng một khoản nợ riêng, mọi khẳng định cũ giữ nguyên.
+2. 1 lỗi của chính tôi do suite bắt: guard "phủ hết" viết  if (effectiveOutstanding <= 0)  ⇒ nuốt luôn ca credit note số âm (không liên quan nháp) và báo sai bản chất. Đã siết thành  <= 0 && drawnForTarget > 0  + ghim ca hồi quy.
+3. Công cụ review độc lập không khả dụng ở phiên này (OCR open-code-review, AgentMemory, codebase-memory-mcp, Simplenote) ⇒ bước Code Review chạy dạng fallback (tự đọc diff + quét call-site), không có lớp phát hiện tự động NPE/XSS/SQLi. Rủi ro chưa đo: race hai phiên cùng bấm (ERPNext là chốt cuối khi submit) và trần 10 nháp áp cho cả hai hướng.
+
+Diff P9-D:  payment-write.mjs  (+247/−11) ·  router.mjs  (+14) · 6 file test (+418/−15) · falsify (+23/−1) ·  working.md  · deliverable  .plan/next4/P9D-result.md .
+
+Đề xuất đã có sẵn nhưng chưa sửa: A3 H1/M1/M2 (định danh/trùng tài liệu) — vẫn chờ bạn quyết
+-----------------------------
+Xong cả 3 việc.
+
+1) Flutter — nhận  .pdf  (A3 UI)
+
+nút HĐĐT (cả 2 layout) → picker lọc .xml + .pdf
+  ├─ .xml → decodeEinvoiceXml → PickedXmlFile  → body {xml, kind:"purchase"}        (A2, không đổi)
+  └─ .pdf → decodeEinvoicePdf → PickedPdfFile  → body {pdf_base64, kind:"purchase"} (A3, MỚI)
+       ↓ slots → form slots SẴN CÓ (source=file) → /ask (+source_document) → proposal → [Xác nhận] → NHÁP
+
+- XOR do server chốt: gửi cả hai ⇒ 422  EINVOICE_INPUT_AMBIGUOUS ; client không đoán, không fallback.
+- PDF scan ⇒ 422  EINVOICE_PDF_NO_TEXT , app hiện đúng câu tiếng Việt của server (đã trỏ sang nút camera).
+- 2 tripwire tĩnh quét  lib/  chặn  package:xml|XmlDocument  và  package:pdf|PdfDocument|syncfusion_flutter_pdf  quay lại ⇒ không có parser thứ hai trên client.
+- Không route mới · không skill WRITE mới · không auto-execute · không auto-send.
+- Deliverable:  .plan/next4/flutter-pdf-picker-result.md  (đã trỏ từ  A3-result.md  §6, khép giới hạn #4).
+
+2) Migration B — ✅ ĐÃ VERIFY
+
+ custom_business_doc_key  trên Purchase Order, chạy 2026-09-25 trên site thật (host  prevail-…ngrok-free.dev , không secret): tạo ⇒  VERIFIED type=Data unique=1 search_index=1  · chạy lại ⇒ no-op · kiểm chứng độc lập bằng REST thấy cột trong meta · probe chỉ-đọc ⇒  {"field_unavailable":false,"found":false}  ⇒ gate đã mở, không dương tính giả. Ghi ở  B-dedupe-result.md  §7.
+
+3) Commit (branch  change/flutter-chat-mvp , không push)
+
+┌─────────┬──────────────────────────────────────────────────────────────────────────────────────┐
+│ Hash    │ Nội dung                                                                             │
+├─────────┼──────────────────────────────────────────────────────────────────────────────────────┤
+│ 7ca1409 │ feat(mcp-erpnext): A3 PDF + B business_doc_key + M1-site (28 file)                   │
+│ 8a692f1 │ feat(mobile): kênh FILE .xml/.pdf + thẻ tạo khách + fix 401 ở ProposalCard (20 file) │
+│ 47558ce │ docs(next4): working/next/checklist/features + result65/67/68/69.txt (9 file)        │
+└─────────┴──────────────────────────────────────────────────────────────────────────────────────┘
+
+P9-D KHÔNG bị commit — 10 file vẫn nguyên trong working tree (đã kiểm  git log --name-only | grep payment-write  ⇒ rỗng). Cũng loại  syncode ,  icon.png ,  query_customer.py ,  checklist1.md ,  faq1.md  (file cục bộ, ngoài next4). Ghi chú:  .plan/next4/next4-commit-note.md .
+
+Số đo
+
+Node full 793 / 791 pass / 2 fail (2 fail  dshGateway*  có sẵn từ B0, môi trường) · subset a3+b-dedupe+m1+a2 56/56 · Flutter 310/310 ·  flutter analyze  0.
+
+⚠️ Còn lại: P9-D chờ bạn duyệt commit riêng (vùng số tiền) · A3 H1/M1/M2 (định danh  invoice_no /cap inflate/ readDate ) đã đề xuất nhưng chưa sửa · UI-checkpoint cho nút picker (thay đổi UI) chưa chụp screenshot · công cụ review độc lập (OCR/AgentMemory/codebase-memory) không khả dụng phiên này nên không có index sync

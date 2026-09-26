@@ -1,0 +1,60 @@
+========================================================================
+RESULT 45 — REVIEW P1 (VÒNG 2): FIX HARNESS FLUTTER P1 + SOI 2 ĐIỂM WIRING SERVER + SUITE
+Timestamp: 2026-09-17 (giờ shell)
+Phạm vi: test/p1_picker_dedup_test.dart (HARNESS — không đụng production Dart),
+http-ask.mjs + copilot-server.mjs (CHỈ đọc/soi, không sửa — đã đúng).
+KHÔNG đụng logic tiền server.
+========================================================================
+
+== 1. BUG TỰ PHÁT HIỆN: HARNESS P1 FLUTTER TỰ CHE CHÍNH NÓ ==
+Triệu chứng: test "P1 §4.4 picker" báo `sent=false`, error =
+"Không kết nối được máy chủ..." trong khi 3 test còn lại cùng file xanh.
+
+Nguyên nhân gốc (chứng minh bằng probe debug riêng, đã xoá sau dùng):
+- dio ĐƯA request Map NGUYÊN vào HttpClientAdapter trong harness này
+  (adapter thấy `_Map<String, String>`), KHÔNG phải chuỗi JSON.
+- Harness cũ cast cứng `jsonDecode(options.data as String)` → TypeError
+  ngay trong adapter → dio bọc thành DioException → client trả
+  CopilotNetworkException → controller _recordFailure (không lưu turn).
+  `seen` rỗng KHÔNG phải vì client không gọi, mà vì harness ném trước khi
+  ghi. 3 test kia xanh vì không đọc body.
+- Fix: helper `_bodyOf(options)` chịu CẢ 2 dạng (Map → copy; String →
+  jsonDecode), thay 2 chỗ cast. File: test/p1_picker_dedup_test.dart.
+
+Kết quả sau fix (lệnh + output thật):
+  $ flutter test test/p1_picker_dedup_test.dart
+  00:01 +4: All tests passed!
+  (§4.4 picker: sent=true, seen[1].entity_id='CUST-00001', cùng text gửi lại)
+
+Bài học: harness chỉ đọc MODEL không đọc WIRE = rơm rá (chính lesson result33
+F4/result43 — áp SAI CHIỀU: lần này là harness đọc wire mà sai shape).
+
+== 2. SOI 2 ĐIỂM WIRING SERVER (nghi ngờ sau grep) — ĐÃ ĐÚNG, KHÔNG SỬA ==
+a) /execute/cancel có bypass kill-switch? — CỐ ÊN ĐÚNG THIẾT KẾ:
+   http-ask.mjs:179-189 comment nguyên văn: cancel là LOCK RELEASE, không
+   phải ERPNext write; kill switch KHÔNG chặn cancel (refuse cancel khi
+   maintenance = đóng băng intent mãi). Cancel vẫn yêu cầu reconcile-chứng-từ
+   bằng 0 trước khi mở khoá (dòng sau trong route). Không sửa.
+
+b) entity_id từ client có bị tin ngây thơ? — KHÔNG:
+   copilot-server.mjs:339-352 + 588-592: pickedEntityId chỉ được nhận khi
+   `pickFromCandidates(all, id)` ok trên FRESH READ `findCustomer("")` từ
+   ERPNext (§4.2: không bên nào tự bịa ERP id). Refuse → log stderr + rơi về
+   luồng thường. Không sửa.
+
+== 3. SUITE CUỐI (lệnh + output thật) ==
+  $ node --test            (mcp-erpnext)  → pass 172 · fail 0
+  $ python3 -m unittest…   (PYTHONPATH=src) → Ran 60 tests — OK
+  $ flutter test           (apps/mobile)  → 00:23 +67: All tests passed!
+  $ flutter analyze        → No issues found! (ran in 14.0s)
+
+== 4. CÒN LẠI ==
+- P1 implementation + tests: xong, chờ user duyệt commit P1 (vùng tiền —
+  KHÔNG tự commit).
+- Falsify 3 fix P0 đã ghi result44 (A: runExecute guard, B: process-level
+  unhandledRejection, C: HTTP boundary try/catch — C falsify trên BẢN SAO
+  /tmp, bài học "không falsify trên cây sống").
+- Gap P0 chừa cho P1 đã xử lý trong đợt này (entity states, snapshot,
+  PROPOSAL_VERSION_STALE/ENTITY_CHANGED, UNKNOWN_EXECUTION_STATE,
+  business dedup, NLP-down block) — chi tiết trong p1-result.md (sẽ tạo
+  sau khi suite chốt ở bước đóng P1).

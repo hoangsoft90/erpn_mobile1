@@ -1,0 +1,24 @@
+Everything is done and verified. Final state:
+
+Đã đóng trong phiên này
+
+┌─────────────────────┬───────────────────────────────────────────────────────────────────────────────────────┐
+│ Việc                │ Kết quả                                                                               │
+├─────────────────────┼───────────────────────────────────────────────────────────────────────────────────────┤
+│ Exit A2             │ ✅ Nháp thật PUR-ORD-2026-00006 (docstatus 0) từ XML HĐĐT, đọc lại verified. Docs:    │
+│                     │ A-result.md §3 + implementation.md                                                    │
+│ Site config         │ Item Default.default_warehouse = "Kho Cám - MP" cho đúng 2 item của fixture           │
+│                     │ (idempotent, kho lấy từ lịch sử PO-00005)                                             │
+│ R5 — UOM Nos        │ ✅ Alias đồng nhất (không hệ số), ghim + falsify + xác nhận trên site thật            │
+│ R6 — item "ma" từ   │ ✅ maskPartyMention, nối cả 7 đường đặt hàng, ghim + falsify + /ask thật nay ra       │
+│ tên NCC             │ proposal đúng 1 dòng                                                                  │
+│ Suite               │ Node 743 (741 pass; 2 fail dsh-gateway là môi trường DSH có từ B0) · Python 63 OK ·   │
+│                     │ cohort 221/221                                                                        │
+│ Commits (chưa push) │ 74eb467 code A · a229ddf docs · 5e6071d R5 · fd19ebe R6                               │
+│ Dọn dẹp             │ 3 tiến trình nlp_service --port 0 còn sót đã kill                                     │
+│ working.md          │ Đã cập nhật (đang chưa commit)                                                        │
+└─────────────────────┴───────────────────────────────────────────────────────────────────────────────────────┘
+
+Chưa làm được vì môi trường thiếu tool (đã bù bằng full suite + falsify 2 chiều + review thủ công  git diff ): ADR/AgentMemory (Task Completion Hook) ·  ccc index / codebase-memory-mcp  · OCR · Simplenote. Đây là review thủ công, không phải review tự động.
+
+Còn mở: M1 kẹt  customer_group: "Múa"  hardcode →  LinkValidationError  trên site thật, cần bạn quyết Customer Group/Territory/Type mặc định. Cùng các nhánh chưa làm theo đúng phạm vi bạn chốt: B dedupe tờ HĐ · A3 PDF · Flutter upload. Chứng từ dịch vụ đã ra proposal trên site nhưng chưa  /execute  (sẽ tạo nháp thật thứ hai — chờ bạn cho phép riêng).

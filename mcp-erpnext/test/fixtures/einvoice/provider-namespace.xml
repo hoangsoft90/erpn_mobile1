@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<!-- Bản thể hiện do hệ thống phát hành hóa đơn điện tử (kiểu nhà cung cấp có KHÔNG gian tên mặc định). -->
+<hdon:HDon xmlns:hdon="http://example-provider.vn/einvoice/2.0">
+  <hdon:DLHDon Id="HD-8F21A">
+    <hdon:TTChung>
+      <hdon:PBan>2.0.0</hdon:PBan>
+      <hdon:THDon>Hóa đơn giá trị gia tăng</hdon:THDon>
+      <hdon:KHMSHDon>1</hdon:KHMSHDon>
+      <hdon:KHHDon>C26MPH</hdon:KHHDon>
+      <hdon:SHDon>0000456</hdon:SHDon>
+      <hdon:NLap>2026-09-21T09:15:02</hdon:NLap>
+      <hdon:DVTTe>VND</hdon:DVTTe>
+      <hdon:TGia>1</hdon:TGia>
+    </hdon:TTChung>
+    <hdon:NDHDon>
+      <hdon:NBan>
+        <hdon:Ten><![CDATA[Nhà máy Cám Đại Thành]]></hdon:Ten>
+        <hdon:DChi>KCN Mỹ Phước, Bến Cát</hdon:DChi>
+      </hdon:NBan>
+      <hdon:NMua>
+        <hdon:Ten>Minh Phát Cám &amp; VLXD</hdon:Ten>
+      </hdon:NMua>
+      <hdon:DSHHDVu>
+        <hdon:HHDVu>
+          <hdon:STT>1</hdon:STT>
+          <hdon:THHDVu>Xi măng PCB40</hdon:THHDVu>
+          <hdon:DVTinh>Bao</hdon:DVTinh>
+          <hdon:SLuong>20</hdon:SLuong>
+          <hdon:DGia>85000</hdon:DGia>
+          <hdon:ThTien>1700000</hdon:ThTien>
+          <hdon:TSuat>10%</hdon:TSuat>
+        </hdon:HHDVu>
+      </hdon:DSHHDVu>
+      <hdon:TToan>
+        <hdon:TgTCThue>1700000</hdon:TgTCThue>
+        <hdon:TgTThue>170000</hdon:TgTThue>
+        <hdon:TgTTTBSo>1870000</hdon:TgTTTBSo>
+      </hdon:TToan>
+    </hdon:NDHDon>
+  </hdon:DLHDon>
+</hdon:HDon>

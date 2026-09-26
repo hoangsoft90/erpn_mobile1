@@ -1,0 +1,88 @@
+========================================================================
+RESULT 46 — P2 (phases2): SESSION CONTEXT + UNCERTAINTY UX
+Timestamp: 2026-09-17 (giờ shell)
+Phạm vi: taxonomy refusal (§12) + session context (§14) + Flutter progress.
+KHÔNG submit/cancel/delete ERPNext thật; KHÔNG đụng Safety Gateway write path.
+P1 đã commit `ee93f13` + push (32 files) theo duyệt user trong chat.
+========================================================================
+
+== 1. COMMIT P1 ==
+  $ git commit -m "feat: p1 entity execution resilience — ..." → ee93f13
+  $ git push origin change/flutter-chat-mvp → 0ce2893..ee93f13
+  32 files changed, 2126 insertions(+), 28 deletions(-)
+
+== 2. P2 DELIVERABLES (chi tiết .plan/phases2/p2-result.md) ==
+1. Taxonomy: src/uncertainty.mjs — 11 mã + copy TV bắt buộc (loader ném nếu
+   thiếu copy); toUncertaintyCode() map PAYMENT_*→BUSINESS_VALIDATION_FAILED,
+   INSUFFICIENT_PERMISSION→AUTHORIZATION_DENIED, unknown⇒null.
+   Wiring: mọi refusal trong copilot-server trả kèm uncertainty{code,message}.
+2. Session context: src/session-context.mjs — TTL customer 30m / invoice 10m;
+   provenance user_selected|derived; entry hết hạn XÓA khi đọc.
+3. WRITE fail-closed: writeEligible() — chỉ user_selected/exact trong TTL;
+   copilot-server ghi context sau resolve (EXACT/pick⇒user_selected,
+   fuzzy⇒derived) và chỉ nhận id khi eligible.
+4. Flutter: pipeline_progress.dart — 4 nhãn pha (Đang hiểu câu…/Đang tra
+   khách…/Đang kiểm tra…/Chờ xác nhận) + LinearProgressIndicator; Timer.periodic
+   cancel-in-dispose; chat_screen thay spinner trần bằng PipelineProgress.
+5. (Optional) sửa amount trên card — BỎ QUA có lý do (snapshot P1 immutable,
+   cần thiết kế riêng), chờ user.
+
+== 3. CONTRACT EDIT ==
+"doanh thu" thêm vào routing keywords nhóm sales (sales.summary là stub
+skill:null nhưng trigger chỉ nằm ở capability-level — câu "doanh thu hôm nay"
+trước đó KHÔNG route được nào cả ⇒ UNKNOWN_INTENT sai nghĩa).
+
+== 4. LỖI TỰ GÂY + SỬA (bài học vào skill) ==
+- Đặt stub check TRƯỚC forbidden check ⇒ "xóa khoản vừa thu" trả
+  KNOWN_INTENT_UNIMPLEMENTED thay vì FORBIDDEN_IN_AI_PATH — test tĩnh
+  forbidden-path.test bắt ngay. Sửa thứ tự + comment "ORDER MATTERS".
+  Falsify: hoán vị lại trên /tmp ⇒ forbidden-path FAIL đúng chỗ.
+- Test đọc .id trong khi store trả .value (3 assertion sai của test).
+- "thu 10 triệu" không đủ anchor để route ⇒ UNKNOWN_INTENT (đúng nghĩa);
+  đổi câu test thành "công nợ 10 triệu" ⇒ MISSING_ENTITY + copy.
+
+== 5. FALSIFY (trên BẢN SAO /tmp/falsify-p2 — cây sống không bị đụng) ==
+F1: vô hiệu check provenance   → p2 test FAIL "derived context must NEVER
+    drive a WRITE (true !== false)" → khôi phục → 5/5 xanh.
+F2: vô hiệu TTL expiry         → 2 test FAIL (get trả entry 30m+1s;
+    writeEligible true cho context hết hạn) → khôi phục → xanh.
+F3: hoán vị forbidden/stub     → forbidden-path FAIL đúng assertion
+    FORBIDDEN_IN_AI_PATH → khôi phục → xanh.
+Bản sao đã xoá sau khi xong (rm -rf /tmp/falsify-p2).
+
+== 6. SUITE CUỐI (lệnh + output thật) ==
+  $ env -u ERPNEXT_URL -u ERPNEXT_API_KEY -u ERPNEXT_API_SECRET node --test
+    (mcp-erpnext)   → ℹ tests 181 · ℹ pass 181 · fail 0
+  $ PYTHONPATH=src python3 -m unittest discover -s tests
+                    → Ran 60 tests in 0.506s — OK
+  $ flutter test    → 00:22 +69: All tests passed!
+  $ flutter analyze → No issues found! (ran in 6.3s)
+(Chạy test Node với env -u ERPNEXT_* vì shell còn giữ biến từ probe trước —
+bài học mock/real: biến thể mới đã vào SKILL.md ở đợt P1.)
+
+== 6b. VÒNG TỰ SOI SAU PHIÊN (review diff trước khi đề xuất commit) ==
+Phát hiện 1 lỗi THẬT (diff chôn delta trên file contract an toàn):
+  $ git diff --numstat mcp-erpnext/capabilities.json
+    →  426    69    mcp-erpnext/capabilities.json   (495 dòng cho dự kiến +1 keyword)
+  Xác định delta ngữ nghĩa = so bản canonical:
+  $ git show HEAD:mcp-erpnext/capabilities.json | python3 -c "...json.dumps(sort_keys=True)"
+    diff HEAD vs worktree  →  ĐÚNG 1 dòng:  > "doanh thu"
+  ⇒ file bị REFORMAT toàn bộ (inline → multi-line) bởi công cụ ghi JSON.
+  Fix: $ git checkout HEAD -- mcp-erpnext/capabilities.json
+       + thêm lại 1 keyword giữ style inline.
+  $ git diff --stat  →  capabilities.json | 2 +-   (1 insertion, 1 deletion)
+  $ env -u ERPNEXT_* node --test  →  tests 181 · pass 181 · fail 0 (không regress)
+Đồng thời xác nhận suite + docs so với phiên trước:
+  Python 60/60 · Node 181/181 · Flutter 69/69 · analyze 0
+  features.md sửa: P1 "CHỜ DUYỆT" → "ĐÃ COMMIT ee93f13" + thêm mục P2.
+  next.md: dòng P0 "tiếp theo = P1" → "tiếp theo = P1 → P2".
+Bài học mới (đã vào SKILL.md + LESSONS_LEARNED.md): reformat file JSON/config
+chôn delta 1 dòng thành 495 dòng — luôn đọc numstat trước khi stage.
+
+== 7. COMMIT ==
+- ✅ ĐÃ COMMIT `33ff725` + PUSH (`ee93f13..33ff725`, branch change/flutter-chat-mvp)
+  15 files +717/−35. Secret scan CLEAN. `.env`/store/.plan không vào commit.
+- P2 = ĐÓNG. Bước kỹ thuật tiếp theo = P3 (LLM Classifier) theo README phases2.
+- P3 chỉ bắt đầu khi có lệnh user (không tự nhảy P5/P9/Voice).
+- Việc chỉ user: SUBMIT phiếu thu thật · rotate key · audio 150 câu ·
+  review ai-rules.md · app icon duyệt riêng.
