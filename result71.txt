@@ -1,0 +1,115 @@
+================================================================================
+result71.txt — A3 PDF: SỬA H1 (invoice_no rác) + M1 (trần inflate) + M2 (readDate)
+Ngày: 2026-09-25 · Project: erpn_mobile1 · Branch: change/flutter-chat-mvp
+Xuất phát: user duyệt "sửa đi nhé" cho 3 lỗ hổng đã ĐO ở .plan/next4/A3-result.md §9.5
+================================================================================
+
+## 0. PHẠM VI (đã giữ đúng)
+
+Sửa CHỈ 3 lỗ đã đo của bộ đọc PDF A3 + test. KHÔNG chạm: XML/A1/A2 · P9-D · M1-site ·
+B · đường GHI nào · không auto-submit · không parse PDF ở client · không thêm skill WRITE.
+Bộ đọc A3 vẫn thuần/đồng bộ/0 dependency, KHÔNG có bề mặt ghi.
+
+Lưu ý vùng an toàn (AGENTS "Ponytail — vùng loại trừ"): H1 = ĐỊNH DANH tài liệu (còn là khoá
+chống trùng của B), M1 = TRẦN tài nguyên khi đọc file NGƯỜI LẠ gửi ⇒ **AI không tự commit**.
+Kết thúc phiên: **CHƯA COMMIT**, chờ user duyệt.
+
+## 1. FILE ĐÃ ĐỔI (6 sửa + 1 mới)
+
+| File | Thay đổi |
+|---|---|
+| `mcp-erpnext/src/einvoice/einvoice-pdf.mjs` | +166/-28 — H1 (2 pass + luật chữ số + `wholeLineToken`), M1 (`maxOutputLength` + mã riêng), M2 (chặn theo dòng + ưu tiên nhãn + vỏ luôn ca Low L2) |
+| `mcp-erpnext/capabilities.json` | `max_inflated_bytes: 8000000` + `comment_pdf` giải thích vì sao KHÁC `max_pdf_bytes` |
+| `mcp-erpnext/src/capability-contract.mjs` | +13 — validate 2 trần PDF (số nguyên > 0 nếu khai), cùng chuẩn `max_xml_bytes` |
+| `mcp-erpnext/src/http-ask.mjs` | +6 — `EINVOICE_PDF_INFLATED_TOO_LARGE` ⇒ **413** (cùng nhánh với TOO_LARGE) |
+| `mcp-erpnext/test/a3-einvoice-pdf.test.mjs` | +281 — 13 test mới (15 → 28) |
+| `mcp-erpnext/test/a2-einvoice-input.test.mjs` | +16 — 4 ca mutation trần PDF + ghim giá trị ship |
+| `mcp-erpnext/scripts/falsify/a3-einvoice-pdf.mjs` | **MỚI** — 10 ca đột biến, đóng mục "A3 chưa có falsify" |
+
+Secret scan trên diff: SẠCH (không `ghp_`/private key/`AKIA`/`sk-`/password). Không chạm `.env`.
+
+## 2. H1 — `invoice_no` RÁC (đo trước/sau, cùng input)
+
+| Ca | TRƯỚC | SAU |
+|---|---|---|
+| `"Mã số thuế: 0300000002"` in TRÊN `"Số: 0000049"` | `"thu"` (cắt giữa "thuế"), `complete=true` | `"0000049"` |
+| footer `"In số bản: 2"` ở dòng ĐẦU | `"b"` | `"0000049"` (từ nhãn cụ thể) |
+| `["Số hoá đơn:", "Mã số thuế: 0300000002"]` | `"M"` | `null` + `MISSING_INVOICE_NO` |
+| `["Số hoá đơn:", "Số lượng: 2"]` | `"S"` | `null` + `MISSING_INVOICE_NO` |
+| `["Số hoá đơn:", "1 Cám heo tăng trọng 25kg …"]` | `"1"` (cột đầu của BẢNG!) | `null` |
+| `["Số hoá đơn: chưa có"]` | `"ch"` | `null` |
+| `["Số hoá đơn:", "0000049"]` (nguồn hợp lệ) | `"0000049"` | `"0000049"` (không siết oan) |
+| `["Số hoá đơn: 0000049"]` · số dính ký hiệu `1C25TAA-0000049` | OK | OK |
+
+**3 dòng cuối của bảng TRƯỚC là do PROBE tự tìm thấy trên chính bản fix ĐẦU TIÊN** (không
+phải từ review trước): nhánh "nhãn cụ thể lấy dòng dưới" vẫn ăn `M`/`S`/`1`. Luật cuối cùng:
+dòng dưới nhãn phải LÀ giá trị (`wholeLineToken`) — đây là thứ DUY NHẤT chặn được dòng bảng,
+vì dòng bảng bắt đầu bằng chữ số nên luật "phải có chữ số" đi qua được.
+
+## 3. M1 — TRẦN OUTPUT khi giải nén (đo A/B trên CÙNG file, 2 tiến trình)
+
+```
+TRƯỚC (inflateSync KHÔNG trần): nén 19.543 B -> phình 20.000.000 B,  57 ms, RSS +49,1 MB
+SAU   (maxOutputLength = 8 MB) : nén 19.543 B -> TỪ CHỐI theo tên,   19 ms, RSS  +8,5 MB
+Mã lỗi: EINVOICE_PDF_INFLATED_TOO_LARGE  (HTTP 413)
+(§9.5 đo bản nặng hơn: 106.884 B -> 31.457.284 B, 294x, 4,3 s, RSS +541 MB)
+```
+Lý do tách mã khỏi `TOO_LARGE`: file này **qua được** trần file (19,5 KB < 650 KB) nhưng
+KHÔNG phải hoá đơn thông thường ⇒ lời khuyên khác ("gửi file nhỏ hơn" ≠ "file này lạ").
+Kèm 2 guard tầng contract: `max_pdf_bytes`/`max_inflated_bytes` khai sai kiểu hoặc = 0 ⇒
+`CAPABILITY_CONTRACT_INVALID`; mutation chứng minh sống: `0` · `"650000"` · `"8MB"` đều bị
+chặn, còn contract không khai PDF thì vẫn hợp lệ (2 control).
+
+## 4. M2 — `readDate` lấy ngày ĐẦU TIÊN không nhãn
+
+| Ca | TRƯỚC | SAU |
+|---|---|---|
+| `"Ngày đặt hàng: 01/09/2026"` trên `"Ngày 20/09/2026"` | `2026-09-01` (SAI) | `2026-09-20` |
+| chỉ có footer `"In ngày 30/09/2026"` | `2026-09-30` (nhận bừa) | `null` + `MISSING_INVOICE_DATE` |
+| 2 ngày KHÔNG nhãn | tung đồng xu | `null` (từ chối, không đoán) |
+| DẠNG `"ngày 20 tháng 09 năm 2026"` | OK | OK |
+Vá luôn ca Low **L2**: nhánh chữ nay duyệt XUÔI (cùng chiều nhánh số) và dùng `index`
+thay `lines[folded.indexOf(line)]`.
+
+## 5. TEST + FALSIFY + SỐ ĐO
+
+| Bộ | Kết quả |
+|---|---|
+| `test/a3-einvoice-pdf.test.mjs` | **28/28** (trước 15; +13) |
+| `a2-einvoice-input` + `a3` + `capability-contract` | **50/50** |
+| `a1` + `a2` + `a3` (sau khi sửa L1+L3) | **54/54** |
+| **Node full** (`COPILOT_MOCK_OK=1 node --test`) | **806 / 804 pass / 2 fail** |
+| 2 fail | `dshGatewayHealth` + `verifyDshRuntime` — **môi trường, có từ B0**, không liên quan |
+| Falsify `scripts/falsify/a3-einvoice-pdf.mjs` | **10/10 RED**, restore byte-identical, 0 PROBLEM |
+| Probe `.plan/next4/probe-a3-review.mjs` | 10/10 ok, NO FINDINGS |
+| Flutter | KHÔNG đụng file Dart nào trong phiên này ⇒ không chạy lại |
+
+10 ca falsify: B (chặn ngữ cảnh) · C/J (luật chữ số, 2 pass) · D (dòng-dưới của `Số` trần) ·
+I/K (luật cả-dòng, 2 biến thể) · E (trần inflate) · F/G/H (ngày).
+
+**1 case bị GỠ, không phải quên**: "đưa `so` trần trở lại nhãn CỤ THỂ" chạy **GREEN** ⇒
+harness báo PROBLEM (đúng): luật chữ số đã chặn sẵn mọi giá trị nhánh đó bắt được
+(`"Mã số thuế"` → `"thue"`). Giữ một case xanh "cho chắc" = để harness nói dối ⇒ gỡ + ghi
+chú trong file harness. Guard chịu tải là C/J và I/K.
+
+## 6. CÒN LẠI (KHÔNG tự làm)
+
+- ~~**L1**~~ ✅ **ĐÃ SỬA**: cap dòng chạy trong `flush()` khi DỰNG, mã riêng `EINVOICE_PDF_TOO_MANY_LINES` (413), trần `max_lines × 100` = 20.000 dòng chữ. Test dựng **20.100 dòng** (file qua mọi trần khác) + control 1 dòng.
+- ~~**L3**~~ ✅ **ĐÃ SỬA**: guard sync/pure nay áp cho **MỌI** module `src/einvoice`, không gọi tên riêng `einvoice-xml.mjs`. Falsify ca **M** chứng minh: thêm `async` vào `extractPdfText` ⇒ test tĩnh ĐỎ.
+- **ObjStm** chưa giải nén (đang từ chối theo tên) · chưa có PDF THẬT của NCC (fixture tự dựng).
+- **⏳ CHƯA COMMIT** — vùng định danh + trần an toàn ⇒ chờ user duyệt.
+
+## 7. TÀI LIỆU
+
+`.plan/next4/A3-result.md` **§9.6** (bản sửa + số đo + lý do gỡ 1 case) · §10 đã sửa câu
+"nút chọn PDF chưa làm" (thực tế đã xong ở `8a692f1`) · `checklist.md` · `next.md` · `working.md`.
+
+## 8. BỔ SUNG (cùng phiên, user yêu cầu "sửa nốt L1 và L3")
+
+**L1** — `max_lines` bắn muộn. Cap chuyển vào `flush()` (chạy KHI DỰNG): `EINVOICE_PDF_TOO_MANY_LINES` + HTTP **413**, trần `maxTextLines = max_lines × 100` (200 → **20.000** dòng chữ; suy ra từ policy, không thêm knob mới). Là TỪ CHỐI, không cắt ngắn. Test mới: file **20.100 dòng** mà **qua** trần file/trần phình/đọc-được-chữ ⇒ chỉ cap dòng chặn được; cộng control 1 dòng vẫn đọc.
+
+**L3** — guard tĩnh chỉ canh 1 file. `a1-einvoice-parser.test.mjs` nay áp `await|async` cho **MỌI** `.mjs` trong `src/einvoice` (trước: gọi tên `einvoice-xml.mjs`, nên `einvoice-pdf.mjs` không được canh dù hôm nay nó sync).
+
+**Số đo sau L1+L3**: `a3` **29/29** (+1) · `a1`+`a2`+`a3` **54/54** · Node full **807/805/2** (2 fail dsh-env từ B0) · falsify `a3-einvoice-pdf.mjs` **12/12 RED** (+2 ca: **L** cho L1, **M** cho L3).
+
+**VẪN CHƯA COMMIT** (vùng định danh + trần tài nguyên).

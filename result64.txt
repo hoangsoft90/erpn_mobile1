@@ -1,0 +1,85 @@
+# result64.txt — next3/M1 customer.create (backend) + đếm lại suite thật + đợt docs
+
+**Phạm vi phiên:** `.plan/next3/M1-customer-create-button.md` (policy default §5 — user chưa chốt khác)
++ review đối chiếu spec + cập nhật docs. **KHÔNG commit** — vùng master data + tiền.
+
+---
+
+## 1. Trạng thái M1 đo được (không tin lời "đã xong")
+
+Đo bằng grep/ls/pytest-style thật trên cây code 2026-09-23 ~17:00:
+
+| Thành phần | Bằng chứng | Trạng thái |
+|---|---|---|
+| Contract `customer.create` | `capabilities.json:450-556` — WRITE, HIGH, `requires_confirmation:true`, `entities.required:[customer_name]`, `field_policy.business_key=[customer_name,mobile_no,tax_id]`, `duplicate:"refuse_return_existing"`, `execution.write_doctype:"Customer"`, `correlation_field:"custom_ai_action_id"`, `allow_submit:false`, 18 mã lỗi `CC_*` | ✅ |
+| Route group `customer_create_write` | `capabilities.json:178-191` — đứng **trước** nhóm `customer` READ (keyword SUBSTRING "khách"); startsWith + comment giải thích vì sao | ✅ |
+| Skill `src/skills/customer-create.mjs` | 391 dòng: `duplicateStance()`/`createdAs()` fail-closed đọc contract; pre-check `findCustomerCollision` (exact name / mobile / tax / fuzzy ⊂ từng loại một code); builder 0-write; executor re-read danh mục trước ghi + `verifyWrittenCustomer` đọc lại sau ghi; reconcile theo correlation field | ✅ |
+| Wire copilot-server | nhánh sớm `route.group === "customer_create_write"` (dòng ~642) trả `offer_create_customer` + card; NO_MATCH đường WRITE party customer (dòng ~1167 `isCustomerWriteNoMatch`) gắn offer; helper `customerCreateNameFrom` (dòng 475) | ✅ |
+| Safety gateway | `WRITE_EXECUTORS["customer.create"]` (intent key = tên chuẩn hoá|SĐT|MST, `unverifiedCodes:[CC_WRITE_UNVERIFIED]`, resultFromReconcile); `SKILL_REFUSAL_STATUSES` 5 mã CC_* → 409 | ✅ |
+| Mock `createCustomer` | `mock-server.mjs:962` — **KHÔNG dedupe** (luật ERPNext thật; comment ghi rõ vì sao), `customerCorrelationAvailable()` có knob riêng `MOCK_ERP_CC_NO_CORRELATION_FIELD`, state persist | ✅ |
+| **Flutter** (form Tên*/SĐT/MST, nút [Tạo khách mới], parse `offer_create_customer`) | `grep -ri "create_customer\|createCustomer\|offer_create" apps/mobile/lib apps/mobile/test` = **0 hit**; `_confirmableActions` **không có** `create_customer` | ❌ CHƯA LÀM |
+| **Test suite riêng** `test/m1-customer-create.test.mjs` | không tồn tại; `grep -rln buildCustomerCreateProposal test/ scripts/` = rỗng | ❌ CHƯA LÀM |
+| **Falsify** `scripts/falsify/m1-customer-create.mjs` | không tồn tại | ❌ CHƯA LÀM |
+| **`.plan/next3/M1-result.md`** | không tồn tại (chỉ có checklist máy thật tay `M1-real-device-checklist.md` — viết trước nhưng app chưa có phần Flutter nên chưa chạy được) | ❌ CHƯA LÀM |
+
+Tripwire tĩnh M1 ĐÃ cập nhật và xanh (chạy thật 2026-09-23): capability-contract + correlation-migration
+(Customer vào danh sách WRITE thứ 10) + safety-gateway (skill file + executor table) + router —
+**38/38 pass**; customer-resolve/entity-name-collision/copilot-dup-resolve **22/22 pass**.
+
+## 2. Full suite ĐẾM LẠI THẬT (lần đầu trong phiên này, không chép số cũ)
+
+`COPILOT_MOCK_OK=1 node --test` (mcp-erpnext): **691 test · 682 pass · 9 fail**.
+
+- **2 fail dsh-env có từ trước** (`dshGatewayHealth`, `verifyDshRuntime` — timeout 30s môi trường, từ B0).
+- **7 fail = REGRESSION THẬT do M1 thêm Customer chưa trọn vẹn** (không phải dsh):
+  1. `b2-sales-order.test.mjs:650` — test cũ khẳng định **"Customer must never become creatable from chat"**;
+     nay `writeDoctypes()` derive từ contract nên Customer ĐÃ creatable ⇒ call `callWriteTool(Customer)` không còn `WRITE_REFUSED` mà rơi xuống mock báo `customer_name is mandatory`.
+     → Đây là **xung đột chủ đích cần user quyết**: M1 cho phép tạo Customer **qua nút + skill**; test B2 ghim nguyên tắc cũ "Customer KHÔNG BAO GIỜ". Phải cập nhật test theo ngữ nghĩa mới (Customer creatable NHƯNG chỉ qua capability `customer.create` qua gateway — vẫn không thể ghi Customer bằng callWriteTool thô ngoài gateway? CẦN KIỂM: hiện `callWriteTool` allow-list theo doctype là **đủ để bypass skill** — lỗ hổng thật cần vá ở `client.mjs` hoặc chặn ở gateway)
+  2. `b2-sales-order.test.mjs:718` — tripwire Dart↔server: Dart set thiếu `create_customer` (đúng, vì Flutter chưa làm) ⇒ deepEqual đỏ — sẽ xanh khi Flutter thêm nút.
+  3. `b3-quotation.test.mjs:578` — "client refuses a doctype the contract does not declare": Customer giờ ĐÃ declared ⇒ "Missing expected rejection" (cùng gốc với #1).
+  4. `b3-quotation.test.mjs:606` — tripwire `executableWriteActions()` cần thêm `create_customer`.
+  5. `b4-purchase-order.test.mjs:544` — cùng nhóm tripwire set.
+  6. `p9-delivery.test.mjs:368` — cùng nhóm tripwire Dart set.
+  7. `p9-f-sales-return.test.mjs:950` — cùng nhóm tripwire Dart set.
+- **Kết luận phân loại chốt (đếm từ log):** 691 = 682 pass + **2 dsh-env** + **7 regression M1**.
+  Không còn fail chưa phân loại.
+
+**Kết luận trung thực:** backend M1 *chưa* "xong" theo chuẩn của repo (mọi WRITE trước đây
+đều kèm suite riêng + falsify + Flutter card + tripwire khớp). Đúng mô tả là
+**"backend code xong, chưa qua vòng test/regress"**.
+
+## 3. Lỗ hổng thiết kế tìm thấy khi đếm suite (quan trọng nhất của phiên)
+
+`client.mjs:callWriteTool` allow-list theo **doctype** derive từ contract ⇒ một khi Customer
+vào `writeDoctypes()`, **BẤT KỲ** module nào giữ client đều tạo được Customer, không cần qua
+gateway/skill (mọi WRITE khác cũng có bề mặt này nhưng đều có executor duy nhất + tripwire
+"executor may be called from the gateway only" che; Customer là WRITE đầu tiên mà test cũ
+chủ đích ghim "must never become creatable"). Việc cập nhật 6 tripwire phải đi kèm câu trả
+lời cho câu hỏi này, không phải chỉ thêm tên vào danh sách cho test xanh.
+
+### 3.1 QUYẾT ĐỊNH USER (2026-09-23, phiên này)
+
+Trình bày 2 phương án (a) chấp nhận Customer creatable / (b) siết callWriteTool chặn theo
+capability — **user chọn (a)**. Hệ quả được duyệt: sửa 7 test theo ngữ nghĩa mới như đã làm
+cho DN/PR/SI/SR trước đây; bề mặt `callWriteTool` theo doctype giữ nguyên, ghi rationale:
+*ghi Customer chỉ reachable qua skill qua gateway trong luồng thật (executor registry + tripwire
+"executor may be called from the gateway only" + authz P8); callWriteTool thô là bề mặt nội bộ*
+*giữa các module server, không exposed qua HTTP — bề mặt HTTP duy nhất cho write là `/execute`.*
+
+## 4. Bài học lỗi phiên này (đã ghi `LESSONS_LEARNED.md` + skill `erpn-verify-first`)
+
+1. **"App vừa code xong M1" ≠ đo được** — phiên trước bị đứt kết nối liên tục; dấu vết để lại
+   là backend chưa trọn (0 Flutter, 0 test riêng, 0 falsify, 0 result). Bài học: khi phiên đứt,
+   lần sau KHÔNG tiếp tục code theo nhớ — **đo lại dấu vết trên cây** rồi quyết định.
+2. **Nhóm WRITE mới làm `writeDoctypes()` rộng thêm ⇒ test cũ "doctype này cấm" phải được
+   xử lý có chủ đích** (đổi ngữ nghĩa hoặc vá bề mặt bypass), không phải chỉ sửa danh sách.
+
+## 5. Việc còn lại của M1 (checklist chi tiết ở `checklist.md` + `next.md`)
+
+1. ~~Quyết user về bề mặt ghi~~ **ĐÃ CHỐT: (a) chấp nhận Customer creatable** (§3.1) → cập nhật 7 tripwire đúng ngữ nghĩa.
+2. Flutter: parse `offer_create_customer` + form Tên*/SĐT/MST + nút [Tạo khách mới] + `_confirmableActions` + card test.
+3. `test/m1-customer-create.test.mjs` (builder refusal từng code, E2E /ask → card, /execute 1 Customer, chaos retry không clone, false-write, regress payment/SO).
+4. Falsify + full suite xanh + `.plan/next3/M1-result.md`.
+5. Chỉ sau đó: checklist máy thật (28 case) chạy được.
+
+**Chưa đụng:** purchase return, Supplier/Item create, XML/OCR auto-create — đúng lệnh cấm.

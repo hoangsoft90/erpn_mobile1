@@ -1,0 +1,110 @@
+# result-p4-2 — Route `GET|POST /read/daily-summary` (Trụ P4, bước 2)
+
+**Spec:** `.plan/plan4_final.md` §4.2 (cách gọi) · §4.3 (response) · §5 (bảo mật) · §7 (acceptance) · §8 (P4-2)
+**Depends:** P4-1 (skill + contract xanh) — đã xong, đã duyệt
+**Phạm vi:** CHỈ route HTTP + auth + partial + rate-limit + test. **Không** Flutter, **không** WRITE, **không** drill UI, **không** `/execute`, **không** ghi ERPNext.
+**Ngày:** 2026-09-21 · Máy này **KHÔNG có git** ⇒ OCR không chạy được (không có diff) ⇒ review thủ công; chưa commit được.
+
+---
+
+## 0. §0 đo TRƯỚC khi code (read-only, ERPNext THẬT) — quyết định "company lấy từ đâu"
+
+Spec §4.1 nói `scope.company` lấy **từ session ERPNext user**, client KHÔNG được set. Nhưng chưa ai
+đo xem **đọc được bằng đường nào**. Đo trên site thật (`erpnext_doc_get`/`erpnext_doc_list`, 2026-09-21):
+
+| # | Đo được | Hệ quả thiết kế |
+|---|---------|-----------------|
+| 1 | `erpnext_doc_list` trên `Global Defaults` → **HTTP 500 ProgrammingError** (`Global Defaults` là **Single**) | **Không** dùng list; phải `doc_get` |
+| 2 | `erpnext_doc_get` `{doctype: "Global Defaults", name: "Global Defaults"}` → OK, `default_company = "Minh Phát Cám & VLXD"` | Đây **chính là** "company của session" đọc được server-side |
+| 3 | `erpnext_doc_list` `User` field `default_company` → **HTTP 417** (`Trường không được phép trong truy vấn`) | Không đọc được default **theo user** qua API này ⇒ dùng default **của site**; deployment muốn company khác thì **pin `COPILOT_COMPANY`** |
+| 4 | `erpnext_doc_list` `Company` → **3 rows** (Minh Phát · DEMO POC CO · SANLOAN) | Site **đa company** ⇒ khi không có default thì **phải TỪ CHỐI**, không được "lấy row đầu tiên" (đó là sổ của người khác) |
+
+**Bằng chứng lệnh:** `node /tmp/p42-company-probe.mjs` → in đúng 3 dòng trên (chỉ đọc).
+
+## 1. Đã làm
+
+| Hạng mục | Chi tiết |
+|---|---|
+| Route | `GET|POST /read/daily-summary` trong `src/http-ask.mjs` — **không** qua NLP/classifier, capability id **được cho sẵn** |
+| Input | `date` optional **ở cả body và query** (body thắng khi POST có cả hai); `YYYY-MM-DD`; rỗng/thiếu = **hôm nay tại tiệm** (`Asia/Ho_Chi_Minh`) |
+| Company | **server-side tuyệt đối**: pin config (`COPILOT_COMPANY`/`COPILOT_USERS`) → nếu không thì `Global Defaults.default_company`; không có ⇒ **503 `COMPANY_UNRESOLVED`** nói rõ phải cấu hình gì. **Client gửi `company` mà khác ⇒ 403 `COMPANY_SCOPE_MISMATCH`** (không lặng lẽ trả sổ của company khác) |
+| Auth | Cùng cổng `/ask`: policy basic-auth toàn cục khi non-loopback (401) + `authorize("ops.daily_summary")` **TRƯỚC mọi lần đọc ERP** (403) |
+| Rate limit | Bucket **READ** (`chargeUser("read")`), charge **sau parse, trước authz** ⇒ request sai kiểu không đốt token, request bị chặn không đọc ERP |
+| Partial | Object §4.3 trả về **nguyên vẹn** (HTTP 200 kể cả `meta.partial=true`, block lỗi = `null` + `errors`) — không viết lại, không gộp thành 5xx |
+| 503 | (a) không xác định được company; (b) đọc session company lỗi; (c) **ERP chưa cấu hình/spawn lỗi** — `pickServerScript()` + `createMcpClient` đặt **TRONG `try`** (throw ở đây mà ngoài try ⇒ async listener reject ⇒ **unhandled rejection ⇒ process chết**, kéo cả `/ask` theo) |
+| Mã lỗi trả client | `SUMMARY_CLIENT_CODES` (spec vocabulary) — mã khác (vd `TOOL_ERROR` của tầng MCP) rút về `ERP_UNAVAILABLE`; **chi tiết thật vẫn ghi log** (`detail`) |
+| Mock | `erpnext_doc_get` nhánh `Global Defaults` (shape y như thật) + 2 knob test: `MOCK_ERP_DEFAULT_COMPANY` (`=""` = site **không** có default) và `MOCK_ERP_FAIL_GLOBAL_DEFAULTS` |
+| Test | `test/p42-read-daily-summary.test.mjs` **18** + `test/p42-read-daily-summary-authz.test.mjs` **1** (contract tạm đòi quyền ⇒ chứng minh được 403) |
+| Falsify | `scripts/falsify/p42-read-daily-summary.mjs` **14 ca** — mỗi ca: **test đúng tên đó phải XANH trước khi mutate**, đỏ sau khi mutate (và đỏ **đúng tên test**), restore **byte-identical** |
+| Fix dùng chung | `src/client.mjs#close()` idempotent (phát hiện #3) — ảnh hưởng MỌI route mở client (`/read/list`, `/ocr/slots`) ⇒ đã chạy lại toàn bộ suite + vòng lặp thật |
+
+## 2. Vòng review tự bắt (trước khi commit) — **3 lỗi THẬT**
+
+| # | Lỗi | Bằng chứng | Sửa |
+|---|-----|-----------|-----|
+| 1 | `pickServerScript()` + `createMcpClient()` nằm **ngoài** `try` ⇒ khi ERP chưa cấu hình, throw làm **async listener reject ⇒ process chết** (một request drawer giết `/ask`) | mutate tay: bỏ guard ⇒ test **không có summary**, process thoát | đưa vào trong `try`, `dayMcp?.close?.().catch(()=>{})` ở `finally` + **test** "unconfigured ERP target … can never take the service down" (503 rồi `/health` vẫn 200) |
+| 2 | Mã lỗi tầng MCP (`TOOL_ERROR`) đi thẳng ra client = rò từ vựng nội bộ, không giúp client quyết định | test authz kỳ vọng `ERP_UNAVAILABLE` mà nhận `TOOL_ERROR` | whitelist mã theo spec §4.3; **log giữ nguyên mã thật** |
+| 3 | `client.close()` **treo VĨNH VIỄN** khi child đã chết trước đó (`once("exit")` không bao giờ bắn lại) ⇒ route gọi `close()` trong `finally` **không bao giờ return** ⇒ rò 1 socket + 1 child cho MỖI request lỗi (mọi route READ đều dính: `/read/list`, `/ocr/slots`) | đo trực tiếp (`/tmp/review-probe.mjs`): child chết lúc khởi động ⇒ `initialize()` reject sạch sau **77ms** nhưng `close()` → **`TIMEOUT` sau 3000ms** (không bao giờ settle) | `client.mjs#close()` **idempotent**: `if (child.exitCode !== null \|\| child.signalCode !== null) return;` (child còn sống thì hành vi y nguyên) + test `close() is IDEMPOTENT` |
+
+Ba phát hiện này khiến **từ 12 → 14 ca falsify** (thêm **M** = ca 1, **N** = ca 3).
+
+**Đã kiểm và KHÔNG phải lỗ húng** (ghi lại để người sau khỏi đi lại): `new URL(req.url, "http://localhost")` **có** throw với vài request-target tuyệt đối (`http://[`, `http://x:99999999/`) — nhưng dòng đó nằm **sau** phép so khớp `path === "/read/daily-summary"`, mà request-target tuyệt đối cho `path` khác hẳn ⇒ **không tới được**; mọi dạng **tương đối** (percent-encoding hỏng, control char, chuỗi 200k ký tự, `//evil.com`) đều parse OK (đo 12 dạng, xem probe trên).
+
+## 3. Bằng chứng (số thật, đo sau mọi thay đổi)
+
+| | |
+|---|---|
+| Node full suite | **505 (503 pass, 2 fail = `dsh-gateway`, có từ B0)** — trước P4-2 là 485 ⇒ **+20** đúng bằng test mới |
+| P4-2 | **19/19** (18 route + 1 authz) · `client.test.mjs` **9/9** (thêm test idempotent `close()`) |
+| Falsify P4-2 | **14/14 RED** (đủ 3 điều kiện: xanh-trước / đỏ-**đúng tên test** / restore byte-identical) |
+| Python | **62 OK** (không đụng) |
+| Flutter | không đụng |
+| Mutation sót trên đĩa | `grep -c "if (false)"` = **0**; không `.bak` |
+
+**Vòng lặp THẬT (read-only, `node /tmp/p42-real-loop.mjs` — service thật + ERPNext thật):**
+
+```
+GET  (không date)      : 200 date=2026-09-21 company=Minh Phát Cám & VLXD partial=true  (today VN khớp)
+   SO sub=0/0 invoices=1/575000 receipts=6030000 out=0 receivable=493440625
+   errors=[{block:"app_drafts", code:"ERP_UNAVAILABLE", detail:"...custom_ai_action_id..."}]
+GET  ?date=2026-09-21  : 200  (giống hệt POST)
+POST {date:2026-09-21} : 200  ⇒ GET==POST true
+GET  ?date=2026-02-30  : 400 INVALID_DATE ("không tồn tại trên lịch")   ← regex không đủ
+POST company "SANLOAN" : 403 COMPANY_SCOPE_MISMATCH (server chỉ đọc "Minh Phát Cám & VLXD")
+```
+
+**Đối chiếu chéo bằng REST độc lập** (`node /tmp/p42-crosscheck.mjs`) — không tự tin số của mình:
+
+| | Route | REST độc lập | Khớp |
+|---|---|---|---|
+| `receivables.outstanding_total` | 493.440.625 | 493.440.625 (286 HĐ) | ✅ |
+| Ngày 2026-09-21: SI `amount`/`count` | 575.000 / 1 | 575.000 / 1 | ✅ |
+| Ngày mặc định | 2026-09-21 | `vnToday()` = 2026-09-21 | ✅ |
+
+> Ghi trung thực: P4-1 (cùng ngày) đo `receivables = 551.910.625`. Con số hiện tại là **493.440.625** — site **đang sống**, dữ liệu đổi giữa 2 phiên. Đây đúng là lý do phép đối chiếu được chạy **cùng thời điểm** với phép đo của route, chứ không so với con số nhớ từ tài liệu.
+>
+> `partial=true` **không phải lỗi của route**: `app_drafts` lành trên site này vì `custom_ai_action_id` **chưa tồn tại** trên SO/QT/PO (đo ở P4-1) — route trả đúng `null` + lỗi Frappe, đúng §4.3. Tạo Custom Field là việc **chờ user duyệt** (ghi vào ERPNext).
+
+## 4. Code Review (bước bắt buộc cho task lớn)
+
+1. **OCR**: **không khả dụng** — checkout **không có git** ⇒ không có diff để review. Fallback = review mặc định (đọc code vừa viết + **đo** các nghi vấn bằng probe, không suy đoán) ⇒ **bắt được 3 lỗi ở §2**, đã sửa + có test + falsify.
+2. **Ponytail**: không thêm dependency/file mới ở `src/` (`vnToday` dùng `Intl`); helper `readSessionCompany` + 2 hàm nhỏ trong `http-ask.mjs`; **tái dùng** `authorize`/`resolveCompanyScope`/`assertReadOnly`/`rateLimiter`/`sendRateLimited` — **không** viết lại luật quyền hay luật bucket. Không có abstraction mới.
+3. **Impact review**: `grep` (thay `detect_changes` vì codebase-memory-mcp không khả dụng ở phiên này) → `Global Defaults` **chỉ** xuất hiện ở route mới + mock + test mới; `/read/daily-summary` chỉ ở `src/http-ask.mjs` + test + harness ⇒ **không có caller nào khác phải sửa**. Full suite xanh (trừ 2 fail dsh cũ) xác nhận.
+4. **Dead code**: không có (`companySource` vào log; `vnToday` export để test biên §7.7 — đây là seam test có chủ đích, ghi rõ trong comment).
+5. **Pattern consistency**: theo đúng khuôn `/read/list` (throttle → authz → tạo client → `finally` đóng) và khuôn refusal của repo (`{ok:false, code, error}` + `logEvent` mỗi lần từ chối).
+6. **Scope compliance**: đúng phạm vi P4-2 (route + auth + partial + rate limit + test + result). Không Flutter, không WRITE, không drill, không `/execute`.
+7. **Lessons check**: AgentMemory **đang DOWN** (`curl http://localhost:3111/agentmemory/health` → `http=000`), MCP Simplenote **không có trong tool list phiên này** ⇒ **không tra/lưu được**; 3 bài học mới ghi vào `LESSONS_LEARNED.md` nhóm 21 + skill `erpn-verify-first` (nêu ở §5).
+
+## 5. Bài học rút ra (đã ghi `LESSONS_LEARNED.md` nhóm 21 + skill `erpn-verify-first`)
+
+1. **Env rò giữa các test làm test sau "xanh vì lý do khác"**: helper test của tôi khôi phục **danh sách cứng** key ⇒ `COPILOT_COMPANY` do test trước set **sót lại**, và test "không có company ⇒ 503" trả **200** (pin từ env rò). ⇒ luôn **snapshot đúng những key mình chạm** rồi khôi phục (đo được: 2 test 503 đỏ → sửa harness → xanh).
+2. **`node --test --test-name-pattern` khớp 0 test ⇒ exit 0 ("xanh")**: ca falsify D báo `PROBLEM  NOT RED` vì `?` trong pattern (regex!) làm pattern khớp **rỗng**. ⇒ harness phải (a) **escape** pattern, (b) **đếm test thật sự chạy** (`# tests N` ≥ 1), (c) chạy **xanh trước khi mutate** để chắc test không hỏng sẵn.
+3. **Client/spawn đặt ngoài `try` trong async handler = có thể giết cả service**: throw ở đó thành **unhandled rejection** ⇒ Node thoát ⇒ một route mới giết luôn `/ask`. Test cho lớp này có **hình dạng thất bại = process chết** (không phải assertion) ⇒ falsify phải chấp nhận/ghi nhận kiểu đỏ đó (ca **M**).
+4. **"Company của session" phải ĐO đường đọc, không suy từ ERPNext docs**: `Global Defaults` là **Single** (list 500, get OK); `User.default_company` **417**. Nếu suy đoán, route đã viết sai đường đọc và chỉ vỡ khi chạy thật.
+
+## 6. Còn lại / chờ user
+
+- **Chưa commit** (máy không có git) — giống B1→C2/P4-1. Vùng này đọc **số tiền** của cả công ty ⇒ theo luật repo, AI **không tự commit** khi chưa có xác nhận.
+- ❓ **Chờ user quyết**: tạo `custom_ai_action_id` trên **SO/QT/PO** thật (hiện `app_drafts` buộc phải `null` + partial trên site này).
+- **P4-3** (Flutter drawer + màn tóm tắt + stamp + pull-to-refresh) là bước tiếp theo — **chưa** bắt đầu (ngoài phạm vi phiên này).
+- **AgentMemory down** + **Simplenote MCP chưa kết nối** ⇒ phiên này không lưu memory/lesson ra ngoài repo được; nếu cần, khởi động lại AgentMemory (`npx @agentmemory/agentmemory`) rồi chạy lại phần lưu.

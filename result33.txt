@@ -1,0 +1,178 @@
+========================================================================
+RESULT 33 — PHIÊN UI STALE: REPORT COMMIT + REVIEW TÌM 1 BUG THẬT (409
+THROW QUA DIO) + VÁ + TEST WIRE + FALSIFY
+Timestamp: 2026-09-16 (giờ shell)
+Chỉ đạo user: (1) commit UI STALE chỉ khi đã duyệt trong chat — CHƯA duyệt
+⇒ chỉ report; (2) dọn docs; (3) nếu còn thời gian: review UI STALE.
+KHÔNG: submit/cancel/delete ERPNext thật · Phase 4/8/11 · saga code (chờ
+duyệt §7) · tự thiết kế production.
+========================================================================
+
+== 1. TRẠNG THÁI ĐẦU PHIÊN (lệnh + output thật) ==
+  git status --short:
+    M apps/mobile/.../chat_controller.dart · chat_models.dart ·
+      proposal_card.dart · proposal_card_test.dart
+    M checklist.md · features.md · next.md · working.md
+    ?? .gemini/ .opencode/ initp (rác — KHÔNG stage) ·
+    ?? handoff_20260916-1105.md · result32.txt
+  HEAD = bda54cf (branch change/flutter-chat-mvp)
+  Suite đầu phiên: Python OK (60) · Node 119/119 · Flutter +32 All tests
+  passed · analyze No issues found!
+
+== 2. QUYẾT ĐỊNH COMMIT: KHÔNG COMMIT (đúng luật) ==
+Prompt phiên này: "không tự commit nếu user chưa duyệt". Rà lại toàn bộ
+chat: lần duyệt tường minh gần nhất là đợt result31 (→ bda54cf, đã push).
+Đợt UI STALE (result32) CHƯA có câu duyệt nào ⇒ CHỈ báo cáo:
+  - 10 file chờ: 4 Dart (UI STALE + fix mới ở §4) + 4 docs + result32.txt
+    + handoff_20260916-1105.md
+  - Message đề xuất (giữ nguyên từ result32 §7):
+      feat: phase 9 UI — stale/expired cards show the refusal banner (code +
+      problems[] persist through history restore); saga plan §7
+  - Secret scan staged diff: CLEAN (exit grep 1 = 0 hit).
+  - Không stage: .env · idempotency-store · .gemini/ · .opencode/ · initp ·
+    .plan/ (git-ignored — saga plan chỉ ở local).
+
+== 3. MỤC 2 — DỌN DẸP DOCS ==
+- checklist.md: khối "Chờ user duyệt (vùng tiền)" → đánh dấu rõ 10 file UI
+  STALE chờ duyệt + thêm câu hỏi duyệt saga §7.
+- next.md: trạng thái UI STALE = "XONG kỹ thuật, CHỜ DUYỆT COMMIT"; khẳng
+  định luật: KHÔNG nhảy Phase 4/8/11; bước tiếp = submit khi user quyết /
+  saga khi user duyệt / APK+audio = việc người thật.
+- working.md: nhật ký phiên result33.
+- features.md: Phase 9 UI ghi đúng trạng thái chờ duyệt + fix wire §4.
+
+== 4. MỤC 3a — REVIEW UI STALE: TÌM THẤY 1 BUG THẬT, ĐÃ VÁ ==
+
+4.1. PHÁT HIỆN (mechanism-level, probe bằng code đọc + test thật):
+  `_confirm()` trong proposal_card.dart đọc refusal body từ `res.data`:
+      final body = res.data ?? const {};
+      if (body['ok'] == true) { ... } else { ... body['code'] ... }
+  NHƯNG dio mặc định (validateStatus nhận CHỈ 2xx) THROW DioException
+  với MỌI status 4xx/5xx. Server /execute trả 409 PROPOSAL_STALE/EXPIRED
+  (http-ask.mjs:449) ⇒ response luôn rơi vào `catch (e)` generic ⇒
+  attachRejection() KHÔNG BAO GIỜ chạy ⇒ banner Phase 9 vô hình trong
+  production. 3 test banner cũ đều bơm rejection_code THẲNG vào model
+  rồi mới render — không test nào đi qua đường HTTP 409 thật ⇒ suite
+  32/32 xanh NHƯNG bug có thật (đúng mô típ "unit xanh ≠ chạy thật").
+
+4.2. FIX (proposal_card.dart):
+  a) Tách `_handleRefusal(body)` — stamp rejection CỤC BỘ trên card
+     (banner hiện NGAY, cả khi card chưa nằm trong turns của controller)
+     + gọi attachRejection() best-effort để persist qua restart.
+  b) Nhánh mới `on DioException catch (err)`: đọc `err.response?.data`
+     và gọi _handleRefusal nếu là Map — đúng đường 409 thật. Connection
+     drop/timeout (không có response) GIỮ NGUYÊN thông báo mạng cũ
+     ("Không gửi được lệnh xác nhận: ...") — retry vẫn an toàn (cùng
+     command_id, server replay).
+  c) didUpdateWidget: khi proposal instance bị SWAP (history restore /
+     rebuild) và instance mới không mang rejection ⇒ xoá stamp cục bộ —
+     stamp cũ không dính nhầm sang card khác.
+  d) build(): điều kiện banner = `proposal.isRejected || _rejectionCode
+     != null`; code/problems ưu tiên từ model (persisted), fallback cục
+     bộ. Nút [Xác nhận] vẫn BIẾN MẤT trên thẻ bị từ chối (fail-closed).
+
+4.3. TEST WIRE MỚI (proposal_card_test.dart):
+  "Phase 9 wire: /execute answering 409 PROPOSAL_STALE THROUGH dio
+  (throws by default) still attaches the reason banner":
+  - Mock adapter trả `_json({ok:false, code:'PROPOSAL_STALE',
+    problems:['nợ đã đổi từ 2500000 sang 2000000'], ...}, 409)` — status
+    409 THẬT qua adapter (không bơm model).
+  - Assert: banner "đã lệch so với dữ liệu thật" + bullet problem + NÚT
+    [Xác nhận thu tiền] BIẾN MẤT.
+  Kết quả: FAIL trước fix (banner không hiện), PASS sau fix — Flutter
+  32/33 trong lúc vá, sau khi đủ fix: 33/33.
+
+4.4. FALSIFICATION (đúng quy tắc vùng tiền — assert đổi thật trước):
+  Patch tạm: `} on DioException {` (bỏ catch(err)) + `final body =
+  const {}` (nhả 409) → chạy test file:
+      00:02 +17: Phase 9 wire ... — regression for the result33 review finding
+      ══ EXCEPTION CAUGHT: Found 0 widgets with text containing
+      "đã lệch so với dữ liệu thật" ⇒ the banner must render on the REAL
+      409 path too
+  ⇒ FAIL ĐÚNG assertion (banner mất khi gỡ nhánh) ⇒ khôi phục fix:
+  grep marker tạm = 0 hit · analyze 0 · Flutter 33/33.
+  (2 lần falsify đầu hụt do patch tạm compile lỗi — sửa style patch rồi
+  falsify lại; đã khôi phục đủ và verify grep trước khi kết luận.)
+
+4.5. BÀI HỌC MỚI (đã thêm .agents/skills/erpn-verify-first — bảng 76
+  hàng): test bơm state thẳng vào model thì đường wire thật không bao
+  giờ chạy; dio non-2xx mặc định THROW ⇒ handler client cần nhánh
+  `on DioException` đọc err.response?.data; mỗi nhánh xử lý lỗi cần ≥1
+  test QUA wire (status thật qua mock adapter), model-level chỉ để test
+  render.
+
+== 5. SUITE CUỐI PHIÊN (lệnh + output thật) ==
+  PYTHON   PYTHONPATH=src python3 -m unittest discover -s tests → OK (60)
+  NODE     node --test (mcp-erpnext) → ℹ tests 119 · pass 119 · fail 0
+  FLUTTER  flutter test → 00:05 +33: All tests passed! (32 → 33: +1 wire)
+           flutter analyze → No issues found!
+  (So result32: Flutter +1 — chỉ Dart; Node/Python không đổi code server.)
+
+== 6. KHÔNG LÀM (đúng cấm) ==
+0 lệnh ghi ERPNext thật · không code saga (plan §7 chờ duyệt) · không
+Phase 4/8/11 · không tự commit (chờ duyệt) · không stage .env/store/rác.
+
+== 7. REVIEW VÒNG 2 (cùng phiên — tự review theo lệnh user) TÌM THÊM 1 BUG
+   THẬT VÙNG TIỀN (F4), ĐÃ VÁ + FALSIFY ==
+
+7.1. Review scope: git status (8 file) + diff stat + đọc lại toàn bộ
+  proposal_card.dart (323 dòng) / chat_models.dart / chat_controller.dart
+  (attachRejection) / test mới — kèm đối chiếu server (http-ask.mjs,
+  action-proposal.mjs, payment-write.mjs).
+
+7.2. F4 — model Dart THIẾU field `params` ⇒ /execute luôn 400 từ app thật:
+  Bằng chứng probe (chạy thật):
+    - server buildProposal() trả keys gồm `params` (probe Node:
+      "server keys: action,created_at,entity,...,params,...";
+      params = {amount_vnd:500000, invoice:SINV-0001, outstanding_vnd,
+      mode:Tiền mặt})
+    - Dart ActionProposal KHÔNG có field params (grep chat_models.dart
+      'params|amount_vnd' → 0 hit trong class)
+    - http-ask.mjs:309 đọc `proposal.params?.amount_vnd` → thiếu ⇒ 400
+      "params.amount_vnd phải là số VND > 0"; detectDrift đọc
+      params.outstanding_vnd/invoice (proposal-freshness.mjs:105-130)
+    - probe mô phỏng đúng pipeline Dart (toJson → jsonEncode):
+      "dart-like has params: false / fingerprint gate would read
+      amount_vnd = undefined"
+  ⇒ MỌI lần bấm [Xác nhận] từ app thật = 400 tại money-shape gate.
+  Suite không bắt được vì: (a) Node test tự dựng JSON CÓ SẴN params
+  (http-execute.test.mjs PROPOSAL), (b) Dart test chỉ assert RESPONSE,
+  không assert BODY GỬI ĐI.
+  (Probe đầu tiên báo lỗi giả "type 'String' is not a subtype" do mock
+  adapter thiếu header JSON — đã sửa header rồi đọc kết quả thật.)
+
+7.3. FIX (3 file Dart):
+  - chat_models.dart: ActionProposal thêm `params` (Map unmodifiable —
+    số tiền cố định lúc build; sửa tại chỗ sẽ vô hiệu drift check);
+    fromJson parse + toJson GỬI NGƯỢC `if (params != null)`.
+  - chat_controller.dart: attachRejection rebuild mang theo `params: p.params`
+    (đường rebuild không được rơi field).
+  - test: helper `_proposal` thêm params cho create_payment_entry (đúng
+    shape server thật) + test mới "Phase 7b wire: pressing confirm sends
+    params.amount_vnd the server money-shape gate REQUIRES" — assert
+    body GỬI ĐI qua mock adapter (amount_vnd + outstanding_vnd).
+
+7.4. FALSIFY F4: gỡ `'params': params` khỏi toJson (`if (false && ...)`,
+  assert đổi thật) → test FAIL ĐÚNG assertion:
+      Expected: <500000> / Actual: <null>
+      "the server money-shape gate 400s without params.amount_vnd — the
+       round-trip must keep the confirmed amount"
+  → khôi phục → grep marker tạm = 0 (cả 2 file) → analyze 0.
+
+7.5. BÀI HỌC MỚI (skill erpn-verify-first — 77 hàng): model "echo-back"
+  phải round-trip ĐỦ field server gate đọc; cần ≥1 test assert BODY GỬI
+  ĐI qua mock adapter; field số tiền thiếu ⇒ test đỏ (fail-closed);
+  fix phải che cả đường rebuild (attachRejection).
+
+== 8. SUITE SAU F4 (lệnh + output thật) ==
+  FLUTTER  flutter test → 00:05 +34: All tests passed! (33 → 34: +1 F4)
+           flutter analyze → No issues found!
+  NODE     node --test → ℹ tests 119 · pass 119 · fail 0
+  PYTHON   PYTHONPATH=src python3 -m unittest discover -s tests → OK (60)
+
+== 9. CHỜ USER ==
+1. DUYỆT COMMIT 10 file UI STALE (§2) + fix F4 (§7) — message ở §2.
+2. DUYỆT saga plan §7 (phase-09) nếu muốn code REVERSING/REVERSED.
+3. Chỉ user làm được: SUBMIT phiếu thu · dán 3 giá trị GitHub Settings ·
+   test APK thiết bị thật · thu audio 150 câu · rotate key ERPNext ·
+   review .project/ai-rules.md.

@@ -1,0 +1,191 @@
+================================================================================
+result82.txt — next8 / PHASE 1 — TRANSACTION CONTRACT (Business Handoff + Draft)
+Ngày: 2026-09-29 · Người chạy: agent · Trạng thái: XONG, CHỜ OWNER DUYỆT
+Nguyên tắc: minimal change · REAL only · READ-ONLY (0 write ERP · 0 /execute)
+Nguồn: .plan/next8/phases/phase-01-transaction-contract.md (Phase 1, task 5.1–5.5)
+Owner lock §6.1–6.5: sessions/res1.md (chốt 2026-09-29) — KHÔNG tự nới lock nào.
+Báo cáo đầy đủ: .plan/next8/phase1-result.md · OpenSpec: openspec/changes/next8-collect-contract/
+KHÔNG tự commit (chạm đường tiền) — xem §8.
+================================================================================
+
+§0. ĐÃ LÀM / KHÔNG LÀM
+--------------------------------------------------------------------------------
+ĐÃ LÀM (đúng phạm vi Phase 1):
+A. OpenSpec change `next8-collect-contract/` (proposal + spec delta `transaction-contract` +
+   tasks) — tạo như tài liệu hợp đồng cho phần code dưới đây.
+B. `src/business-handoff.mjs` (MỚI) — ticket server sinh, bind principal + conversation,
+   slot states RESOLVED|AMBIGUOUS|MISSING|NO_MATCH, không số tiền nào vào ticket.
+C. `src/transaction-draft.mjs` (MỚI, thuần) — primitive + validator tiền (lock §6.1, §6.3),
+   KHÔNG có helper chọn hoá đơn tự động (có tripwire quét source).
+D. `src/capability-contract.mjs` + `capabilities.json` — alias `payment.collect → payment.create`
+   (lock §6.5), alias KHÔNG bao giờ execute dưới tên riêng.
+E. `src/copilot-server.mjs` — gắn handoff vào 5 điểm của pipeline + `proposeCollectFromHandoff()`.
+F. `src/http-ask.mjs` — route `POST /collect/propose` (đọc + dựng đề xuất, KHÔNG ghi).
+G. Flutter tầng dữ liệu: `collect_models.dart` (MỚI), `chat_models.dart`, `copilot_api_client.dart`.
+H. Test: Node 3 suite mới + 1 suite sửa (39 test) · Flutter 1 file (16 test) · falsify F1–F6.
+
+KHÔNG LÀM (ngoài phạm vi Phase 1 — cố ý):
+- `CollectScreen` / UI thu tiền (Phase 2) · gọi `/execute` từ app.
+- Lock §6.2 (account khớp `account_type` hoặc BLOCK) — thuộc bước confirm; spec delta
+  KHÔNG claim requirement này vì Phase 1 chưa code nó.
+- Split 1 lần thu → N phiếu (backlog của change riêng; lock §6.1 chọn "TM+CK = 2 lần thu").
+- Không sửa `safety-gateway.mjs`, `idempotency.mjs`, executor write hiện có, luật phân bổ
+  của các write đã wire. Không thêm route ghi nào.
+
+§1. 0 WRITE / 0 /execute — TRIPWIRE TĨNH (đo thật)
+--------------------------------------------------------------------------------
+$ grep -nE "callWriteTool|/execute|executeProposal|runExecute" \
+      src/business-handoff.mjs src/transaction-draft.mjs
+src/business-handoff.mjs:34: *    re-reading ERPNext at propose/execute time (plan §5.3), never by this TTL.
+→ 1 hit duy nhất, và nó nằm trong COMMENT (test tripwire strip comment trước khi quét).
+→ 0 tham chiếu write trong CODE.
+
+$ awk '/async function proposeCollectFromHandoff/,/^}/' src/copilot-server.mjs \
+      | grep -nE "callWriteTool|/execute|executeProposal|runExecute" | wc -l
+0
+→ helper propose không chạm write gateway.
+
+Test TRIPWIRE trong `test/next8-collect-draft.test.mjs` ("no invoice auto-pick"), trong
+`test/next8-collect-propose.test.mjs` ("TRIPWIRE: nothing on the collect path can write")
+và test capability-contract đều XANH (§4). F4 (giả lập propose chạm write) làm tripwire ĐỎ.
+
+§2. OWNER LOCK — nơi lock được THI HÀNH (không chỉ ghi chú)
+--------------------------------------------------------------------------------
+§6.1 1 lần thu = 1 phương thức  → `MAX_METHODS_PER_TRANSACTION = 1` +
+      `validatePaymentMethods()`; pipeline trả 422 `PAYMENT_METHOD_COUNT_INVALID` khi >1.
+      (`maxMethods` là tham số ⇒ sales/purchase nâng trần sau này mà không sửa luật collect.)
+§6.2 account đúng loại hoặc BLOCK → Phase 1 KHÔNG code; PE mapping dùng lại từ Phase 0
+      (`paid_from` 1310 · `paid_to` 1110/1210). Ghi ở §7 "chưa làm", spec không claim.
+§6.3 0 hoá đơn mở ⇒ on-account; ≥1 ⇒ bắt buộc phân bổ tường minh → `validateAllocations()`
+      + `collectSlotStates()` (allocations = NO_MATCH khi 0 hoá đơn mở, ngược lại MISSING).
+      KHÔNG FIFO/oldest/first/newest: không helper nào tồn tại, tripwire khẳng định.
+§6.4 đọc mọi open SI theo customer+company → `listUnpaidInvoices` sống, lọc
+      `outstanding_vnd > 0`, đọc lại TẠI BƯỚC PROPOSE (không dùng `references[].outstanding_amount`
+      cũ trong PE). Multi-invoice 1 lần thu ⇒ 422 `COLLECT_MULTI_INVOICE_NOT_READY`.
+§6.5 canonical + alias → `resolveCapabilityId()` trả CÙNG object frozen; router luôn trả
+      `payment.create`; `isForbidden(alias) === true` ⇒ không execute dưới tên alias.
+
+§3. NODE — TEST (chạy thật)
+--------------------------------------------------------------------------------
+$ cd mcp-erpnext && node --test test/next8-collect-handoff.test.mjs \
+      test/next8-collect-draft.test.mjs test/next8-collect-propose.test.mjs \
+      test/capability-contract.test.mjs
+ℹ tests 39
+ℹ pass 39
+ℹ fail 0
+(chi tiết cuối: "✔ F3: a collect question must carry ONLY a stored ticket",
+ "✔ TRIPWIRE: nothing on the collect path can write")
+
+$ cd mcp-erpnext && npm test            # full
+ℹ tests 966
+ℹ pass 964
+ℹ fail 2
+✖ dshGatewayHealth — local mode verifies the patch marker, not just file existence
+✖ verifyDshRuntime — the real runtime proves it runs; a failing command does not
+→ ĐÚNG 2 fail baseline env (máy không có binary `dsh`), không phải regression của Phase 1.
+(Phase-01 §6 ghi baseline 936/934/2; repo đã tăng lên 966/964/2 do các suite next9 —
+ vẫn đúng cặp fail dsh, 0 fail mới.)
+
+§4. FLUTTER — ANALYZE + TEST (chạy thật)
+--------------------------------------------------------------------------------
+$ cd apps/mobile && flutter analyze lib/features/collect/data \
+      lib/features/chat/data test/next8_collect_data_test.dart
+Analyzing 3 items...
+No issues found! (ran in 8.8s)
+
+$ cd apps/mobile && flutter analyze        # toàn app
+1 issue found.
+warning • The value of the field '_onStatus' isn't used. Try removing the field, or using it
+    • test/_probe_b0_voice_autosend.dart:50:25 • unused_field
+→ 0 issue mới do Phase 1. Warning còn lại nằm trong file probe UNTRACKED có từ trước
+  (không thuộc next8) — xem .plan/next8/phase1-result.md §5 lý do không đụng vào.
+
+$ cd apps/mobile && flutter test test/next8_collect_data_test.dart
+00:00 +16: All tests passed!
+
+$ cd apps/mobile && flutter test           # full
+01:32 +404 -3: Some tests failed.
+Failing tests (cả 3 đều trong CÙNG một file probe untracked):
+  test/_probe_review_test.dart: P1  — unmount while /execute is in flight (409 refusal path)
+  test/_probe_review_test.dart: P1b — unmount while /execute is in flight (success path)
+  test/_probe_review_test.dart: P2b — pressing the RETURNED button after recycle: same key?
+→ Đúng baseline đã biết (3 fail thuộc probe untracked, fail RenderFlex-overflow trong chính
+  file probe đó). Tổng hiện tại 407 test = 404 pass + 3 fail; baseline ghi ở phase-01 §6 là
+  394 test (đo trước session này) — 0 fail MỚI, và bộ fail giống hệt bộ fail cũ.
+
+§5. FALSIFY — `scripts/falsify/next8-phase1-handoff.mjs` (chạy thật)
+--------------------------------------------------------------------------------
+$ cd mcp-erpnext && env -u ERPNEXT_BASE_URL -u ERPNEXT_API_KEY -u ERPNEXT_API_SECRET \
+      -u ASK_RATE_LIMIT -u ASK_RATE_WINDOW_MS COPILOT_MOCK_OK=1 \
+      node scripts/falsify/next8-phase1-handoff.mjs
+=== next8 Phase 1 falsification battery ===
+F1 readHandoff drops the ownership check          → RED x3
+    - (b) a fabricated handoff id is refused like an expired one
+    - (c)+(d) ownership is principal AND conversation bound
+    - a fabricated, foreign-principal or foreign-conversation ticket is refused the same way
+F2 the handoff id becomes caller-supplied          → RED x13
+    (mọi suite cùng đỏ — id do client sinh phá cả chuỗi chat → propose)
+F3 a refused store write is ignored               → RED x1
+    - the store reports a refused write instead of throwing
+F4 the propose route reaches the write gateway    → RED x1
+    - TRIPWIRE: nothing on the collect path can write
+F5 alias resolution stops working                 → RED x7
+F6 the validator accepts a self-alias              → RED x7
+
+restore byte-identical: true
+original sha: { handoff: 'e83b2f5ba83c3d71', contract: '389de5b7fa59e869',
+                server: '8226280c46be52a4' }
+current  sha: { handoff: 'e83b2f5ba83c3d71', contract: '389de5b7fa59e869',
+                server: '8226280c46be52a4' }
+→ 6/6 mutation ĐỎ đúng test mục tiêu; không có mutation nào EMPTY;
+  khôi phục byte-identical (sha256 khớp) — không để lại rác đột biến.
+
+§6. FILE THAY ĐỔI (git status --short, phần thuộc Phase 1)
+--------------------------------------------------------------------------------
+ M apps/mobile/lib/features/chat/data/chat_models.dart        (+ BusinessHandoffRef, parse business_handoff)
+ M apps/mobile/lib/features/chat/data/copilot_api_client.dart (+ proposeCollect)
+ M mcp-erpnext/capabilities.json                              (+ block aliases §6.5)
+ M mcp-erpnext/src/capability-contract.mjs                    (+ resolver/validator alias)
+ M mcp-erpnext/src/copilot-server.mjs                         (+ handoff 5 điểm + proposeCollectFromHandoff)
+ M mcp-erpnext/src/http-ask.mjs                               (+ route POST /collect/propose)
+ M mcp-erpnext/test/capability-contract.test.mjs              (+ lock §6.5, 5 case fail-closed)
+?? mcp-erpnext/src/business-handoff.mjs                       (MỚI)
+?? mcp-erpnext/src/transaction-draft.mjs                      (MỚI)
+?? mcp-erpnext/test/next8-collect-handoff.test.mjs             (MỚI, 9 test)
+?? mcp-erpnext/test/next8-collect-draft.test.mjs               (MỚI, 7 test)
+?? mcp-erpnext/test/next8-collect-propose.test.mjs             (MỚI, 7 test)
+?? mcp-erpnext/scripts/falsify/next8-phase1-handoff.mjs        (MỚI, falsify F1–F6)
+?? apps/mobile/lib/features/collect/data/collect_models.dart   (MỚI)
+?? apps/mobile/test/next8_collect_data_test.dart               (MỚI, 16 test)
+?? openspec/changes/next8-collect-contract/{proposal.md,specs/transaction-contract/spec.md,tasks.md}
+
+KHÔNG thuộc Phase 1 (đã bị sửa từ trước session này, chỉ ghi nhận, không claim):
+ M faq1.md · M todo1.md · M working.md (working.md được cập nhật ở §7 dưới đây)
+
+§7. SỔ SÁCH
+--------------------------------------------------------------------------------
+- `working.md`: thêm mục ngày 2026-09-29 cho Phase 1.
+- `.plan/next8/phase1-result.md`: báo cáo đầy đủ §1–§7 + DoD đối chiếu.
+- `openspec/changes/next8-collect-contract/tasks.md`: tick đủ task đã xong.
+
+§8. TRẠNG THÁI & VIỆC TIẾP THEO
+--------------------------------------------------------------------------------
+Phase 1 ĐÓNG theo DoD của phase-01 (test xanh, falsify đỏ đúng, 0 write mới).
+
+OWNER DUYỆT: 2026-09-29 — Phase 1 được commit (vùng tiền, message rõ, KHÔNG force-push).
+
+3 QUYẾT ĐỊNH CỦA OWNER (ghi nhận, KHÔNG hỏi lại):
+(1) OpenSpec tạo sau code: CHẤP NHẬN lần này; từ phase sau tạo openspec TRƯỚC khi code.
+(2) Lock §6.2 (account đúng `account_type` hoặc BLOCK, không fallback chéo): KHÔNG làm ở Phase 2 UI —
+    làm ở PHASE 3 (server validation trước proposal/execute).
+(3) `COLLECT_MULTI_INVOICE_NOT_READY` (422 khi >1 hoá đơn) CHỈ LÀ MVP TẠM của Phase 1.
+    Lock §6.1 = 1 phương thức tiền / 1 PE (TM HOẶC CK) — KHÔNG phải cấm multi-invoice; Phase 0 đã
+    chứng minh 1 PE nhiều `references` có thật. ⇒ PHASE 3/4 sẽ GỠ 422, cho `allocations[]` nhiều dòng
+    trong 1 PE + đúng 1 mode. KHÔNG implement split N PE (TM+CK) — backlog.
+
+Phase 2 = `.plan/next8/phases/phase-02-collect-screen.md` + lock §6.1–6.5 + PE mapping Phase 0:
+CollectScreen (customer · open SI theo customer+company · allocation · 1 method · account · summary ·
+1 nút XÁC NHẬN → `/collect/propose`, CHƯA `/execute`), UI ≤10 HĐ + tìm/trang, total thật,
+không FIFO/oldest/auto-alloc, 0 HĐ ⇒ copy on-account, ≥1 HĐ ⇒ bắt chọn (UI chuẩn bị list nhiều dòng),
+copy "Mỗi lần thu một hình thức thanh toán."
+================================================================================

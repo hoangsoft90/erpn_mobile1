@@ -1,0 +1,123 @@
+========================================================================
+RESULT 53 — F7 ĐÃ GIẢI QUYẾT: POLICY (a) — MAINTENANCE KHÔNG PHẢI MỘT LẦN THỬ
+Timestamp: 2026-09-18 (giờ shell) · Quyết định user: chọn (a) trong result52 §2 / human.md mục 1
+Phạm vi: `mcp-erpnext/src/job-queue.mjs` (phân biệt refusal tạm thời) + test + docs.
+KHÔNG đụng ERPNext thật; KHÔNG đụng safety-gateway/idempotency (hành vi ghi thật không đổi).
+Luật: verification-before-completion — mọi claim kèm lệnh + output thật; vùng tiền KHÔNG tự commit.
+========================================================================
+
+== 1. QUYẾT ĐỊNH ĐƯỢC ÁP DỤNG (nguyên văn chỉ đạo user) ==
+
+"chọn phương án (a) — maintenance/kill-switch KHÔNG được coi là một lần thử. Job gặp
+kill-switch lúc drain phải Ở LẠI hàng chờ (QUEUED/RETRYING), KHÔNG tiêu lượt thử,
+KHÔNG chuyển FAILED. Khi bảo trì tắt, job tự được nhặt lại ở lần drain tiếp theo
+(polling có sẵn), không cần người bấm lại command_id thủ công."
+
+== 2. FIX TRONG `src/job-queue.mjs` ==
+
+- Thêm export `TEMPORARY_REFUSAL_CODES = ["SYSTEM_MAINTENANCE", "CAPABILITY_DISABLED"]`
+  + `isTemporaryRefusal(verdict)` (nhận diện theo `verdict.body.code`).
+- Trong `drain()`: NHÁNH MỚI đặt TRƯỚC logic retry/FAILED cũ —
+    if (isTemporaryRefusal(verdict)) {
+      job.attempts -= 1;                       // refusal TRƯỚC khi thử ⇒ không tính là một lần thử
+      this._transition(job, JOB_STATES.RETRYING);
+      job.last_error = ...; job.next_attempt_at = this.now() + this.config.delayMs;
+      this._persistEvent(job, "TEMPORARY_REFUSAL");
+      outcomes.push({ command_id, state: RETRYING, error, code });
+      continue;
+    }
+- Sự kiện `ATTEMPT` vẫn được ghi vào JSONL trước đó (bằng chứng drain đã nhìn thấy job) nhưng
+  bộ đếm `attempts` quay về giá trị cũ ⇒ budget không hao.
+- Verdict GHI THẬT lỗi (không thuộc 2 mã trên) giữ nguyên hành vi cũ: retryable theo
+  `retry_same_command_id`, không thì FAILED-terminal — KHÔNG đổi.
+
+== 3. NGỮ CẢNH XÁC NHẬN TỪ CODE THẬT (vì sao refusal này là "trước khi thử") ==
+
+- `safety-gateway.mjs` bước 4: kill switch chạy TRƯỚC freshness/idempotency/execute —
+  `refuse(503, { code: kill.code, level, error })` ⇒ chưa chạm bất kỳ đường ghi nào.
+- `kill-switch.mjs`: 2 mã refusal tạm thời là `SYSTEM_MAINTENANCE` (global read-only) và
+  `CAPABILITY_DISABLED` (operator tắt 1 capability) — cả 2 đều "not now", không phải "lỗi ghi".
+- Ghi chú: verdict của gateway KHÔNG mang `retry_same_command_id` cho refusal này (đó chính là
+  nguyên nhân bug cũ) ⇒ phân biệt theo `body.code` là chỗ đúng.
+
+== 4. TEST MỚI (file `test/p7-job-queue.test.mjs`, 16 → 19) ==
+
+$ cd mcp-erpnext && env -u ERPNEXT_URL -u ERPNEXT_API_KEY -u ERPNEXT_API_SECRET \
+    -u ASK_USER -u ASK_PASSWORD node --test test/p7-job-queue.test.mjs | grep -E "✔ F7|ℹ (tests|pass|fail)"
+    ✔ F7 policy (a) — kill-switch refusal does NOT burn the attempt and does NOT go FAILED (1.883809ms)
+    ✔ F7 policy (a) — switch off → the NEXT drain runs it, exactly once, VERIFIED (1.632679ms)
+    ✔ F7 policy (a) — a REAL write failure is still FAILED-terminal (behaviour unchanged) (1.25716ms)
+    ℹ tests 19
+    ℹ pass 19
+    ℹ fail 0
+
+Nội dung 3 test:
+1. Kill-switch refusal: outcome = RETRYING + `code: SYSTEM_MAINTENANCE`; `attempts` vẫn 0;
+   drain trước khi hết backoff KHÔNG gọi gateway; lặp thêm 2 lần bảo trì ⇒ vẫn RETRYING,
+   attempts vẫn 0; `CAPABILITY_DISABLED` cùng lớp refusal ⇒ giống hệt.
+2. Tắt bảo trì: lần drain kế tiếp tự chạy (không bấm lại) ⇒ VERIFIED đúng 1 lần, `attempts = 1`
+   (lần thử THẬT đầu tiên mới được tính), drain sau đó = 0 (terminal).
+3. Lỗi ghi thật (`PROPOSAL_STALE` non-retryable) ⇒ FAILED-terminal + attempts = 1 — hành vi cũ giữ nguyên.
+
+== 5. FALSIFY (bản sao /tmp/falsify-f7, gỡ ĐÚNG nhánh tạm thời) ==
+
+$ python3 - (xoá nhánh `if (isTemporaryRefusal(verdict)) { ... }` khỏi bản sao)
+    falsify patch applied: temporary-refusal branch removed
+$ node --test test/p7-job-queue.test.mjs
+    ✖ F7 policy (a) — kill-switch refusal does NOT burn the attempt and does NOT go FAILED
+    ✖ F7 policy (a) — switch off → the NEXT drain runs it, exactly once, VERIFIED
+    ℹ tests 19 · pass 17 · fail 2
+$ node --test --test-reporter=tap test/p7-job-queue.test.mjs | grep -E "not ok|expected:|actual:"
+    not ok 16 — expected: 'RETRYING' · actual: 'FAILED'
+    not ok 17 — expected: 'RETRYING' · actual: 'FAILED'
+⇒ ĐỎ ĐÚNG CHỖ: gỡ phân biệt tái tạo đúng bug cũ (job thành FAILED). Test 3 (lỗi thật FAILED)
+  vẫn xanh trong cả 2 bản ⇒ nhánh mới không làm lệch hành vi cũ.
+$ diff -r /tmp/falsify-f7/src/job-queue.mjs <repo>/mcp-erpnext/src/job-queue.mjs
+    227a228,242  (chỉ khác đúng khối isTemporaryRefusal đã thêm) ⇒ khôi phục KHÔNG cần —
+    bản gốc chưa từng bị sửa; test chạy lại trên bản gốc: 19/19 (chạy 2 lần, không flake).
+
+== 6. SUITE ĐẦY ĐỦ (không regress) ==
+
+$ PYTHONPATH=src python3 -m unittest discover -s tests | tail -3
+    Ran 60 tests in 0.488s
+    OK
+
+$ cd mcp-erpnext && env -u ERPNEXT_URL ... node --test | tail -8
+    ℹ tests 244
+    ℹ pass 244
+    ℹ fail 0
+
+⇒ Node 241 → 244 (+3 test F7). Flutter không bị đụng (fix nằm ở server queue) — chạy lại để
+  chốt ở mục 8 nếu cần; không đổi file Dart nào trong đợt này.
+
+== 7. DOCS ĐÃ CẬP NHẬT (xoá dấu "chờ user quyết F7") ==
+
+- `docs/kill-switch-runbook.md` §4: đổi thành "✅ ĐÃ GIẢI QUYẾT — policy (a), chủ dự án chọn
+  2026-09-18" + lý do (refusal TRƯỚC khi thử ghi) + danh sách 2 mã + cách vận hành mới
+  (tắt xong không phải làm gì, runner tự chạy lại; chỉ cần kiểm `/jobs`).
+- `faq.md` §6.10: gỡ ô ⚠️ "đang chờ quyết định", thay bằng ✅ giải thích cho người dùng:
+  lệnh trong hàng gặp bảo trì ⇒ ở lại hàng chờ, tắt bảo trì tự chạy lại, không cần bấm lại.
+- `next.md`: dòng review vòng 3 đổi "F7 MỞ" → "F7 → ĐÃ GIẢI QUYẾT"; thêm mục "### F7 — ĐÃ GIẢI
+  QUYẾT (user chọn policy (a), 2026-09-18)" với luật + test + falsify.
+- `human.md` mục 1: F7 tick [x] "ĐÃ QUYẾT — chọn (a)" + ghi rõ đang chờ duyệt commit.
+- `working.md`: thêm entry phiên này.
+
+== 8. STAGED + CHỜ DUYỆT (vùng tiền) ==
+
+$ git add mcp-erpnext/src/job-queue.mjs mcp-erpnext/test/p7-job-queue.test.mjs \
+    docs/kill-switch-runbook.md faq.md next.md human.md working.md result53.txt
+$ git diff --cached --stat          (xem đầu báo cáo chat)
+$ git diff --cached | grep -nE 'ghp_|sk-[A-Za-z0-9]{20}|AIza|[0-9a-f]{32}:[0-9a-f]{32}'
+    (rỗng — không có secret; các biến env chỉ được NHẮC TÊN)
+Message đề xuất:
+    fix(f7): maintenance refusals park the queued job — no attempt burned, auto-retry after the switch lifts
+
+    Policy (a) per user decision 2026-09-18: SYSTEM_MAINTENANCE / CAPABILITY_DISABLED verdicts
+    happen BEFORE the write attempt (kill switch is step 4 of the gateway), so drain() rolls the
+    attempt counter back, keeps the job RETRYING (never FAILED) and re-arms the backoff. Once the
+    switch is lifted the existing runner poll picks the job up and it runs exactly once → VERIFIED;
+    no manual command_id re-tap. Real write failures keep the old FAILED-terminal behaviour.
+
+    Falsified by removing the branch: both new tests fail with expected RETRYING / actual FAILED.
+    Suite: Python 60 · Node 244 (+3) · file P7 19/19 ×2 runs.
+========================================================================

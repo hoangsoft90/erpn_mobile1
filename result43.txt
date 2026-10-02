@@ -1,0 +1,432 @@
+========================================================================
+RESULT 43 — A) XÁC MINH HẠ TẦNG (URL tunnel đổi) · B) GIỚI HẠN LỊCH SỬ CHAT
+             (maxChatItems, KHÔNG cắt proposal đang treo) · C) MÀN HÌNH SETTINGS
+Timestamp: 2026-09-17 (giờ shell)
+Phạm vi: mục A = CHỈ config/verify (không code) · mục B + C = CHỈ Flutter client
+         (KHÔNG đụng Gateway / idempotency / router / ERPNext thật / proposal logic).
+Nguyên tắc: verification-before-completion — mọi claim dưới đây đều có lệnh + output thật.
+========================================================================
+
+== 1. A.1 — ERPNEXT_URL trỏ endpoint mới: VERIFY BẰNG ĐỌC THẬT ==========
+
+`.env` (git-ignored) đã trỏ đúng URL mới — KHÔNG cần sửa:
+  $ grep -n '^ERPNEXT_URL' .env
+  1:ERPNEXT_URL=https://prevail-pantyhose-overvalue.ngrok-free.dev
+
+Verify bằng 1 tool ĐỌC THẬT qua đúng chuỗi thật (pinned @casys/mcp-erpnext 3.0.4
+qua createMcpClient + pickServerScript, env nạp từ .env):
+
+  $ set -a; . ./.env; set +a
+  $ node --input-type=module -e '<createMcpClient + callTool erpnext_customer_list>'
+  server script asset = REAL(3.0.4)
+  tool = erpnext_customer_list | rows = 3
+  [
+   { "name": "P1D-ACCEPT T7", "customer_name": "P1D-ACCEPT T7" },
+   { "name": "P1D-ACCEPT T5", "customer_name": "P1D-ACCEPT T5" },
+   { "name": "P1D-ACCEPT T6", "customer_name": "P1D-ACCEPT T6" }
+  ]
+  (stderr: [mcp-erpnext] Registered 125 tools … stdio mode ready)
+
+⇒ Endpoint mới SỐNG và credential còn hiệu lực (đọc được khách thật).
+
+== 2. A.2 — upstream "mac-custom" còn sống: VERIFY BẰNG CURL =============
+
+URL trong `scripts/llm-router.config.json` KHỚP (không sửa file):
+  baseUrl "https://llm9000.loca.lt/v1" · model "oc/big-pickle" ·
+  apiKeyEnv "MAC_LLM_API_KEY"
+
+  $ curl -s -o /tmp/macllm.out -w "%{http_code}" --max-time 30 \
+      https://llm9000.loca.lt/v1/models \
+      -H "Authorization: Bearer $MAC_LLM_API_KEY" -H "bypass-tunnel-reminder: true"
+  attempt 1 -> http=502
+  attempt 2 -> http=200
+  {"object":"list","data":[{"id":"free3",...},{"id":"gc/gemini-3.1-pro-preview",...}
+
+⇒ Tunnel sống. 502 ở lần đầu là tính flaky ĐÃ ghi trong config `_note`
+  ("Tunnel is flaky (502/408 on first attempts … retrying usually succeeds)") —
+  không phải lỗi mới. Không đổi config.
+
+== 3. A.3 — erpn8788.loca.lt = tunnel của Gateway (http-ask.mjs, cổng 8788) =
+
+Xác nhận bằng CODE (nguồn sự thật), không đoán:
+  $ grep -nE "8788|ASK_PORT" mcp-erpnext/src/http-ask.mjs
+  42:  const args = { port: Number(process.env.ASK_PORT || 8788), host: ... }
+  145: export function createAskServer({ port = 8788, host = "127.0.0.1", ... })
+  517:  server.listen(port, host, resolve);
+  + doc LOCAL-TEST.md / setup-test.md: `lt -s erpn8788 --port 8788`
+
+⚠️ TRẠNG THÁI THẬT LÚC CHẠY (không giấu): tunnel erpn8788 HIỆN ĐANG TẮT —
+  `lt` không chạy trên Mac cho tunnel này:
+  $ curl … https://erpn8788.loca.lt/health
+  attempt 1 -> http=408 · attempt 2 -> http=408 · attempt 3 -> http=502 (Bad Gateway)
+
+  Đây là TÌNH TRẠNG MÔI TRƯỜNG (tunnel phía Mac), KHÔNG phải lỗi code/config.
+  Giá trị `https://erpn8788.loca.lt` vẫn được dùng làm mặc định điền sẵn ở
+  màn Settings (mục C.4) theo đúng yêu cầu — nhưng KHÔNG tự ghi vào storage,
+  nên APK build sẵn vẫn dùng `--dart-define` như cũ cho tới khi user bấm Lưu.
+
+== 4. B — GIỚI HẠN LỊCH SỬ CHAT (maxChatItems = 20, cấu hình được) ====
+
+Code (client-side thuần, KHÔNG đụng Gateway/idempotency/proposal):
+- `apps/mobile/lib/core/settings/app_settings_service.dart` (MỚI) — service
+  SharedPreferences dùng chung, getter ĐỒNG BỘ (đọc lại mỗi lần dùng):
+  `gatewayBaseUrl` ('' nếu chưa lưu ⇒ fallback dart-define) ·
+  `gatewayAuthUser` · `gatewayAuthPassword` · `maxChatItems`
+  (mặc định 20, clamp sàn 5 cả khi ĐỌC lẫn khi GHI — không tin giá trị tay nhập)
+- `app_constants.dart` — key versioned + `defaultMaxChatItems=20` +
+  `minMaxChatItems=5` + `defaultGatewayBaseUrl='https://erpn8788.loca.lt'`
+- `chat_models.dart` — `ChatTurn.hasPendingProposal`:
+  có proposal, CHƯA bị từ chối (`isRejected`), và còn nút xác nhận
+  (`confirmable` = create_payment_entry + HIGH + có entityId)
+- `chat_history_service.dart` — `static trimTurns(turns, maxItems)` (pure) +
+  `save(turns, {maxItems})`. Luật: đi từ MỚI → CŨ, giữ `maxItems` turn mới nhất
+  **CỘNG MỌI turn đang treo proposal** (bất kể cũ tới đâu) → đảo lại giữ đúng
+  thứ tự thời gian.
+- `chat_controller.dart` — `_append` và `attachRejection` áp CÙNG luật
+  `trimTurns` trước khi set state và trước khi `save` ⇒ danh sách TRÊN UI và
+  danh sách ĐÃ LƯU luôn giống nhau (không có chuyện UI còn mà storage mất).
+
+Kiểm chứng bằng test thật (Flutter):
+  $ cd apps/mobile && flutter test test/chat_history_trim_test.dart
+  00:00 +8: All tests passed!
+
+  9 test (sau review F1, xem mục 9) gồm: >cap đọc thường → chỉ 20 mới nhất · proposal PENDING ở turn #1 +
+  25 câu đọc sau → turn #1 VẪN CÒN (21 = 20 + pending) · proposal đã bị từ chối
+  → cắt được · proposal LOW display-only → cắt được · dưới cap → giữ nguyên ·
+  service.save(maxItems) chỉ lưu bản đã cắt · save giữ proposal pending cũ ·
+  controller end-to-end (cap 5 + proposal pending ở #1 → 6 turn, CẢ state LẪN
+  storage).
+
+== 5. FALSIFY luật an toàn "KHÔNG cắt proposal đang treo" (BẮT BUỘC) ====
+
+Gỡ thật đúng nhánh an toàn trong `trimTurns` (đổi điều kiện thành chỉ
+`kept.length < maxItems`), chạy lại:
+
+  $ flutter test test/chat_history_trim_test.dart
+  00:00 +1 -1: … a PENDING proposal at turn #1 survives 25 later reads (safety) [E]
+    Expected: <21>   Actual: <20>
+  00:00 +5 -2: ChatHistoryService.save honours maxItems keeps a pending proposal… [E]
+    Expected: <21>   Actual: <20>
+  00:00 +5 -3: controller applies the cap end-to-end … [E]
+    Expected: <6>    Actual: <5>
+  00:00 +5 -3: Some tests failed.
+
+⇒ Test bắt ĐÚNG lỗi (3 test đỏ, đều ở chỗ luật an toàn bị vô hiệu), không phải
+  "xanh giả". Khôi phục:
+
+  $ grep -rn "FALSIFY-MARKER" lib test || echo "markers=0"
+  markers=0
+  $ flutter test test/chat_history_trim_test.dart
+  00:00 +8: All tests passed!
+
+== 6. C — MÀN HÌNH SETTINGS (đổi URL/auth/cap KHÔNG cần build lại APK) ====
+
+- `apps/mobile/lib/features/settings/presentation/screens/settings_screen.dart`
+  (MỚI): Gateway URL (validate http/https có host) · Auth user · Auth password
+  (obscureText, có nút ẩn/hiện) · Số tin nhắn tối đa (mặc định 20, chặn < 5) ·
+  nút Lưu + SnackBar xác nhận. Lần đầu mở (chưa từng lưu) điền sẵn
+  `https://erpn8788.loca.lt` (C.4).
+- `copilot_api_client.dart`: thêm `settings` + `fallbackBaseUrl`. `ask()` gọi
+  `_applySettings()` MỖI REQUEST (không cache lúc khởi động) ⇒ sửa trong
+  Settings áp dụng NGAY. Thứ tự ưu tiên: settings đã lưu > dart-define > Dio
+  default. Base URL được cắt '/' cuối; auth: settings đủ user+pass thì dùng,
+  không thì quay về header dart-define (hoặc bỏ hẳn nếu không có).
+- `app_router.dart`: route `/settings` (name `settings`).
+- `chat_screen.dart`: icon ⚙️ trên AppBar → `context.push('/settings')`.
+
+Test (thật, trong `apps/mobile/test/settings_test.dart` — 13 test):
+- service: mặc định khi chưa lưu · prefs null vẫn chạy · saveGateway round-trip
+  + TỪ CHỐI URL sai (fail-closed, không ghi) · clamp maxChatItems cả đọc lẫn ghi
+  (`saveMaxChatItems(2)` → 5; giá trị lưu tay 1 đọc ra 5) · isValidGatewayUrl
+- client: URL+auth đã lưu THẮNG fallback và đi tới đúng
+  `https://erpn8788.loca.lt/ask` (adapter bắt được URI thật) · settings rỗng →
+  dùng fallback compile sẵn (APK cũ không đổi hành vi) · **đổi URL giữa 2 lần
+  gọi trên CÙNG client instance → request thứ 2 đi URL mới (áp dụng ngay, không
+  rebuild)** · client không settings (mặc định test cũ) giữ nguyên hành vi
+- màn hình: lần đầu điền sẵn tunnel hiện tại · URL sai chặn Lưu + hiện lỗi và
+  KHÔNG ghi gì · max < 5 chặn Lưu và KHÔNG ghi gì · Lưu hợp lệ ghi đủ
+  URL/user/password/max=30 + SnackBar "Đã lưu".
+
+== 7. SUITE ĐẦY ĐỦ (output thật) =========================================
+
+  Python    $ PYTHONPATH=src python3 -m unittest discover -s tests
+            Ran 60 tests in 0.457s — OK
+  Node      $ cd mcp-erpnext && node --test
+            ℹ tests 120 · pass 120 · fail 0
+  Router    $ cd scripts && node --test
+            ℹ tests 19 · pass 19 · fail 0
+  Flutter   $ cd apps/mobile && flutter test
+            00:09 +62: All tests passed!          (39 → 62, +23 test mới)
+  Analyze   $ flutter analyze
+            No issues found! (ran in 7.1s)
+
+== 8. HẠN CHẾ ĐÃ BIẾT (ghi rõ, không giấu) ==============================
+
+1. `/execute` (nút Xác nhận trong ProposalCard) ĐỌC `dioProvider` trực tiếp,
+   không đi qua CopilotApiClient. Vì cùng một instance Dio, nó SẼ dùng URL mới
+   SAU KHI có ít nhất 1 lần gọi `/ask` (lúc đó `_applySettings` đã chạy). Trường
+   hợp hẹp "mở app → card còn trong history → bấm Xác nhận mà CHƯA hỏi câu nào"
+   sẽ đi URL compile sẵn. An toàn (fail-CLOSED): hoặc lỗi mạng, hoặc server từ
+   chối; và card khôi phục từ history gần như luôn quá TTL 10 phút nên bị 409
+   PROPOSAL_EXPIRED dù đi đúng host. KHÔNG tự sửa trong phiên này (đụng
+   plumbing test của ProposalCard không thuộc phạm vi B/C).
+2. Card ĐÃ GHI thành công: kết quả chỉ nằm trong RAM (option (b) đã chốt ở
+   result42) nên `hasPendingProposal` vẫn true ⇒ card đó không bao giờ bị cắt.
+   Giữ thừa 1 turn là an toàn; cắt nhầm 1 turn đang treo mới là lỗi. Không đổi
+   schema trong phiên này.
+3. `AppSettingsService.clear()` có sẵn nhưng chưa có nút "khôi phục mặc định"
+   trên UI (không nằm trong yêu cầu B/C).
+
+== 9. REVIEW CODE VỪA LÀM (tự tìm lỗi) — 2 LỖI THẬT, ĐÃ SỬA ==========
+
+Đọc lại `git diff` như người review, rồi CHỨNG MINH bằng test trước khi sửa.
+
+🔴 **F1 — luật an toàn "không cắt proposal đang treo" tự vô hiệu NGAY khi card
+   bị từ chối ⇒ banner lý do BIẾN MẤT đúng lúc user cần thấy nhất.**
+   `attachRejection` (đường bấm Xác nhận → 409) gọi CÙNG luật `trimTurns` sau khi
+   đánh dấu card `rejected`. Đánh dấu rejected ⇒ `hasPendingProposal` = false ⇒
+   card thành "đã kết thúc", mà nó thường là CŨ NHẤT ⇒ bị cắt ngay trong chính
+   lần gọi đó.
+   Viết test trước (seed cap 5 + 6 turn, proposal ở #0 → attachRejection):
+     $ flutter test test/chat_history_trim_test.dart
+     attachRejection must not delete the card being refused … [E]
+       Expected: <6>   Actual: <5>
+   ⇒ BUG CHỨNG MINH ĐƯỢC (không phải suy đoán).
+   **Fix**: BỎ hẳn phần trim trong `attachRejection` — B.2 nói cắt "sau mỗi lần
+   thêm turn mới", mà từ chối KHÔNG phải thêm turn. Quay lại
+   `save(turns)` không truyền maxItems (state/storage vẫn khớp nhau).
+   Sau fix: `00:08 +61: All tests passed!`
+
+🟡 **F2 — doc comment bị "dính" sang symbol khác (analyzer không báo).**
+   Khi thêm `appSettingsServiceProvider` vào `providers.dart`, comment mô tả nó
+   nằm LẠC TRÊN `sharedPreferencesProvider`, còn provider mới không có doc.
+   `flutter analyze` = 0 issue (comment hợp lệ cú pháp) ⇒ chỉ đọc diff mới thấy.
+   **Fix**: dán comment về đúng provider.
+
+🟡 **F3 — HỞ TEST ở chính đường nối mình vừa thêm (suite vẫn XANH).**
+   Route `/settings` + icon ⚙️ được thêm, nhưng KHÔNG test nào chạm vào đường nối
+   đó: `chat_controller_test` pump `MaterialApp(home: ChatScreen())` (KHÔNG có
+   GoRouter) và `settings_test` render thẳng `SettingsScreen` ⇒ không test nào
+   bấm ⚙️ qua `appRouter`. Phát hiện khi user hỏi "viết xong đã test chưa?" —
+   **suite xanh KHÔNG chứng minh đường nối đã được chạy**.
+   **Fix**: `apps/mobile/test/settings_navigation_test.dart` (MỚI) — pump
+   `MaterialApp.router(routerConfig: appRouter)` THẬT, tap ⚙️, assert route
+   resolve đúng màn Settings (không phải error screen):
+     $ flutter test test/settings_navigation_test.dart
+     00:02 +1: All tests passed!
+   ⇒ **Flutter 61 → 62**. Bài học vào skill: harness cũ hay ĐI VÒNG qua chính
+   chỗ mình vừa thêm.
+
+Đã kiểm và KHÔNG phải bug:
+- `_applySettings()` mutate `dio.options` dùng chung: idempotent, suy ra từ cùng
+  settings; không có đường ghi sai (xem hạn chế #1 mục 8).
+- `int.parse` trong `_save()` an toàn: cùng `.trim()` với validator +
+  `digitsOnly`.
+- Icon ⚙️ dùng `context.push` — test dùng `MaterialApp(home:)` không có router,
+  nhưng không test nào bấm icon đó; app thật chạy `MaterialApp.router`.
+- `trimTurns` với `maxItems <= 0`: không tới được (service clamp sàn 5).
+- Bộ đếm bảng markdown đầu tiên của tôi báo "82 hàng lỗi" — SAI DO BASH ESCAPING
+  (`\\` trong chuỗi double-quote), đếm lại bằng `l.count('|') - l.count('\\|')`
+  ⇒ **TOTAL malformed rows: 0**, 3 bảng sạch. (Đúng nhóm lỗi "CHÍNH BỘ ĐO"
+  đã có trong skill — không thêm hàng trùng.)
+
+3 bài học mới đã đóng gói vào `.agents/skills/erpn-verify-first/SKILL.md`
+(grep trước, 0 hit ⇒ thêm mới; integrity check escaping-aware: 3 bảng,
+TOTAL malformed rows = 0):
+1. Luật miễn trừ theo TRẠNG THÁI X phải kiểm hành vi tại ĐIỂM CHUYỂN X→không-X,
+   và liệt kê MỌI đường gọi luật đó (không chỉ đường đang nghĩ tới).
+2. Chèn code sát doc comment ⇒ comment dính sang symbol mới; analyzer không báo;
+   phải tự đọc lại vùng đó.
+3. Wiring MỚI (route + nút bấm / callback / provider) mà harness test cũ ĐI VÒNG
+   qua nó ⇒ suite xanh nhưng đường nối chưa từng được chạy; phải có ≥1 test chạy
+   qua CƠ CHẾ THẬT (render màn đích KHÔNG tính).
+
+== 11. COMMIT + PUSH + BUILD APK (user duyệt 2026-09-17) ===============
+
+User chọn: **commit result43 + push cả hai đợt** (docs commit riêng sau).
+
+Stage ĐÚNG 14 file code/test (KHÔNG stage docs, KHÔNG `.env`/store/`.plan`/rác):
+  apps/mobile/lib/{app/providers.dart, app/router/app_router.dart,
+    core/constants/app_constants.dart, core/settings/app_settings_service.dart,
+    features/chat/application/chat_controller.dart,
+    features/chat/data/chat_history_service.dart,
+    features/chat/data/chat_models.dart,
+    features/chat/data/copilot_api_client.dart,
+    features/chat/presentation/screens/chat_screen.dart,
+    features/settings/presentation/screens/settings_screen.dart}
+  apps/mobile/test/{chat_controller_test, chat_history_trim_test,
+    settings_navigation_test, settings_test}.dart
+  → 14 files changed, 1202 insertions(+), 12 deletions(-)
+
+Secret scan trên staged diff: 2 hit nhưng là FALSE POSITIVE (chỉ là TÊN BIẾN
+`authPassword: _passwordController.text` và `_obscurePassword = !_obscurePassword`)
+— không có giá trị secret nào.
+
+Commit (theo đúng style repo, có footer Codebuff như các commit trước):
+  [change/flutter-chat-mvp c401b0f] feat: client settings screen + chat history
+  cap (a pending proposal is never trimmed) — 14 files changed
+
+Push:
+  $ git push origin change/flutter-chat-mvp
+    9f496bf..c401b0f  change/flutter-chat-mvp -> change/flutter-chat-mvp
+  (đầy cả `4546997` F1/F3/F2 + `c401b0f` result43; branch hết ahead)
+
+GH Actions — **BUILD APK XANH**:
+  run id     35173021349 · headSha c401b0f · 5m0s · conclusion SUCCESS
+  url        https://github.com/hoangsoft90/erpn_mobile1/actions/runs/35173021349
+  steps      ✓ Set up job ✓ Checkout ✓ Java 21 ✓ Flutter ✓ Pub get
+             ✓ Generate code (build_runner) ✓ Analyze ✓ Test
+             ✓ Build debug APK ✓ Upload APK artifact
+  artifact   `erpn-chat-debug-apk` · 83.943.711 bytes (~80 MB) ·
+             hết hạn 2026-12-16 02:04:52Z
+
+⚠️ **PHÁT HIỆN QUAN TRỌNG KHI VERIFY**: repo **CHƯA set GitHub Variables**
+  (`gh api .../actions/variables` → rỗng). ⇒ APK build ra có
+  `COPILOT_BASE_URL`/`COPILOT_AUTH_*` **RỖNG** ⇒ app rơi về mặc định compile sẵn
+  `http://127.0.0.1:8788` (KHÔNG dùng được trên điện thoại).
+  **Bù lại**: đợt result43 vừa push cho phép nhập Gateway URL/auth **ngay trong
+  app** ở màn Settings ⇒ cài APK này rồi vào ⚙️ điền `https://erpn8788.loca.lt`
+  + auth, KHÔNG cần set Variables cũng KHÔNG cần build lại.
+  Điều kiện khác: `lt` phải đang chạy trên Mac (tunnel erpn8788 HIỆN TẮT) và
+  ERPNext reachable.
+
+🔎 **Finding nhỏ (CHƯA sửa — chờ user quyết)**: câu báo lỗi 401 trong
+  `copilot_api_client.dart` vẫn ghi "APK cần build lại với --dart-define..." —
+  nay ĐÃ LỆCH thực tế vì Settings nhập được credential. Sửa thì phải
+  commit + push + build lại (~5 phút), nên để user chọn.
+
+== 12. USER REPORT: "lưu gateway URL thành công nhưng URL vẫn chưa hiển thị" → 2 LỖI THẬT ĐÃ SỬA (`f28869a`) ===
+
+Trả lời câu hỏi của user: **save là THẬT** (test settings_test assert prefs.store chứa giá trị
+sau khi Lưu; test client chứng minh request đi URL mới) — nhưng **footer màn chat hiển thị SAI**:
+
+🔴 **(1)** Footer đọc `appEnvironmentProvider` = giá trị TĨNH dart-define ⇒ lưu xong quay lại
+   màn chat vẫn hiện URL cũ. Fix: footer đọc URL HIỆU LỰC (Settings > dart-define) —
+   chat_screen.dart dòng 88.
+🔴 **(2) GỐC SÂU HƠN (tìm nhờ debug dump widget sau pop)**: sau Save + pop, dump cho thấy footer
+   vẫn render `127.0.0.1:8788` DESPITE getter đọc tươi — vì `appSettingsServiceProvider` là
+   plain Provider: **không gì báo cho watcher biết prefs vừa đổi** ⇒ không rebuild. Fix:
+   `ref.invalidate(appSettingsServiceProvider)` sau khi Lưu ⇒ mọi watcher (footer + api client
+   provider) dựng lại với giá trị mới. **Falsify**: comment dòng invalidate ⇒ test đỏ đúng
+   triệu chứng user báo; khôi phục ⇒ xanh.
+
+**Test hồi quy** (`settings_navigation_test.dart`, +1 → Flutter 63/63): pump `appRouter` THẬT →
+mở ⚙️ → nhập `https://erpn8788.loca.lt` → Lưu → pop về chat → assert footer hiện URL ĐÃ LƯU
+(không còn 127.0.0.1).
+
+Lỗi test trong lúc viết (tự bắt): `appRouter` là instance TOÀN CỤC dùng chung giữa các test —
+test thứ nhất kết thúc ở `/settings` ⇒ test sau KHỞI ĐỘNG trên màn Settings (initialLocation chỉ
+áp dụng lần đầu). Fix: `setUp(() => appRouter.go('/chat'))`.
+
+Commit `f28869a` (3 files, 78+/10−, secret scan CLEAN) → push `c401b0f..f28869a` →
+GH Actions run **`35175220731` SUCCESS** → artifact `erpn-chat-debug-apk` mới (~80 MB, hết hạn
+2026-12-16): https://github.com/hoangsoft90/erpn_mobile1/actions/runs/35175220731
+
+== 10. KHÔNG ĐỤNG GÌ ====================================================
+
+- Không sửa `.env` (giá trị ERPNEXT_URL đã đúng sẵn).
+- Không sửa `scripts/llm-router.config.json` (URL mac-custom đã khớp).
+- Không đụng `mcp-erpnext/src/**` (Gateway, idempotency, proposal, skill layer).
+- Không có lệnh ghi nào tới ERPNext thật.
+- Không stage `.env` / `idempotency-store` / `.plan` / rác `.gemini`, `.opencode`, `initp`.
+========================================================================
+
+========================================================================
+ADDENDUM — APP ICON (concept: Chat + ₫, user chọn 2026-09-17)
+========================================================================
+- 3 file SVG master: apps/mobile/design/icon.svg (1024², nền gradient teal
+  #0BA695→#087F72), icon-background.svg (nền gradient), icon-foreground.svg
+  (bong bóng chat trắng + dấu ₫ teal, nằm gọn safe zone 66/108dp).
+- Verify geometry bằng pixel-check trên PNG render (không nhìn bằng mắt):
+  góc foreground = alpha 0; điểm giữa bubble = trắng; dấu ₫ = teal
+  (0,128,114); nền = gradient teal.
+- Generate bằng flutter_launcher_icons 0.14.4 (yaml: apps/mobile/
+  flutter_launcher_icons.yaml — remove_alpha_ios, adaptive icon + legacy
+  full-bleed cho launcher cũ):
+  + M: mipmap-{m,h,xh,xxh,xxxh}dpi/ic_launcher.png (legacy)
+  + NEW: drawable-{mdpi..xxxhdpi}/ic_launcher_{background,foreground}.png
+         + mipmap-anydpi-v26/ic_launcher.xml (adaptive, inset 16%)
+- Suite sau khi generate: flutter analyze 0 issue · flutter test 63/63 PASS.
+- Chưa commit — chờ user duyệt (đi cùng đợt result43 code hoặc tách riêng).
+
+========================================================================
+ADDENDUM 2 — DEVICE SMOKE TEST QUA ADB (2026-09-17, user đã cài APK f28869a)
+========================================================================
+Thiết bị: Pixel 3a (sargo), adb wireless 100.110.209.88:5555, state=device.
+Package: com.erpn.erpn_mobile. APK build 35175220731 (fix footer f28869a).
+
+1) Launch: am start OK, pid 14949 ổn định xuyên suốt phiên test.
+2) Crash scan: logcat -d (toàn bộ buffer) grep E/flutter|FATAL|AndroidRuntime
+   → 0 dòng crash từ app (AndroidRuntime duy nhất thấy là process uiautomator
+   của shell). App sống sau mọi thao tác.
+3) UI render: screencap 1080x2220 PNG, 739 màu (không phải màn đen);
+   uiautomator dump có: "ERPNext Copilot", "Gửi", "Cài đặt", "Xóa lịch sử",
+   footer "COPILOT_BASE_URL: https://erpn8788.loca.lt".
+   → FIX FOOTER f28869a XÁC NHẬN TRÊN MÁY THẬT: footer đọc URL từ Settings.
+4) Settings trên device (tap ⚙️): 4 field đúng giá trị user đã lưu —
+   URL erpn8788.loca.lt / user copilot / password obscureText / max=20.
+   Quay lại chat bằng Back: app vẫn sống (pid giữ nguyên).
+5) E2E request thật từ phone: gõ "hello" + "bao cao" → tap Gửi → UI hiển thị
+   reply THẬT từ copilot-server: "no skill route matched — Phase 2 router
+   covers customer/sales/payment/inventory only" → chuỗi
+   phone → tunnel(erpn8788.loca.lt) → http-ask → routeIntent chạy thật,
+   basic auth OK. (curl /health từ VPS lúc test 503/408 — flaky đặc tính
+   localtunnel theo client; phone vẫn đi qua được.)
+6) Giới hạn công cụ (không phải lỗi app): adb `input text` không gõ được
+   tiếng Việt có dấu (adb shell NullPointerException với text Unicode) →
+   câu hỏi có dấu ("chị Lan còn nợ bao nhiêu", "thu tiền cho...") cần user
+   gõ tay trên bàn phím máy thật để test luồng hỏi nợ / ghi tiền.
+
+Chưa test trên device (cần user): câu hỏi tiếng Việt có dấu end-to-end
+(hỏi nợ → ProposalCard → Xác nhận → phiếu nháp), vì giới hạn adb ở mục 6.
+
+========================================================================
+ADDENDUM 3 — "KHÔNG TÌM THẤY KHÁCH HÀNG" = ĐÚNG THIẾT KẾ (real không có Lan)
+========================================================================
+- Phone đã đi vào ERPNext THẬT: "chị Lan còn nợ bao nhiêu" → NLP ok
+  ("Lan receivable bao nhiêu") → route customer → resolveCustomer →
+  REFUSE "không tìm thấy khách hàng..." — refuse đúng vì real catalog
+  KHÔNG có khách Lan.
+- Bằng chứng real catalog (erpnext_customer_list qua pinned 3.0.4 + ngrok,
+  realServerScript + .env): ROWS=75 (toàn bộ khách test P1F/PND-ACCEPT...),
+  LAN_MATCHES=0, SMOKE_MATCHES=0.
+- Chứng minh ngược bằng khách CÓ THẬT (mock E2E chain nhưng real ERPNext):
+  "P1F-ACCEPT T9 còn nợ bao nhiêu" → outstanding_vnd=1.000.000,
+  answer "P1F-ACCEPT T9 còn nợ 1.000.000đ (1 chứng từ chưa thanh toán)."
+- GROUND TRUTH cho test trên máy thật (thay cho "chị Lan..."):
+  1) Đọc:  "P1F-ACCEPT T9 còn nợ bao nhiêu"  → 1.000.000đ + card 🟢 READ
+  2) Ghi:  "thu tiền cho P1F-ACCEPT T9 50000" → card 🔴 HIGH 50.000đ →
+     [Xác nhận] → phiếu thu NHÁP (docstatus 0) trên ERPNext demo.
+- LỖI CỦA AGENT (ghi để không tái phạm): probe "verify A.1 real read
+  (3 khách)" trước đó thực chất đi vào MOCK — createMcpClient() mặc định
+  mock khi không truyền serverScript=realServerScript() + env thật.
+  Mọi claim "real" phải thấy dấu hiệu real (stdout "Registered 125 tools",
+  số rows khớp server thật) chứ không chỉ tin biến env đã set.
+
+========================================================================
+ADDENDUM 4 — VERIFY CẢ 5 ROUTE TRÊN ERPNEXT THẬT (ground truth cho device test)
+========================================================================
+Router (router.mjs): payment_write → sales → payment → inventory → customer
+(specific-first). Chạy 5 câu qua chuỗi real (NLP + routeIntent + skill +
+pin 3.0.4 + ngrok), output thật:
+
+1) [customer]        "P1F-ACCEPT T9 còn nợ bao nhiêu"
+   → 1.000.000đ, 1 chứng từ — proposal read_balance READ 🟢
+2) [sales]           "hóa đơn của P1F-ACCEPT T9 còn thiếu bao nhiêu"
+   → "còn 1 chứng từ chưa thanh toán, tổng 1.000.000đ
+      (ACC-SINV-2026-00845: 1.000.000đ)" — read_open_invoices READ 🟢
+3) [payment]         "đã thanh toán gần nhất của P1F-ACCEPT T9 là bao nhiêu"
+   → "chưa có phiếu thu nào trong hệ thống..." — read_payment_history READ 🟢
+   (real hiện 0 PE — 2 PE demo ACC-PAY-2026-00114/00115 đã bị xoá result31)
+4) [inventory]       "tồn kho của P1F-ACCEPT Livestock Item"
+   → route đúng (matched "stock") + proposal read_stock_balance READ 🟢,
+     NHƯNG answer=[] — vì real DB có 19 item, TẤT CẢ is_stock_item=0
+     (không track tồn kho) → stock_balance hợp lệ rỗng. Data property,
+     không phải bug. (UX nhỏ: answer có thể thân thiện hơn — chưa sửa.)
+5) [payment_write]   "thu tiền cho P1F-ACCEPT T9 50000"
+   → proposal create_payment_entry risk=HIGH 🔴 need_confirm=True,
+     "Đề xuất thu 50.000đ từ P1F-ACCEPT T9 cho chứng từ
+      ACC-SINV-2026-00845..." — DỪNG ở card, KHÔNG ghi (đúng Phase 7).
+
+KẾT LUẬN: cả 5 nhóm route hoạt động đúng trên real data. Câu test cho máy
+thật = đúng 5 câu trên (4 đọc an toàn + 1 ghi dừng ở card HIGH).

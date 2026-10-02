@@ -1,0 +1,131 @@
+========================================================================
+RESULT 6 — REAL ERPNEXT WIRED + DSH SMOKE (MOCK LLM) + COMMIT 1
+Timestamp: 2026-09-14 02:39
+Env: Linux VPS, Python 3.12.3, Node v24.20.0, dsh 0.1.5-rc.1 (scratch install).
+Repo erpn_mobile1: commit #1 = 33f9dc0 (55 files, +6390).
+========================================================================
+
+1. USER DECISIONS THIS SESSION (2026-09-14)
+------------------------------------------------------------------------
+1. dsh + LLM backend: "smock tạm, sau này đối chiếu với OpenAI-compatible
+   thật sau" → installed dsh in /tmp/dsh-run (scratch, not global), wrote a
+   deterministic OpenAI-compatible mock LLM.
+2. Commit: "bạn thấy ổn và ko cần thay đổi gì thì commit cug đc" → commit #1
+   created with the previously approved message and scope.
+3. ERPNext credentials provided in chat → stored in .env (mode 600,
+   git-ignored via .gitignore:47). NEVER echoed in logs/files/commit.
+   ⚠️ User should ROTATE these keys — they passed through plain chat text.
+
+2. COMMIT #1 (first commit in repo history)
+------------------------------------------------------------------------
+33f9dc0 feat: phase 1 — Vietnamese NLP pipeline (money/kinship/synonyms/quantity)
+55 files changed, 6390 insertions(+).
+Scope: src/ tests/ pyproject.toml README.md .gitignore checklist.md
+features.md next.md AGENTS.md result1-5.txt handoff_*.md openspec/
+mcp-erpnext/ (incl. dsh.cordis.patch.yml, package-lock.json) nlp_service/
+scripts/ask-copilot.mjs.
+Excluded on purpose: .plan/ (gitignored), .gemini/, .opencode/, initp,
+node_modules, and .env (secrets — verified via git check-ignore BEFORE
+staging; secrets grep found keys only in .env, nowhere else).
+Remaining untracked: .gemini/ .opencode/ initp (intentional).
+
+3. REAL ERPNEXT — CONNECTED, VERIFIED WITH REAL DATA
+------------------------------------------------------------------------
+- .env holds ERPNEXT_URL / ERPNEXT_API_KEY / ERPNEXT_API_SECRET (ngrok
+  gateway to the user's ERPNext).
+- Contract verified FROM SOURCE before first call: bundled 3.0.4 builds
+  auth header `token ${apiKey}:${apiSecret}` and reads the three ERPNEXT_*
+  env vars lazily (grep env6 / "token $" in mcp-erpnext.mjs).
+- Probe #1: initialize OK → serverInfo mcp-erpnext 3.0.4 → tools/list
+  = 125 real tools → erpnext_customer_list returns the user's smoke-test
+  customers (names printed are the user's own test artifacts).
+- copilot-server.mjs now AUTO-SELECTS the target (pickServerScript):
+    all 3 ERPNEXT_* env vars  -> pinned REAL server binary
+    none                      -> mock server (tests default)
+    partial / malformed URL   -> HARD ERROR (never silent mock fallback)
+  5 new unit tests (test/target.test.mjs) pin this contract.
+
+4. DSH SMOKE — FULL CHAIN WITH REAL dsh BINARY (0.1.5-rc.1)
+------------------------------------------------------------------------
+Setup (all scratch, nothing global):
+  npm install @deepseek-ai/dsh            (in /tmp/dsh-run)
+  DSH_HOME=/tmp/dsh-home
+  $DSH_HOME/settings.yaml:
+    llm-pi-ai.providers.mock-copilot: { apiKeyEnv: MOCK_LLM_API_KEY,
+      api: openai-completions, baseURL: http://127.0.0.1:8899/v1,
+      models: [mock-copilot-1] }
+    agent-default-model: { provider: mock-copilot, model: mock-copilot-1 }
+  (shape taken from official providers.md — verified via curl)
+  DSH_TELEMETRY_MODE=DISABLED (verified valid value in dsh lib; dsh's
+  default telemetry endpoint is external — do not ship session logs out).
+
+THE FINAL TRANSCRIPT (verbatim):
+  $ node /tmp/dsh-run/node_modules/@deepseek-ai/dsh/lib/bin.js \
+      --profile headless --patch mcp-erpnext/dsh.cordis.patch.yml \
+      "Khách smoke 2026-09-13-p1done còn nợ bao nhiêu"
+  stdout:
+    Trả lời từ ERPNext (mock LLM chỉ đọc lại kết quả, không tự tính): Khách
+    smoke 2026-09-13-p1done còn nợ 269.000đ (3 hóa đơn chưa trả).
+  stderr:
+    [copilot] ERPNext target: REAL -> prevail-pantyhose-overvalue.ngrok-free.dev
+  Cross-check vs real invoices (probe #2):
+    ACC-SINV-2026-00035 outstanding 90.000
+    ACC-SINV-2026-00032 outstanding 89.000
+    ACC-SINV-2026-00033 outstanding 90.000   (+ 00034 = 0 → correctly excluded)
+    = 269.000đ ✔ — numbers copied from ERPNext, nothing recomputed.
+
+5. BUGS FOUND BY THE REAL-RUN LOOP (all fixed, none shipped broken)
+------------------------------------------------------------------------
+1. mock-llm returned tool_call with bare name "copilot_ask" →
+   "Error: unknown tool" because dsh namespaces MCP tools
+   (mcp__erpn_copilot__copilot_ask). Fix: resolve the real tool name from
+   the request's own tools array (exact → suffix → first).
+2. mock-llm grabbed the LAST user message as "the question" → that was a
+   45.505-char <system-reminder> (dsh injects OUR AGENTS.md + skill catalog
+   as user-role reminders). Fix: pick the FIRST user message that is not an
+   injected reminder ("Current runtime context", "Generate the session
+   title"). Note: dsh reads the repo's AGENTS.md — evidence the workspace
+   doc reaches the model.
+3. session-title-llm calls the model WITHOUT tools; v1 mock answered with a
+   tool_call → fixed (no-tools turns get plain text).
+4. NOT a bug but a real weakness found by probing real data: with 3
+   homonym customers ("Khách smoke 2026-09-13-p1done/-p1final/-postfix"),
+   the old matcher took the FIRST match → asking about p1final could
+   answer for p1done (silent wrong-money answer). Fix in copilot-server.mjs:
+   resolveCustomer() prefers a candidate that matches EXACTLY ONE customer
+   (longest-prefix-first), surfaces ambiguous:true otherwise; the answer
+   string carries an explicit warning. 4 new unit tests.
+
+6. TESTS (after all changes)
+------------------------------------------------------------------------
+node --test (mcp-erpnext): 34/34 PASS
+  (30 prior + 4 customer-resolve; incl. 6 E2E stdio + 5 target-switch)
+python unittest: 58/58 PASS, money 259/259 = 100% (untouched this session)
+
+7. HOW TO REPRODUCE THE SMOKE (after `cd /tmp/dsh-run && npm i @deepseek-ai/dsh`)
+------------------------------------------------------------------------
+  cd repo && set -a; . ./.env; set +a
+  export DSH_HOME=/tmp/dsh-home DSH_TELEMETRY_MODE=DISABLED MOCK_LLM_API_KEY=dummy
+  python3 -m nlp_service.server &
+  node scripts/mock-llm.mjs &
+  node /tmp/dsh-run/node_modules/@deepseek-ai/dsh/lib/bin.js \
+    --profile headless --patch mcp-erpnext/dsh.cordis.patch.yml \
+    "Khách smoke 2026-09-13-p1done còn nợ bao nhiêu"
+
+8. SWAP MOCK LLM -> REAL GATEWAY (user's stated next step)
+------------------------------------------------------------------------
+Edit /tmp/dsh-home/settings.yaml ONLY (or a real DSH_HOME):
+  llm-pi-ai.providers.<id>.baseURL  -> real OpenAI-compatible endpoint
+  llm-pi-ai.providers.<id>.apiKeyEnv -> name of the env var holding the key
+  agent-default-model.{provider,model} -> matching ids
+No repo code changes needed. The mock LLM (scripts/mock-llm.mjs) doubles as
+a contract test for any replacement gateway.
+
+9. REMAINING RISKS / NOTES
+------------------------------------------------------------------------
+- ERPNext keys passed through chat → rotate soon; .env stays git-ignored.
+- dsh install is in /tmp (may vanish on reboot); re-run one npm command.
+- mock LLM is a testing artifact, not a product: its "reasoning" is fixed
+  (call copilot_ask with the task text, then read the tool answer aloud).
+- The session-title prompt goes to the LLM on every session (tiny extra
+  call) — harmless for the mock, worth remembering with a paid gateway.

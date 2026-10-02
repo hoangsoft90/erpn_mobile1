@@ -1,0 +1,11 @@
+# flutter_launcher_icons configuration (run: `dart run flutter_launcher_icons`).
+# Source of truth: design/icon.svg (master) rendered to PNG via cairosvg —
+# see design/ for the SVG layers (background plate / bubble+dong foreground).
+flutter_launcher_icons:
+  # Legacy launcher icons (full-bleed master, includes the gradient bg).
+  image_path: "design/icon-master.png"
+  android: "ic_launcher"
+  adaptive_icon_background: "design/icon-background.png"
+  adaptive_icon_foreground: "design/icon-foreground.png"
+  # No iOS target yet: the app ships as Android APK (Phase 3/7 decisions).
+  min_sdk_android: 23

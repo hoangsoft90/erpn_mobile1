@@ -1,0 +1,66 @@
+result-p4-5.txt — P4-5: BLOCK NHÁP APP HÔM NAY (plan4_final §4.4 + §5.3) — 2026-09-21
+Depends: P4-1/2/3/4. Phạm vi: block `app_drafts` by_type + drill `app_drafts_today` cùng nguồn
+CẤM đã đối chiếu: submit/xoá nháp từ drawer · WRITE mới · /execute từ drill · classifier
+
+════════════════════════════════════════════════════════════════════
+§0 — ĐO TRƯỚC / TRONG KHI CODE (dữ kiện thật, ERPNext thật 2026-09-21)
+════════════════════════════════════════════════════════════════════
+| # | Đo được | Hệ quả |
+|---|---------|--------|
+| 1 | DocField meta: `grand_total` CÓ trên SO/QT/PO, **KHÔNG có trên Payment Entry** (rows=0) — hỏi field đó ⇒ 417 `Trường không được phép trong truy vấn` | drill nháp: PE dùng `paid_amount` (đúng thứ proposal tạo PE set); KHÔNG bọc try/catch ăn lỗi — đo trước nên không phải học từ 503 |
+| 2 | Bắt đầu phiên, drill nháp trả **503 ERP_UNAVAILABLE** trên site thật (bản trước hỏi `grand_total` cho cả 4 doctype) | chính vòng thật bộc lộ bug này TRƯỚC khi hoàn tất — verify-first với meta đã tránh được từ đầu |
+| 3 | "trong ngày" = `transaction_date` (SO/QT/PO) / `posting_date` (PE) của CHÍNH chứng từ | draft dated hôm qua thuộc drill hôm qua — không phải ngày tạo |
+| 4 | Flutter `_RowTile` render `${amount}đ` cho mọi row ⇒ draft 0 sẽ in "0đ" | row nháp dẫn bằng CHỨNG TỪ (name + type + status), money side là "—" |
+
+════════════════════════════════════════════════════════════════════
+§1 — CODE
+════════════════════════════════════════════════════════════════════
+1. `skills/ops-summary.mjs` — drill nháp: field theo doctype (`grand_total` cho SO/QT/PO, `paid_amount`
+   cho PE); row COPY giá trị chứng từ (không tự tạo số); note kèm doctype; giữ company scoping (P4-4)
+   + filter `custom_ai_action_id is set` (chỉ nháp CỦA APP, không phải mọi draft site).
+2. `drill_list_screen.dart` — `isAppDraft` ⇒ trailing "—" (không 0đ); mọi row khác như cũ.
+3. Không đổi block aggregate (đã đúng: filter id + docstatus 0 + trong ngày + company; by_type đã có).
+
+════════════════════════════════════════════════════════════════════
+§2 — TEST (số thật)
+════════════════════════════════════════════════════════════════════
+- Server `p44-read-drill.test.mjs` **12/12**, trong đó mới cho P4-5:
+  · **draft không id không vào** — 4 dạng: không field / null / chuỗi rỗng / không thuộc block (SO-PLAIN,
+    SO-NULLID, PE-PLAIN, PE-EMPTYID) đều VẮNG MẶT ở cả block lẫn drill; nháp của mình (PO-APP +
+    PE-DRAFT-APP) là duy nhất được đếm (block by_type: PE 1 + PO 1).
+  · **biên ngày** — QT dated 2026-09-20 chỉ xuất hiện khi hỏi ngày đó; ngày 2026-09-22 ⇒ list rỗng là
+    CÂU TRẢ LỜI (không phải lỗi).
+  · **giá trị riêng** — PO-APP 99.000.000 (`grand_total` copy nguyên vẹn) · PE-DRAFT-APP 3.000.000
+    (`paid_amount`); không row nào amount 0 tự tạo.
+  · Guard drift mở rộng: drill nháp = block count (PO-OTHER công ty khác vắng ở CẢ HAI).
+- Flutter `drill_list_test.dart` **9/9** (+1): row nháp hiển thị "—" không phải "0đ" · **không affordance
+  ghi/xoá/submit** (Submit/Xác nhận/Gửi/Xoá/Xóa/Hủy phiếu/Ghi sổ đều findsNothing + không TextField +
+  không FilledButton + log request không có 'execute') — §5.3.
+- **Falsify: 17/17 RED** (+3 ca P4-5: bỏ filter id ⇒ đỏ test "không id"; bỏ điều kiện ngày ⇒ đỏ test
+  "biên ngày"; Flutter render 0đ lại ⇒ đỏ test "em-dash") — restore byte-identical.
+- **Node: 523 (521 pass, 2 fail dsh-gateway từ B0)** · **Flutter: 242/242** · **analyze: 0**.
+
+════════════════════════════════════════════════════════════════════
+§3 — VÒNG LẶP THẬT (read-only, site thật 2026-09-21)
+════════════════════════════════════════════════════════════════════
+- `GET /read/drill?drill_id=app_drafts_today`: **HTTP 200** `limit=10 total=0 truncated=false rows=0`
+  (bản trước của phiên này: 503 ERP_UNAVAILABLE vì hỏi `grand_total` cho PE — đã sửa + đo lại).
+- Block ↔ drill: **app drafts count: drill=0 summary=0** · toàn bộ 9/9 CHECK MATCH · RESULT: ALL MATCH.
+- Site thật hôm nay chưa có nháp nào trong ngày ⇒ 0 là ĐÚNG (server đọc xong mới nói 0; partial=false).
+
+════════════════════════════════════════════════════════════════════
+§4 — LỖI TỰ GÂY TRONG PHIÊN (đã sửa)
+════════════════════════════════════════════════════════════════════
+1. Thêm row fixture làm 2 assert tuyệt đối cũ (SO draft count=1, total_documents=2) đỏ — cập nhật kỳ vọng
+   (bản chất test không đổi: nháp thường vẫn là draft của NGÀY, chỉ không phải nháp CỦA APP).
+2. Test đầu tiên tìm `PE-DRAFT` trong drill — nhầm với row nháp không id (phải bị loại) ⇒ thêm PE-DRAFT-APP.
+3. Probe tự viết hỏi `transaction_date` cho PE ⇒ 417 — PE dùng `posting_date` (code route ĐÃ đúng,
+   probe sai — lần 2 mắc dạng nhóm 26, nhắc lại chính bài học đó).
+
+════════════════════════════════════════════════════════════════════
+§5 — GIỚI HẠN + CHỜ USER
+════════════════════════════════════════════════════════════════════
+- "Command store trong ngày" (nửa còn lại của câu spec) KHÔNG làm — không tạo nguồn sự thật thứ hai;
+  `custom_ai_action_id` là correlator chính thức từ B2 (kèm §17 audit trail).
+- Chưa test UI trên máy thật (không device); APK: user đã chốt "để sau".
+- ❓ CHỜ USER: duyệt commit (hàng chờ P4-1→P4-5) · P4-6 (optional) hôm qua + delta.

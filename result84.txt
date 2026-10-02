@@ -1,0 +1,86 @@
+================================================================================
+result84.txt — next8 / PHASE 2 — ĐÓNG CỔNG (kiểm tra lại, KHÔNG Phase 3)
+Ngày: 2026-09-30 · Người chạy: agent
+Trạng thái: Phase 2 ĐỦ trên disk · VERIFY LẠI XANH · CHỜ OWNER (UI-checkpoint + lệnh commit)
+Nguyên tắc: KHÔNG commit vùng tiền · KHÔNG sang Phase 3 · KHÔNG gỡ D2 422 · KHÔNG sửa §6.2
+Nguồn: .plan/next8/phases/phase-02-collect-screen.md · .plan/next8/phase2-result.md · sessions/res3-4.md
+Báo cáo đầy đủ: .plan/next8/phase2-result.md (mục 9 = đóng cổng phiên này)
+================================================================================
+
+§0. AUDIT "CÓ ĐỦ PHASE 2 TRÊN DISK KHÔNG?" — KẾT LUẬN: ĐỦ (không implement lại)
+--------------------------------------------------------------------------------
+Flutter (apps/mobile/lib/features/collect/):
+  ✔ presentation/screens/collect_screen.dart
+  ✔ presentation/widgets/account_picker.dart · invoice_allocation_tile.dart
+    · payment_method_section.dart · collect_summary.dart
+  ✔ application/collect_controller.dart (+ .g.dart) · data/collect_repository.dart (+ .g.dart)
+    · data/collect_models.dart
+  ✔ tests: test/collect_screen_test.dart · test/next8_collect_data_test.dart
+  ✔ route: app/router/app_router.dart:95 path '/collect' (+ màn refusal khi thiếu handoff)
+Server (mcp-erpnext/):
+  ✔ src/http-ask.mjs:1087 POST /collect/propose · :1439 POST /collect/accounts
+  ✔ src/skills/sales.mjs:93 listOpenSalesInvoices (company-scoped) · :154 listUnpaidInvoices uỷ quyền
+  ✔ src/skills/accounts.mjs:52 listMoneyAccounts (READ-only, leaf-only)
+  ✔ src/mock-server.mjs:408 fixture ACCOUNTS (+ company vào SINV)
+  ✔ tests: next8-collect-reads · next8-collect-accounts · next8-collect-propose
+    · next8-collect-handoff · next8-collect-draft
+⇒ Không mục nào thiếu ⇒ theo prompt: KHÔNG refactor, sang bước verify.
+
+§1. VERIFY LẠI TRÊN MÁY HIỆN TẠI (không chép số cũ)
+--------------------------------------------------------------------------------
+[A] Flutter — collect screen (22 ca: T1–T20 + T15b + T15c)
+  $ cd apps/mobile && flutter test test/collect_screen_test.dart
+  → All tests passed!  (+22)   [T1..T20, T15b, T15c]
+  (flutter pub get: "Got dependencies!" trước khi chạy)
+
+[B] Flutter — collect data layer
+  $ flutter test test/next8_collect_data_test.dart
+  → All tests passed!  (+16)
+
+[C] Node — targeted 5 suite (wrapper COPILOT_MOCK_OK=1)
+  $ cd mcp-erpnext && COPILOT_MOCK_OK=1 node --test \
+      test/next8-collect-reads.test.mjs test/next8-collect-accounts.test.mjs \
+      test/next8-collect-propose.test.mjs test/next8-collect-handoff.test.mjs \
+      test/next8-collect-draft.test.mjs
+  → tests 50 · pass 50 · fail 0
+  (gồm tripwire "nothing on the collect path can write" và 2 tripwire read)
+
+[D] flutter analyze
+  $ flutter analyze
+  → 1 issue found: warning unused_field `_onStatus`
+     test/_probe_b0_voice_autosend.dart:50  (probe untracked, có TRƯỚC phase, ngoài scope)
+  ⇒ lib/ sạch; không có issue mới do Phase 2.
+
+KẾT QUẢ: 0 fail mới. Chỉ baseline đã biết (probe untracked + 2 fail dsh env ở full suite)
+là chấp nhận được theo prompt.
+
+§2. ĐỐI CHIẾU DoD (phase-02 §9)
+--------------------------------------------------------------------------------
+[~] 20 ca §5.3 xanh; analyze 0; falsify F1–F4 đỏ đúng test
+    → 22/22 xanh (T1–T20+T15b+T15c); analyze: 1 warning baseline trong probe untracked;
+      falsify F1–F6 (kèm F5/F6 phát sinh) đã ghi ở phase2-result §3 + result83 §4.
+[✔] Không có đường nào từ màn hình tới ERPNext ngoài proposeCollect + /execute qua proposal
+    → màn chỉ gọi /read/list, /collect/accounts, /collect/propose; tripwire xanh.
+[✔] Mọi câu chữ lỗi tiếng Việt, có copy cho từng mã server trả.
+[✗] UI-checkpoint có ảnh + user xác nhận → CHƯA (môi trường phiên không có MCP/screenshot).
+[✔] resultNN.txt, working.md, openspec tasks tick.
+⇒ Mục còn mở DUY NHẤT = D5 UI-checkpoint ⇒ chặn commit đúng quy trình.
+
+§3. DEBT CỐ ĐỊNH (không đổi trong phiên này)
+--------------------------------------------------------------------------------
+- D2  COLLECT_MULTI_INVOICE_NOT_READY (allocations > 1 → 422): CỐ Ý GIỮ tới Phase 3/4 (CẤM gỡ ở đây).
+- §6.2 account BLOCK / bỏ fallback Cash: để Phase 3 (CẤM sửa resolvePaymentAccounts ở đây).
+- D3  builder references[] hardcode 1 dòng (payment-write.mjs:366): việc của Phase 3/4.
+- D4  split 1 lần thu → N PE (TM+CK): backlog ngoài NEXT8.
+- D5  UI-checkpoint: CHƯA — lý do duy nhất chưa commit.
+
+§4. FILE ĐỤNG TRONG PHIÊN NÀY
+--------------------------------------------------------------------------------
+- result84.txt (mới) — bằng chứng phiên này.
+- .plan/next8/phase2-result.md — thêm mục 9 (đóng cổng + smoke checklist owner).
+- KHÔNG đụng source/route/test nào (audit ĐỦ ⇒ không implement lại).
+- KHÔNG commit, KHÔNG git add.
+
+================================================================================
+CHỜ OWNER: UI-checkpoint (ảnh màn /collect) + lệnh commit. KHÔNG sang Phase 3.
+================================================================================

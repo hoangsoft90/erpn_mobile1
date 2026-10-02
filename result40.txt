@@ -1,0 +1,135 @@
+========================================================================
+RESULT 40 — REVIEW TOÀN BỘ CODE (UI / LOGIC / CRASH) + FIX 2 LỖI THẬT
+Timestamp: 2026-09-16 (giờ shell)
+Phạm vi: ~7.5k dòng — src/vietnamese_nlp · nlp_service · mcp-erpnext/src ·
+        scripts (router/mock/ask) · apps/mobile/lib. Baseline trước khi review:
+        Python OK(60) · Node 120/120 · Router 19/19 · Flutter 34/34 · analyze 0.
+Nguyên tắc: MỌI finding phải chứng minh bằng probe/lệnh chạy thật (không phỏng
+đoán); sửa trên đường tiền phải falsify; KHÔNG tự commit (chờ user duyệt).
+========================================================================
+
+== 1. 🔴 F1 (crash-class, ĐÃ SỬA) — setState/ref.read sau khi widget bị dispose
+
+  Cơ chế: `_ProposalCardState._confirm()` await `dio.post('/execute')` rồi cập
+  nhật UI ở 4 chỗ KHÔNG kiểm `mounted`: nhánh success, nhánh `_handleRefusal`
+  (409), nhánh lỗi mạng, và `catch (e)` chung. Chỉ `finally` có guard.
+  ⇒ rời màn hình / xoá lịch sử khi lệnh ghi đang bay = `setState() called
+  after dispose()`; tệ hơn, `catch (e)` nuốt lỗi đầu tiên rồi ném lại ở dòng
+  khác, nên stack luôn chỉ sai chỗ (đã đo: mọi nhánh đều báo dòng 99).
+
+  CHỨNG MINH (probe thật, tạo rồi đã xoá `test/_probe_review_test.dart`):
+    P1  — unmount giữa chừng, server trả 409:  ✖ "setState() called after dispose()"
+    P1b — unmount giữa chừng, server trả 200:  ✖ same, stack #2 _confirm (proposal_card.dart)
+  FIX: `if (!mounted) return;` ở đầu mỗi nhánh sau-await + `if (!mounted) return;`
+  trong `_handleRefusal` (guard luôn cả `ref.read` trên scope đã dispose).
+  FALSIFY: vô hiệu 4 guard (`if (false && mounted)`) → P1/P1b ĐỎ trở lại;
+           khôi phục (md5 khớp bản fix, grep marker = 0) → P1/P1b XANH.
+  Giữ lại 2 test hồi quy trong `test/proposal_card_test.dart`.
+
+== 2. 🔴 F3 (fail-OPEN ở đường an toàn, ĐÃ SỬA) — `problems[]` không phải list
+
+  Cơ chế: `body['problems'] as List<dynamic>?` ném `TypeError` khi field là
+  String (proxy/tunnel/phiên bản server khác). TypeError đó ném RA TỪ TRONG
+  handler `on DioException` ⇒ `catch (e)` phía sau KHÔNG bắt được ⇒ bay ra
+  ngoài = unhandled async error.
+  HỆ QUẢ ĐO ĐƯỢC (probe P4): banner KHÔNG hiện (`banner shown: 0`) ⇒ **nút
+  [Xác nhận thu tiền] vẫn còn trên một đề xuất đã bị từ chối** — fail-open
+  đúng chỗ dự án yêu cầu fail-closed.
+  Cùng lớp ở model: `ActionProposal.fromJson` cast y hệt ⇒ ném trong
+  `ChatHistoryService.load()` ⇒ hàm bắt lỗi trả `[]` ⇒ **1 field lỗi xoá sạch
+  toàn bộ lịch sử chat** (im lặng).
+  FIX: parse tolerant `is List` (card + model); banner luôn render, nút luôn mất.
+  FALSIFY: khôi phục cast cũ → P4 ĐỎ trở lại; hoàn nguyên → XANH.
+  Giữ lại 1 widget test (card) + 1 test model (`chat_data_test.dart`).
+
+== 3. 🟡 F2 (UI, CHƯA SỬA — cần quyết định) — mất trạng thái "đã ghi" khi scroll
+
+  CHỨNG MINH (probe P2, ListView.builder 30 item):
+    BEFORE scroll : success=1  button=0
+    AFTER  scroll : success=0  **button=1**   (card unmount khi ra khỏi viewport)
+  ⇒ Nút [Xác nhận] QUAY LẠI trên thẻ đã ghi ⇒ người dùng tưởng lệnh chưa thực hiện.
+  AN TOÀN TIỀN: probe P2b — bấm lại sau recycle gửi **CÙNG command_id**
+  (`keys=[5d29b085…, 5d29b085…]`, "chống trùng" hiện ra) ⇒ server replay,
+  KHÔNG ghi phiếu thứ hai. (Lần chạy đầu của probe báo 2 key khác nhau — đó là
+  LỖI PROBE của tôi: itemBuilder tạo proposal mới mỗi build; sửa probe xong mới
+  ra kết luận đúng. Ghi vào skill.)
+  Ghi chú: banner từ chối SỐNG SÓT qua recycle (đã lưu ở model), chỉ kết quả
+  THÀNH CÔNG là mất ⇒ 2 đường lưu trạng thái không đối xứng.
+  HAI PHƯƠNG ÁN (chờ user chọn — không tự làm):
+    (a) Lưu kết quả xác nhận ở model (`erpnext_doc`/`paid_vnd` + toJson) — ĐỐI
+        XỨNG với rejection, nhưng là THAY ĐỔI SCHEMA ⇒ cần user duyệt.
+    (b) `AutomaticKeepAliveClientMixin` cho card — không đổi schema, nhưng chỉ
+        giữ state trong RAM (mất khi restart, vẫn lệch với đường rejection).
+
+== 4. 🟡 F4 (LOW, latent — CHƯA SỬA) — clone trong attachRejection mất identity
+
+  `chat_controller.attachRejection` tạo `ActionProposal` MỚI và copy
+  `commandIdSeed` từ bản cũ; với proposal tươi từ /ask thì seed = null (key nằm
+  trong Expando) ⇒ bản clone sinh key MỚI.
+  ĐO ĐƯỢC: P3 `key before=32cb1002… after=fb5c6106… same=false`.
+  Hiện KHÔNG khai thác được: clone luôn mang rejectionCode ⇒ `isRejected` ⇒ nút
+  xác nhận bị banner thay ⇒ không thể bấm lại. Rủi ro tiềm tàng: nếu sau này có
+  luồng "re-validate rồi xác nhận lại" thì key mới = Ý ĐỊNH MỚI, không replay.
+
+== 5. Các phát hiện nhỏ (LOW — chưa sửa, ghi để theo dõi)
+
+  F5 stale comment: "command_id is generated per press" (sai từ result24) → ĐÃ SỬA
+     (comment trong proposal_card.build).
+  F6 field parse nhưng không dùng: `normalizedText`, `routedMatched`,
+     `openInvoices`, `outstandingVnd` chỉ xuất hiện trong test, không UI nào
+     đọc (grep ngoài chat_models = 1 = chính test).
+  F7 `waitForNlpService()` (copilot-server.mjs:67) gọi `fetch` KHÔNG AbortSignal
+     (trong khi `normalizeText` có `AbortSignal.timeout(30_000)`) ⇒ socket
+     half-open có thể treo vượt "ngân sách 3s" khi khởi động MCP.
+  F8 `nlp_service/server.py` — `int(self.headers.get("Content-Length") or 0)`
+     với header không phải số ⇒ ValueError bay ra socketserver ⇒ in traceback
+     ra stderr + ngắt kết nối (trái docstring "never leak a traceback").
+
+== 6. ĐÃ REVIEW — SẠCH (có bằng chứng, không cần sửa)
+
+  · `scripts/llm-router.mjs`: có đủ guard `res.destroyed` (7 chỗ) cho luồng
+    streaming/abort; `git log -S destroyed` xác nhận các guard này thuộc về
+    router từ commit 49317a7.
+  · Ghi response cho client đã abort ở `http-ask.mjs`: KHÔNG crash. Đo bằng
+    repro độc lập (`/tmp/abort-probe.mjs`, server chậm 200ms + destroy ở 30ms):
+    `uncaughtException captured: NONE`. ⇒ thiếu guard `destroyed` ở http-ask
+    KHÔNG phải bug (và `git log -S destroyed -- http-ask.mjs` = rỗng: chưa từng
+    có), khác với router nơi response được stream nhiều lần.
+  · `http-ask.mjs`: cap body (MAX_BODY), JSON.parse trong try, deadline 120s +
+    `clearTimeout` trong finally, phân loại lỗi fail-closed (STALE→409,
+    afterWrite→503 retry_same_command_id), basic-auth + bind policy.
+  · `copilot-server.mjs`: stdio `JSON.parse` trong try (trả -32700), NLP fetch có
+    AbortSignal, đổi target mock/real fail-closed (thiếu 1 phần ⇒ exit).
+  · `client.mjs`: `JSON.parse` guard, `child.on('exit')` reject mọi request đang bay.
+  · `idempotency.mjs`: file hỏng được đổi tên sang `.corrupt-*` (không resume
+    im lặng), ghi atomic (tmp+fsync+rename).
+  · `nlp_service/server.py`: cap 1MB body / 2000 ký tự text, except cụ thể +
+    catch-all trả JSON (không traceback), ThreadingHTTPServer daemon, bind 127.0.0.1.
+  · Dart: `CopilotApiClient` map mọi DioException sang CopilotException (UI không
+    bao giờ thấy DioError thô), timeout 15s, 401 có thông điệp actionable;
+    `ChatHistoryService` fail-safe (prefs null/corrupt ⇒ [] / bỏ qua save);
+    `main()` bọc `SharedPreferences.getInstance()` trong try;
+    `chat_screen._send()` có `if (!mounted) return;` sau await; `dispose()`
+    giải phóng 2 controller; `_scrollToBottom` dùng post-frame + `hasClients`.
+
+== 7. SUITE SAU KHI SỬA (lệnh + output thật)
+
+  PYTHON   PYTHONPATH=src python3 -m unittest discover -s tests → OK (60)
+  NODE     cd mcp-erpnext && npm test → ℹ tests 120 · pass 120 · fail 0
+  ROUTER   node --test scripts/test/*.test.mjs → ℹ tests 19 · pass 19 · fail 0
+  FLUTTER  cd apps/mobile && flutter test → 00:04 +38: All tests passed!  (34 → 38)
+           flutter analyze → No issues found! (ran in 6.2s)
+  File probe `test/_probe_review_test.dart` đã XOÁ sau khi chuyển thành test hồi quy.
+
+== 8. TRẠNG THÁI COMMIT (KHÔNG tự commit — vùng tiền)
+
+  git status: M apps/mobile/lib/features/chat/data/chat_models.dart
+              M apps/mobile/lib/features/chat/presentation/widgets/proposal_card.dart
+              M apps/mobile/test/chat_data_test.dart
+              M apps/mobile/test/proposal_card_test.dart
+              (M checklist.md · M working.md · ?? setup-test.md · ?? result37/39 + 2 handoff)
+  Message đề xuất (chờ user duyệt):
+    fix: chat UI crash/fail-open guards — mounted after await; tolerant
+    problems[] so a refusal always renders and removes the confirm button
+  Việc chờ user QUYẾT: F2 (phương án a hay b) · F4 · F6 · F7 · F8.
+========================================================================

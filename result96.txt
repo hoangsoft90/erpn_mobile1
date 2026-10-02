@@ -1,0 +1,129 @@
+================================================================================
+result96.txt — next8 / PHASE 10 (Deployment & ops readiness) — bằng chứng lệnh
+================================================================================
+Ngày: 2026-10-01 · repo: erpn_mobile1 · nhánh master · KHÔNG commit (chờ owner).
+Phạm vi: PHẦN AGENT LÀM ĐƯỢC của phase-10 (§1 code endpoint release + §5 runbook +
+F1–F4 + regression). Phần cần owner (host thật/secret/rotate/TLS/user ERP) = BLOCK.
+
+--------------------------------------------------------------------------------
+§0. ĐIỂM VÀO — đang dở ở đâu
+--------------------------------------------------------------------------------
+- `app_constants.dart` sửa lúc 2026-10-01 13:04 (sau drill 13:00) — comment "Phase 10
+  release rule" nhắc `test/app_constants_release_guard_test.dart` NHƯNG file test
+  chưa tồn tại; màn Cài đặt chưa có nút "Kiểm tra kết nối".
+- `.plan/next8/_probe_10_ops_readiness.mjs` (12:59) + `_kill_switch_drill_minutes.json`
+  (13:00, PASS) + `_cleanup_drill_leak.mjs` (11:54) đã có; `phase10-result.md` CHƯA.
+
+--------------------------------------------------------------------------------
+§1. CODE + TEST MỚI
+--------------------------------------------------------------------------------
+$ export PATH="/google/flutter/bin:$PATH"; cd apps/mobile
+$ flutter analyze lib test/app_constants_release_guard_test.dart test/settings_test.dart
+  No issues found! (ran in 2.5s)
+
+$ flutter test test/app_constants_release_guard_test.dart test/settings_test.dart
+  ... 00:08 +42: All tests passed!
+
+Files touched:
+  apps/mobile/lib/core/constants/app_constants.dart      (isLoopbackUrl)
+  apps/mobile/lib/app/providers.dart                     (AppEnvironment.isDevLoopback)
+  apps/mobile/lib/features/chat/data/copilot_api_client.dart (checkConnection + CopilotHealth)
+  apps/mobile/lib/features/settings/presentation/screens/settings_screen.dart (nút + inline)
+  apps/mobile/test/app_constants_release_guard_test.dart (NEW, 4 test)
+  apps/mobile/test/settings_test.dart                    (+4 test)
+  docs/runbook.md                                        (NEW, §4.5)
+
+--------------------------------------------------------------------------------
+§2. §4.4 OPS CONFIG — SITE THẬT, CHỈ ĐỌC
+--------------------------------------------------------------------------------
+$ timeout 60 node .plan/next8/_probe_10_ops_readiness.mjs read
+[read] auth → 200 user="Administrator"
+[read] Company Minh Phát Cám & VLXD → 200
+[read]   default_cash_account         "1110 - Tiền mặt - MP" OK
+[read]   default_bank_account         "1210 - ACB 110296868 - MP" OK
+[read]   default_receivable_account   "1310 - Phải thu khách hàng - MP" OK
+[read]   default_payable_account      "2110 - Phải trả người bán - MP" OK
+[read]   default_income_account       "4110 - Doanh thu bán hàng - MP" OK
+[read]   default_expense_account      "5111 - Giá vốn hàng bán - MP" OK
+[read]   default_inventory_account    "1410 - Hàng tồn kho - MP" OK
+[read] roles of gateway user Administrator → 45 roles (admin)
+[read] ERP user verdict: ... cần user ERP riêng ... không Administrator
+[read] custom_ai_action_id deployed on 10/10 doctype
+exit=0   (0 chứng từ ghi)
+
+--------------------------------------------------------------------------------
+§3. KILL-SWITCH DRILL (biên bản .plan/next8/_kill_switch_drill_minutes.json)
+--------------------------------------------------------------------------------
+result=PASS · steps=4
+  1 kill-switch OFF          /execute → 200 ok=true replay=false doc=PE-M002
+  2 kill-switch ON (flag)    /execute (lệnh mới) → 503 code=SYSTEM_MAINTENANCE
+  3 READ trong bảo trì       /ask → 200 ok=true erp_target=MOCK
+  4 kill-switch OFF lại      /execute (lệnh mới) → 200 ok=true doc=PE-M002
+target=MOCK gateway (temp IdempotencyStore, KHÔNG chạm site thật)
+
+--------------------------------------------------------------------------------
+§4. FALSIFY F1–F4
+--------------------------------------------------------------------------------
+F1 — neuter isLoopbackUrl (release lén dùng 127.0.0.1):
+  BEFORE sha256 c030b17f73e0b79d84d4c836905210b2945ba78ae2ca9dfe5abe98387b8cdbb9
+  mutation 33:    final h = ''; // F1 mutation
+  flutter test test/app_constants_release_guard_test.dart  → RED 3/4
+    ✖ isLoopbackUrl flags dev hosts and passes real hosts
+    ✖ the compiled-in default is a dev loopback (dev-only)
+    ✖ with no --dart-define the app falls back to loopback and says so
+  AFTER sha256  == BEFORE  ⇒ RESTORE byte-identical: OK
+  flutter test ... → GREEN 4/4
+
+F2 — /execute khi chưa auth (code bắt buộc auth cho non-loopback):
+  $ COPILOT_MOCK_OK=1 node --test test/http-ask-auth.test.mjs
+    ✔ policy: non-loopback without creds is REFUSED
+    ✔ policy: public interface refused unless ASK_ALLOW_PUBLIC=1
+    ✔ http: non-loopback bind answers 401 without creds, 200 with creds
+    ℹ tests 9 · pass 9 · fail 0
+
+F3 — neuter isGlobalReadOnly (kill switch ON mà vẫn ghi):
+  BEFORE sha256 0eb47b0afcf54065c4508f7716d97900c5b9ec1455161098578b0664de22eae9
+  mutation 54:    return false; // F3 mutation — neutered
+  $ COPILOT_MOCK_OK=1 node --test test/safety-gateway.test.mjs
+    ✖ kill switch: global_read_only refuses a NEW write with SYSTEM_MAINTENANCE and burns nothing
+    ✖ kill switch: flag FILE also trips it; READ (/ask) is unaffected
+    ℹ tests 10 · pass 8 · fail 2
+  AFTER sha256 == BEFORE ⇒ RESTORE byte-identical: OK
+  (test lại: 3 case kill switch xanh)
+
+F4 — secret lọt vào diff:
+  control:  grep -nE "AKIA[0-9A-Z]{12,}" /tmp/f4_leak_control.txt  → DETECTED
+  real scan mcp-erpnext/src + apps/mobile/{lib,test} + .github + docs → RỖNG
+  $ git check-ignore -v .env     → .gitignore:52:.env
+  $ ls -l .env                   → -rw------- (chmod 600)
+
+  leftover-mutation grep "F1 mutation|F3 mutation" trong src/lib → RỖNG
+  mcp-erpnext/control/ → KHÔNG có read-only.flag
+
+--------------------------------------------------------------------------------
+§5. REGRESSION
+--------------------------------------------------------------------------------
+$ cd mcp-erpnext && COPILOT_MOCK_OK=1 node --test
+  [corpus] locked 167: pass 167 · known-fail 0 · accepted 0 | review 113: pass 106 · fail 0 · accepted 7
+  ℹ tests 1106 · pass 1103 · fail 2 · skipped 1
+  2 fail = dshGatewayHealth + verifyDshRuntime (ĐÚNG baseline env dsh, timeout 30s)
+
+$ cd apps/mobile && flutter test
+  01:58 +458 -3: Some tests failed.
+  3 fail = test/_probe_review_test.dart (untracked, baseline). Trước Phase 10: 450/3 ⇒ +8 do test MỚI.
+$ flutter analyze
+  warning • _onStatus unused • test/_probe_b0_voice_autosend.dart:50 (untracked, baseline) → 1 issue
+
+--------------------------------------------------------------------------------
+§6. BLOCK CHỜ OWNER (DỪNG — KHÔNG tự commit)
+--------------------------------------------------------------------------------
+1. URL máy chủ thật cho bản phát hành (không bịa; không localtunnel làm production).
+2. GitHub Variables/Secrets: COPILOT_BASE_URL, COPILOT_AUTH_USER + secret COPILOT_AUTH_PASSWORD (repo đang 0/0).
+3. Rotate ERPNEXT_API_KEY / ERPNEXT_API_SECRET (chỉ nêu TÊN biến).
+4. TLS / reverse proxy — ai giữ, cách gia hạn; verify trên máy thật.
+5. User ERP riêng (không dùng Administrator).
+6. Cho phép diễn tập restore cấu hình gateway.
+
+KHÔNG build APK trên VPS · KHÔNG mở gateway không auth · KHÔNG đổi Safety Gateway/bật submit ·
+KHÔNG chạm .env/secret · KHÔNG commit/force-push.
+================================================================================

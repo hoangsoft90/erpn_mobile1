@@ -1,0 +1,169 @@
+# result70.txt — phiên 2026-09-25 (next4): A3 PDF + B trùng tờ HĐ + M1-site + A2/A3 Flutter + P9-D + review A3 + bài học skill
+
+Deliverables: `.plan/next4/{A3-result.md (§9.1 + §9.5), flutter-pdf-picker-result.md, P9D-result.md (§11),
+B-dedupe-result.md (§7), next4-commit-note.md}` · docs root (`checklist/features/next/faq/LESSONS_LEARNED`)
+· skills (`.agents/skills/{erpnext-rest-api-core, erpn-verify-first, untrusted-file-parsing}`).
+
+---
+
+## §1. Số suite chạy THẬT trong phiên (không kế thừa số phiên trước)
+
+```bash
+cd apps/mobile && /google/flutter/bin/flutter analyze
+# No issues found! (ran in 7.4s)
+
+cd apps/mobile && /google/flutter/bin/flutter test
+# 01:17 +310: All tests passed!        ← trước phiên: 304 (A2 XML) → +6 (kênh PDF + thẻ tạo khách)
+
+cd mcp-erpnext && COPILOT_MOCK_OK=1 node --test
+# ℹ tests 793 · pass 791 · fail 2
+# 2 fail = dsh-gateway.test.mjs:865 (dshGatewayHealth / verifyDshRuntime) — CÓ SẴN từ B0, do môi trường
+
+cd mcp-erpnext && COPILOT_MOCK_OK=1 node --test test/a3-einvoice-pdf.test.mjs \
+  test/b-dedupe.test.mjs test/m1-customer-create.test.mjs test/a2-einvoice-xml.test.mjs
+# ℹ tests 56 · pass 56 · fail 0
+
+cd mcp-erpnext && COPILOT_MOCK_OK=1 node --test test/p9-pay.test.mjs test/payment-write.test.mjs \
+  test/p8-authorization.test.mjs test/p10-rate-limit.test.mjs test/b4-purchase-order.test.mjs \
+  test/p1-entity-state.test.mjs
+# ℹ tests 131 · pass 131 · fail 0
+```
+
+## §2. Falsify — mỗi ca xóa ĐÚNG một mảnh (P9-D thêm 2 ca mới K/L)
+
+```bash
+cd mcp-erpnext && COPILOT_MOCK_OK=1 node scripts/falsify/p9c-payment-pay.mjs
+```
+```
+RED  A. the pay VERB marker is dropped — a store expense stops being named as one
+RED  B. the spoken amount is NOT stripped before resolving the party — "Hà Tiên 2 triệu" is read as a name
+RED  C. a name held by BOTH masters is no longer refused — the direction gets GUESSED
+RED  D. the executor stops proving the party really is a SUPPLIER
+RED  E. the sentence is allowed to CONTRADICT the master-derived direction
+RED  F. the pay sides are swapped — the money account and the payable trade places
+RED  G. the pay direction no longer allocates a PURCHASE invoice
+RED  I. the read-back stops proving WHICH WAY the money moved
+RED  H. a supplier with nothing owed no longer refuses — it would write an unallocated advance
+RED  K. the DRAFT cover is ignored again — a second /ask re-proposes money a live draft already holds
+RED  L. the executor stops re-deriving the cover — a stale card writes the same money again
+RED  J. the minimum substring fragment is removed — the verb "xử lý" resolves a supplier again
+
+ALL GUARDS ALIVE — P9-C payment pay-out direction: every mutation turns the NAMED test red, restore byte-identical
+```
+K và L là **2 ca MỚI** cho chính phần vừa thêm (K = bỏ trừ nháp ⇒ builder phải đỏ; L = bỏ đọc lại cover ⇒
+E2E phải ghi nháp thứ hai, đỏ đúng chỗ).
+
+## §3. Commit (branch `change/flutter-chat-mvp`, **KHÔNG push** — user chưa bảo "push")
+
+| # | Hash | Message (rút gọn) | File |
+|---|---|---|---|
+| 1 | `7ca1409` | `feat(mcp-erpnext): HĐĐT PDF có lớp chữ (A3) + chống trùng theo TỜ hoá đơn (B) + M1-site` | 28 |
+| 2 | `8a692f1` | `feat(mobile): kênh FILE cho HĐĐT (.xml + .pdf) + thẻ tạo khách (M1) + confirm gửi kèm auth` | 20 |
+| 3 | `47558ce` | `docs(next4): chốt trạng thái A2/A3/B/M1-site + bằng chứng result65–69` | 9 |
+| 4 | `f82f656` | `fix(payment): phiếu thu/chi NHÁP phủ bớt nợ … [VÙNG SỐ TIỀN]` | 9 |
+
+Lý do gộp 3 workstream vào commit 1: chúng dùng **chung** `http-ask.mjs`, `capabilities.json`,
+`mock-server.mjs` — tách theo hunk sẽ ra commit "trông đủ" mà thiếu một nửa đường.
+P9-D tách **riêng** vì chạm vùng số tiền ⇒ user duyệt riêng.
+Kiểm: `git log -3 --name-only | grep payment-write` ⇒ RỖNG trước commit 4 (P9-D không rò vào commit 1–3).
+
+## §4. Vòng smoke P9-D sau commit — "thu nháp 2 lần, KHÔNG submit"
+
+```bash
+COPILOT_MOCK_OK=1 node .plan/next4/probe-p9d-current.mjs     # seed nháp PE-M901 1.000.000 phủ SINV-0001
+```
+```
+ask #1: amount = 1500000  invoice = SINV-0001  outstanding = 1500000
+ask #2: amount = 1500000  invoice = SINV-0001  outstanding = 1500000
+draft PEs in state: [ 'PE-M901:1000000' ]
+=> MEASURED: GAP CLOSED — the 1.000.000đ draft reduces the proposal to 1500000 (raw GL still 2.500.000), stable across two asks
+warnings #1: [
+  'số tiền đề xuất 2000000 vượt phần còn lại của SINV-0001 (1500000 — sau khi trừ phiếu NHÁP đang chờ, GL 2500000) — đã kẹp về đúng phần còn lại',
+  'đã có phiếu thu NHÁP chưa submit (PE-M901) phủ SINV-0001 1000000đ — đề xuất dưới đây là phần CÒN LẠI, không cộng thêm phần đã có phiếu'
+]
+```
+**Không submit gì**: probe chỉ gọi `copilot_ask` (dựng proposal), KHÔNG gọi `/execute`; số nháp trong mock state
+**không đổi (1 → 1)** ⇒ chứng minh vòng hỏi-lại chỉ ĐỌC. TRƯỚC khi sửa cùng probe đọc **2.500.000 / 2.500.000**.
+
+## §5. Migration B — ĐÃ CHẠY + VERIFY trên site thật (2026-09-25)
+
+Chi tiết nguyên văn ở `.plan/next4/B-dedupe-result.md` §7. Tóm tắt: `custom_business_doc_key` trên
+**Purchase Order** — tạo ⇒ `VERIFIED type=Data unique=1 search_index=1`; **chạy lại ⇒ no-op** (idempotent);
+kiểm chứng ĐỘC LẬP bằng REST (`GET /api/resource/Purchase Order?fields=["name","custom_business_doc_key"]`)
+thấy cột trong meta (6 đơn cũ giữ `null` ⇒ unique index không vướng); probe chỉ-đọc
+`.plan/next4/probe-b-migration-field.mjs` gọi đúng `probeBusinessDocKey` mà executor dùng ⇒
+`{"found":false,"doc":null,"field":"custom_business_doc_key","field_unavailable":false}` ⇒ **gate đã mở**,
+không dương tính giả. Host: `prevail-pantyhose-overvalue.ngrok-free.dev` (tên host, KHÔNG secret).
+
+## §6. Review A3 (vòng 2) — 3 lỗ hổng ĐÃ ĐO, **CHƯA SỬA**
+
+Đầy đủ ở `.plan/next4/A3-result.md` §9.1 (đính chính) + **§9.5**; probe `.plan/next4/probe-a3-review.mjs`.
+
+| Mức | Lỗ hổng | Bằng chứng đo |
+|---|---|---|
+| **High** | `LABELS.invoiceNo` có nhánh `so` trần ⇒ khớp "mã **số** thuế" / "in **số** bản"; so nhãn trên dòng đã BỎ DẤU nhưng lấy giá trị từ dòng GỐC ⇒ cắt giữa token, mà `complete` vẫn `true` | "Mã số thuế: 0300000002" trên "Số: 0000049" ⇒ `invoice_no = "thu"`; footer "In số bản: 2" ⇒ `"b"` ⇒ rác đi vào chứng từ **và khoá chống trùng của B** |
+| Medium | `inflateSync` KHÔNG có trần đầu ra (chỉ có `max_pdf_bytes` cho input nén) | 106.884 byte nén → **31.457.284 byte** (294×), `extractPdfText` 4,3 s, RSS **+541 MB**; `LINE_LIMIT` chỉ bắn SAU khi đã dựng xong mọi dòng |
+| Medium | `readDate` lấy ngày dạng SỐ đầu tiên ở bất kỳ đâu, không cần nhãn | "Ngày đặt hàng: 01/09/2026" đứng trước "Ngày 20/09/2026" ⇒ `invoice_date = "2026-09-01"`; footer "In ngày 30/09/2026" cũng được nhận ⇒ sai khoá chống trùng |
+
+Low ×4: trần dòng bắn muộn (mặt kia của M1) · `readDate` quét NGƯỢC ở nhánh `ngày…tháng…năm` nhưng XUÔI ở nhánh số ·
+guard tĩnh `await|async` chỉ phủ `einvoice-xml.mjs` (module PDF đồng bộ, grep 0 hit, không được bảo vệ) ·
+lỗi số trong doc §9.1 (đã sửa: 450.000 → `POLICY.max_pdf_bytes` = 650.000).
+**10 ca đã đo và KHÔNG phải bug**: bfrange có trần (4097 entry, 3 ms) · no-text bomb bị từ chối `NO_TEXT` (555 ms) ·
+file cụt ⇒ `NO_TEXT` không crash · 260 dòng ⇒ `LINE_LIMIT` giữ ĐÚNG 200, `complete=false` · dòng âm bị từ chối ·
+control chars được làm sạch · `29/02/2028` ok vs `31/02/2026`/`00/10/2026`/`01/13/2026` ⇒ null ·
+block "Người bán:" rỗng không nuốt dòng MST · dòng không parse được ⇒ problem, không thành dòng ·
+không có `await/async`, không `fs`, không bề mặt ghi.
+
+## §7. Bài học lỗi → SKILL (user duyệt "cả 3 nhóm")
+
+| Nhóm | Nơi | Nội dung |
+|---|---|---|
+| ERPNext portable | `.agents/skills/erpnext-rest-api-core` §6 (+3 bullet) | nháp `docstatus=0` không giảm GL ⇒ phải trừ phần nháp đang phủ + đọc lại lúc xác nhận · Link field trỏ giá trị không có trên site ⇒ `LinkValidationError` (và mock dễ dãi hơn site che bug này) · `limit_page_length: 0` = KHÔNG giới hạn |
+| Bẫy của project | `.agents/skills/erpn-verify-first` (+5 dòng bảng) | test dùng lại cùng proposal/khoản nợ cho 2 lần ghi ⇒ 4 test vỡ khi hành vi mới ĐÚNG · widget tự POST bằng dio riêng ⇒ bỏ settings ⇒ 401 · guard theo HỆ QUẢ (`<= 0`) nuốt credit note âm · snapshot lưu giá trị suy-ra nhưng drift so raw ⇒ từ chối oan · substring gần-trùng lần thứ 3 ⇒ nâng thành luật chung |
+| Parse file người lạ | `.agents/skills/untrusted-file-parsing` — **SKILL MỚI** | trần OUTPUT khi inflate (không chỉ trần input) · regex nhãn có nhánh ngắn trần khớp bên trong nhãn khác · không bao giờ lấy số/ngày ĐẦU TIÊN tìm thấy |
+| Cross-project | Simplenote | ⚠️ **MCP Simplenote KHÔNG khả dụng** trong phiên này (không có tool để gọi) ⇒ bản dùng chung nhiều project **CHƯA ghi được**; phải ghi lại ở phiên có công cụ |
+
+## §8. Việc CHƯA làm (trung thực, không tô hồng)
+
+- **A3 H1/M1/M2 CHƯA sửa** — đã đề xuất + đo, chờ user quyết (chạm định danh/trùng tài liệu).
+- **A3 review vòng 2 chưa chạy `cccc`/index**: `codebase-memory-mcp` + `cocoindex-code` **không khả dụng** phiên này.
+- **Công cụ review độc lập không khả dụng**: OCR open-code-review, AgentMemory, codebase-memory-mcp, Simplenote
+  ⇒ bước Code Review chạy dạng **fallback** (tự đọc diff + quét call-site), **không có** lớp phát hiện tự động NPE/XSS/SQLi.
+- **UI-checkpoint chưa chụp** cho nút HĐĐT nhận `.pdf` (thay đổi UI).
+- **Vòng XML THẬT 2 lần cùng file** và **nháp PE THẬT trên ERPNext** — đều là GHI thật, cần user cho phép riêng.
+- **A3**: chưa có falsify riêng · ObjStm chưa giải nén · không có PDF THẬT của NCC (fixture tự dựng byte-by-byte).
+- ~~Chưa push~~ → **ĐÃ PUSH + CI XANH ngay sau phiên** (xem §9).
+
+## §9. Push + CI APK (2026-09-25, sau khi user bảo "push code lên gh để build apk")
+
+**Cách push**: FAST-FORWARD từ chính cây local — `origin/change/flutter-chat-mvp` (`9ac14ef`) là **tổ tiên** của `HEAD`
+(kiểm bằng `git merge-base --is-ancestor`), nên **KHÔNG cần clone/pull/merge gì từ GitHub** (đúng yêu cầu user:
+nguồn sự thật là cây cloud shell này). Token lấy từ `.env` (`GH_TOKEN`, file đang `600`), mask mọi output,
+sau push `git remote set-url` trả về URL **không có token**.
+
+- Thêm 1 commit docs trước khi push: `0755441` (đồng bộ `checklist/features/next/faq/LESSONS_LEARNED` +
+  `openspec tasks.md` §6.26–6.29 + `.project/openspec.md` + `result70.txt` + `handoff_20260925-0722.md`).
+- **Push**: `9ac14ef..0755441` (9 commit) — fast-forward, không force.
+- Chặn trước push: secret scan staged + cả range (ghp_/BEGIN PRIVATE KEY/AKIA/sk-) ⇒ **SẠCH** · `.env` **không** được track ·
+  không có `initp/.plan/.gemini/.opencode/.chats/.review/node_modules/build` nào bị track.
+  Không commit: `syncode` (sửa local) + 4 file cá nhân chưa track (`checklist1.md`, `faq1.md`, `icon.png`, `query_customer.py`).
+- **CI**: run [`36107839795`](https://github.com/hoangsoft90/erpn_mobile1/actions/runs/36107839795) trên head `0755441` —
+  **success ~5,5 phút**, TẤT CẢ 10 bước xanh (Pub get · build_runner · **Analyze · Test** · Build debug APK · Upload).
+- **Artifact**: `erpn-chat-debug-apk` · **85.395.565 bytes (81,44 MB)** · hết hạn **2026-12-24**
+  (lần trước run `35901343267`: 85.327.721 bytes ⇒ **+67.844 bytes**, nhất quán với lượng code Flutter thêm: kênh file `.pdf` + thẻ tạo khách).
+- **BẰNG CHỨNG BINARY** (tải artifact → `unzip` → `app-debug.apk` 166.276.272 bytes → `unzip` tiếp →
+  soi `assets/flutter_assets/kernel_blob.bin` 82.864.112 bytes — build **debug** nên Dart nằm ở kernel, không phải `libapp.so`):
+
+| Marker | Số lần | Nghĩa |
+|---|---|---|
+| `HĐĐT` | 4 | nút chọn file hoá đơn có trong build |
+| `EINVOICE_PDF_NO_TEXT` | 2 | nhánh PDF scan → chỉ sang camera |
+| `pdf_base64` | 3 | body gửi file PDF |
+| `file_selector` | 87 | picker `.xml` + `.pdf` |
+| `Tạo khách mới` | 3 | nút M1 customer.create |
+| `applySettings` | 14 | fix 401 ở `ProposalCard` |
+| `OcrSlotsSource` | 9 | form slots dùng chung camera/file |
+
+- **Endpoint nhúng trong APK**: `https://erpn8788.loca.lt` (lấy từ GitHub repo var `COPILOT_BASE_URL` theo workflow,
+  không phải mặc định `127.0.0.1`) ⇒ APK cài lên máy là dùng được, không cần chạy server trên máy.
+- ⚠️ Token `GH_TOKEN` **đã từng đi qua chat** nhiều lần ⇒ vẫn cần user **revoke/rotate** (nhắc lại, không tự làm được).

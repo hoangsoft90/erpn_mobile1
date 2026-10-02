@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<HDon>
+  <DLHDon Id="HD-EDGE-2">
+    <TTChung>
+      <PBan>2.0.0</PBan>
+      <THDon>Hóa đơn giá trị gia tăng</THDon>
+      <KHMSHDon>1</KHMSHDon>
+      <KHHDon>C26XYZ</KHHDon>
+      <SHDon>0000777</SHDon>
+      <NLap>2026-09-23</NLap>
+      <DVTTe>VND</DVTTe>
+    </TTChung>
+    <NDHDon>
+      <NBan>
+        <Ten>Công ty Thép Miền Nam</Ten>
+        <MST>0300000001</MST>
+      </NBan>
+      <NMua>
+        <Ten>Minh Phát Cám &amp; VLXD</Ten>
+      </NMua>
+      <DSHHDVu>
+        <HHDVu>
+          <STT>1</STT>
+          <THHDVu>Thép D10</THHDVu>
+          <DVTinh>Kg</DVTinh>
+          <SLuong>1.234.567</SLuong>
+          <DGia>15,500</DGia>
+          <ThTien>19135788500</ThTien>
+        </HHDVu>
+      </DSHHDVu>
+      <TToan>
+        <TgTCThue>19135788500</TgTCThue>
+        <TgTTTBSo>19135788500</TgTTTBSo>
+      </TToan>
+    </NDHDon>
+  </DLHDon>
+</HDon>

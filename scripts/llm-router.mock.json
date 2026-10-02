@@ -1,0 +1,14 @@
+{
+  "_note": "Zero-quota plumbing config: the ONLY upstream is the local mock LLM (scripts/mock-llm.mjs, :8899). Deliberately omits `model` — an upstream without a model field is a WILDCARD in the router's model filter (llm-router.mjs candidates()), which is what lets it answer a request for any model name. In llm-router.config.json every real upstream declares its model, so a mock can never silently answer a production request. Use this to verify wiring (dsh → router → MCP → NLP → ERPNext) without spending provider quota.",
+  "port": 8900,
+  "host": "127.0.0.1",
+  "timeoutMs": 60000,
+  "cooldownMs": 30000,
+  "upstreams": [
+    {
+      "name": "mock",
+      "baseUrl": "http://127.0.0.1:8899/v1",
+      "_note": "no `model` → wildcard; the mock echoes the copilot payload back"
+    }
+  ]
+}

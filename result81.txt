@@ -1,0 +1,340 @@
+================================================================================
+result81.txt — next8 / PHASE 0 AUDIT (hard gate) — plan1_final_v2.md §32
+Ngày: 2026-09-29 · Người chạy: agent · Trạng thái: XONG, CHỜ OWNER DUYỆT
+Nguyên tắc: minimal change · REAL only · READ-ONLY (0 write · 0 /execute · 0 /ask)
+Không có dòng code sản phẩm nào bị sửa — xem §7 (git diff --stat rỗng).
+Báo cáo đầy đủ: .plan/next8/phase0-result.md
+================================================================================
+
+§0. NHỮNG GÌ ĐÃ LÀM (đúng phạm vi Phase 0, KHÔNG implement Collect)
+--------------------------------------------------------------------------------
+A. Đọc plan FINAL V2: .plan/next8/plan1_final_v2.md (36 mục; §32 = checklist Phase 0).
+B. Audit code hiện tại (handoff, capability registry, proposal path, Safety Gateway,
+   PaymentScreen, invoice READ API, thành phần tái dùng).
+C. Audit REAL ERPNext Payment Entry contract theo 9 mục §32 (2 probe GET-only).
+D. Đọc app tham chiếu ~/htdocs_apps/erpn_mobile (collect) — chỉ tham khảo, không copy.
+E. Viết báo cáo Phase 0 + verified PE mapping → .plan/next8/phase0-result.md.
+KHÔNG làm: Collect WRITE, CollectScreen, handoff contract, alias capability, sửa code.
+
+§1. MÔI TRƯỜNG ĐO
+--------------------------------------------------------------------------------
+$ grep -oE '^[A-Z0-9_]+' .env | tr '\n' ' '          # chỉ in TÊN biến, không in giá trị
+ERPNEXT_URL ERPNEXT_API_KEY ERPNEXT_API_SECRET GH_REPO_URL GH_TOKEN ASK_USER
+ASK_PASSWORD ASK_ALLOW_PUBLIC ZEN_API_KEY GEMINI_API_KEY MAC_LLM_API_KEY
+MAC_PROJECT_DIR AKI_MCP_URL AKI_P ... COPILOT_DEFAULT_CUSTOMER_GROUP
+COPILOT_DEFAULT_CUSTOMER_TYPE COPILOT_DEFAULT_TERRITORY COPILOT_COMPANY
+COPILOT_DEFAULT_WAREHOUSE DSH_CWD DSH_ROUTER_CREDENTIAL
+
+$ set -a; source .env; set +a
+$ curl -s -o /tmp/p0_ping.json -w '%{http_code}' -u "$ERPNEXT_API_KEY:$ERPNEXT_API_SECRET" \
+      "$ERPNEXT_URL/api/method/frappe.auth.get_logged_user" --max-time 25
+http=200
+user= Administrator
+
+$ (đọc /api/method/frappe.utils.change_log.get_versions — qua probe 2)
+versions: { frappe: '16.17.2', erpnext: '16.16.0', camvlxd: '0.1.0',
+            custom_app: '1.0.0-beta', feed_dealer: '0.0.1' }
+
+company=Minh Phát Cám & VLXD (env COPILOT_COMPANY khớp)
+Target host: *.ngrok-free.dev (giá trị đầy đủ chỉ nằm trong
+.plan/next8/phase0-pe-contract.json; KHÔNG chép ra file này).
+Lưu ý: site này đang được app tham chiếu dùng chung → có 7 custom field `camvlxd_*`
+trên Payment Entry ⇒ một phần PE/SI trên site là dữ liệu TEST của app kia.
+
+§2. PROBE 1 — PE meta / tài khoản / MoP / mẫu PE / hoá đơn mở  (GET-only)
+--------------------------------------------------------------------------------
+$ cd .plan/next8 && node phase0-pe-audit.mjs
+
+company=Minh Phát Cám & VLXD (env COPILOT_COMPANY khớp)
+
+=== 1. PE meta ===
+required: naming_series, payment_type, posting_date, company, paid_from,
+paid_from_account_currency, paid_to, paid_to_account_currency, paid_amount,
+source_exchange_rate, base_paid_amount, received_amount, target_exchange_rate,
+base_received_amount
+child tables: references→Payment Entry Reference, taxes→Advance Taxes and Charges,
+deductions→Payment Entry Deduction, tax_withholding_entries→Tax Withholding Entry
+
+=== 2. paid_from/paid_to thật (từ PE có sẵn trên site) ===
+Receive paid_from: [ '1310 - Phải thu khách hàng - MP' ]
+Receive paid_to  : [ '1110 - Tiền mặt - MP' ]
+Pay paid_from    : [ '1210 - ACB 110296868 - MP' ]
+Pay paid_to      : [ '2110 - Phải trả người bán - MP' ]
+
+=== 3. references / partial ===
+PE nhiều reference (>1): [ { name: 'ACC-PAY-2026-00771', refs: 2 } ]
+PE 0 reference (advance): []
+partial ví dụ:
+  { pe: 'ACC-PAY-2026-00771', invoice: 'ACC-SINV-2026-01182', allocated: 104000, outstanding: 190000 }
+  { pe: 'ACC-PAY-2026-00770', invoice: 'ACC-SINV-2026-01285', allocated: 15000,  outstanding: 84000 }
+  { pe: 'ACC-PAY-2026-00769', invoice: 'ACC-SINV-2026-01285', allocated: 11000,  outstanding: 99000 }
+  { pe: 'ACC-PAY-2026-00767', invoice: 'ACC-SINV-2026-01287', allocated: 120000, outstanding: 200000 }
+  { pe: 'ACC-PAY-2026-00766', invoice: 'ACC-SINV-2026-01285', allocated: 10000,  outstanding: 290000 }
+
+$ python3 (đọc phase0-pe-contract.json) — PE mẫu chi tiết:
+ ACC-PAY-2026-00773 d1 Receive Customer=Bùi Thị H mode=Cash
+   from=1310 - Phải thu khách hàng - MP to=1110 - Tiền mặt - MP paid=3040000 unalloc=0
+     ref: Sales Invoice ACC-SINV-2026-01290 total=3040000 outstanding(row)=0 allocated=3040000
+ ACC-PAY-2026-00771 d1 Receive Customer=P1G-INTEGRITY C1 mode=Cash
+   from=1310 to=1110 paid=154000 unalloc=0
+     ref: ACC-SINV-2026-01165 total=100000 outstanding(row)=50000  allocated=50000
+     ref: ACC-SINV-2026-01182 total=1438000 outstanding(row)=190000 allocated=104000   ← 2 hoá đơn / 1 phiếu
+ ACC-PAY-2026-00772 d1 Pay Supplier=Công ty Thép Miền Nam mode=Chuyển khoản
+   from=1210 - ACB 110296868 - MP to=2110 - Phải trả người bán - MP paid=600000
+
+=== 4. cash+bank trong 1 PE? ===
+child table của PE: Payment Entry Reference, Advance Taxes and Charges,
+Payment Entry Deduction, Tax Withholding Entry
+Payment Entry Reference có field kiểu Account: true
+→ KHÔNG có child table tài khoản ⇒ 1 PE = 1 paid_from + 1 paid_to ⇒ KHÔNG thể
+  biểu diễn "cash + bank trong cùng một phiếu". Muốn split phải tạo 2 Payment Entry.
+
+=== 5. Mode of Payment ===
+ - Bank Draft     | enabled: true | type: Bank | accounts: []
+ - Cash          | enabled: true | type: Cash | accounts: [{"company":"SANLOAN","default_account":"Cash - S"},
+                                                          {"company":"Minh Phát Cám & VLXD","default_account":"1110 - Tiền mặt - MP"}]
+ - Cheque        | enabled: true | type: Bank | accounts: []
+ - Chuyển khoản  | enabled: true | type: Cash | accounts: [{"company":"DEMO POC CO","default_account":"Tiền mặt - DPC"}]
+ - Credit Card   | enabled: true | type: Bank | accounts: []
+ - Wire Transfer | enabled: true | type: Bank | accounts: []
+→ Mode ngân hàng KHÔNG có account row cho company MP; `Chuyển khoản` còn bị khai
+  type = Cash ⇒ không thể là nguồn sự thật cho tài khoản tiền trên site này.
+
+=== 6/7. Account authority ===
+company: Minh Phát Cám & VLXD | cash: 1110 - Tiền mặt - MP | bank: 1210 - ACB 110296868 - MP
+AR: 1310 - Phải thu khách hàng - MP | AP: 2110 - Phải trả người bán - MP
+book_advance_separate: 0
+Cash-type accounts: [ '1110 - Tiền mặt - MP' ]
+Bank-type accounts: [ '1210 - ACB 110296868 - MP' ]
+
+=== 8. Sales Invoice (Collect source) ===
+{ "http": 200, "submitted_total": 419, "open_total": 310,
+  "open_by_customer": [ ["P1A-ACCEPT Customer",179], ["P1G-INTEGRITY C1",21],
+                        ["P1G-INTEGRITY C4",11], ["P1G-INTEGRITY C3",8],
+                        ["CUST-001",7], ["P1G-INTEGRITY C5",7], ["P1G-INTEGRITY C2",7],
+                        ["Khách smoke 2026-09-15-p1b-wf1-2",4] ],
+  "max_open_per_customer": 179,
+  "customers_with_gt_10_open": ["P1A-ACCEPT Customer (179)","P1G-INTEGRITY C1 (21)","P1G-INTEGRITY C4 (11)"],
+  "debit_to_values": [ "1310 - Phải thu khách hàng - MP" ],
+  "docstatus_1_rule_confirmed": true }
+wrote: .plan/next8/phase0-pe-contract.json
+
+§3. PROBE 2 — field ngày / reference fields / advance / drafts / versions (GET-only)
+--------------------------------------------------------------------------------
+$ cd .plan/next8 && node phase0-pe-audit-2.mjs
+
+has set_posting_time on PE: false
+posting/date fields: clearance_date(D), posting_date(D), reference_date(D),
+                     reconcile_on_advance_payment_date(C)
+→ PE KHÔNG có `set_posting_time` (khác PR/PI); posting_date đặt trực tiếp
+  (site có PE submit với posting_date khác ngày tạo).
+
+PE Reference account-type fields: [ { fieldname: 'account', fieldtype: 'Link',
+                                      reqd: 0, options: 'Account' } ]
+
+PE submitted total: 241 | by type: { Receive: 203, Pay: 38 }
+submitted with unallocated != 0: 54   (trong đó 44 ca on-account hoàn toàn: paid == unallocated)
+with difference != 0: 0               ← bất biến allocated + unallocated == paid
+PE drafts (docstatus 0) trên site: 17 → Counter({'Minh Phát Cám & VLXD': 16, 'SANLOAN': 1})
+
+PE mẫu on-account đã submit:
+ {'name':'ACC-PAY-2026-00719','paid':500000,'unallocated':500000,'posting_date':'2026-09-21'}
+ {'name':'ACC-PAY-2026-00498','paid':1200000,'unallocated':200000,'posting_date':'2026-09-17'}
+ {'name':'ACC-PAY-2026-00487','paid':12131000,'unallocated':12131000,'posting_date':'2026-09-17'}
+ {'name':'ACC-PAY-2026-00019','paid':50000000,'unallocated':50000000,'posting_date':'2026-09-13'}
+
+PE backdated samples (posting_date != creation day):
+ {'name':'ACC-PAY-2026-00719','posting_date':'2026-09-21','creation':'2026-09-22 15:26:51'}
+ {'name':'ACC-PAY-2026-00113','posting_date':'2026-09-22','creation':'2026-09-15 17:00:10'}
+
+money accounts in use (tổng hợp từ PE đã submit):
+ - Receive|1310 - Phải thu khách hàng - MP -> 1210 - ACB 110296868 - MP | Wire Transfer
+ - Pay|1210 - ACB 110296868 - MP -> 2110 - Phải trả người bán - MP | Wire Transfer
+ - Receive|Debtors - S -> Cash - S | null            (công ty khác — đa công ty)
+
+versions: { frappe: '16.17.2', erpnext: '16.16.0', camvlxd: '0.1.0',
+            custom_app: '1.0.0-beta', feed_dealer: '0.0.1' }
+wrote: .plan/next8/phase0-pe-contract-2.json
+
+§4. AUDIT CODE HIỆN TẠI (existing → reuse | missing | wrong)
+--------------------------------------------------------------------------------
+$ cd mcp-erpnext && wc -l src/skills/payment-write.mjs src/safety-gateway.mjs \
+      src/copilot-server.mjs src/dsh-gateway.mjs src/entity-resolution.mjs \
+      src/skills/sales.mjs src/idempotency.mjs capabilities.json
+  1295 src/skills/payment-write.mjs
+   883 src/safety-gateway.mjs
+  2341 src/copilot-server.mjs
+  1573 src/dsh-gateway.mjs
+   465 src/entity-resolution.mjs
+    42 src/skills/sales.mjs
+   310 src/idempotency.mjs
+  2105 capabilities.json
+
+$ grep -n "paid_from|paid_to|mode_of_payment|references|allocated_amount|payment_type" \
+      src/skills/payment-write.mjs
+  29: export const WRITE_DOCTYPE = "Payment Entry";
+  46: export const DIRECTION_SPEC = Object.freeze({   (receive/pay: payment_type, party_type,
+                                                      anchor_account_field, money_side)
+ 322: export function buildPaymentEntryData({...})     ← references: [ MỘT dòng duy nhất ]
+ 396: export async function resolvePaymentAccounts(mcp, {direction, invoice, mode})
+ 497: export async function listOpenPurchaseInvoices(mcp, supplierId)
+ 526: export async function reconcilePaymentEntry(mcp, commandId, {actionId})
+ 573: export async function verifyWrittenPayment(mcp, docName, {...})
+ 633: export async function listOpenDraftPaymentEntries(mcp, partyId)
+ 747: export async function buildPaymentProposal(skills, resolved, opts)
+
+  · buildPaymentEntryData (:322) — `references: [ { reference_doctype, reference_name,
+    total_amount, outstanding_amount, allocated_amount: paid } ]`  ⇒ 1 hoá đơn / 1 phiếu.
+  · buildPaymentProposal (:747) — "Default target: OLDEST open document (posting_date asc)"
+    rồi `sorted[0]`, và kẹp amount theo outstanding của chính hoá đơn đó
+    ⇒ trùng đúng hành vi FIFO/oldest mà plan §2.1(11)/§8.2 CẤM.
+  · resolvePaymentAccounts (:396) — anchor doc (SI.debit_to / PI.credit_to) +
+    MoP default account cho company, fallback "Cash-type đầu tiên" ⇒ nguy cơ ghi
+    ý định CHUYỂN KHOẢN vào tài khoản TIỀN MẶT (đo ở §2.5 probe 1).
+  · listOpenDraftPaymentEntries (:633) — filters: [["party","=",id],["docstatus","=","0"]]
+    ⇒ THIẾU lọc company (site đa công ty, tên party trùng giữa công ty).
+
+$ grep -n "listUnpaidInvoices" src/skills/sales.mjs && sed -n '26,42p' src/skills/sales.mjs
+export async function listUnpaidInvoices(mcp, customerId, knownIds) {
+  ...
+  const res = await mcp.callTool("erpnext_sales_invoice_list", { customer: customerId, limit: 100 });
+  const rows = (payload.data ?? []).filter((r) => Number(r.outstanding_amount) !== 0);
+→ limit 100, lọc outstanding ở client, KHÔNG company/docstatus/debit_to.
+
+$ grep -n "erpnext_sales_invoice_list" \
+      node_modules/@casys/mcp-erpnext/mcp-erpnext.mjs
+49102:    name: "erpnext_sales_invoice_list",
+        description: "List Sales Invoices. Filterable by customer, status, date range. Fields:
+          name, customer, posting_date, due_date, status, grand_total, outstanding_amount."
+        limit: input.limit ?? 20      ← field CỐ ĐỊNH (7 field), không có company/docstatus/debit_to
+→ Đối chiếu thực tế: site có khách 179 hoá đơn mở ⇒ limit 100 cắt im lặng ngay hôm nay.
+
+$ grep -rn "DSH_WRITE_HANDOFF|business_handoff|handoff_id" src/*.mjs
+src/dsh-optin.mjs:108: export const DSH_WRITE_HANDOFF_CAPABILITIES = new Set([ ...10 id... ]);
+src/dsh-optin.mjs:137: dshWriteHandoffFor(route) → capability id hoặc null
+src/dsh-gateway.mjs:517: { code: DSH_WRITE_HANDOFF_CODE, ... }
+→ Handoff đang có là handoff THEO ROUTE của chế độ AI. KHÔNG có handoff_id / screen /
+  prefill / slot states / ownership / stale ⇒ Business Handoff của plan = MISSING toàn bộ.
+
+$ grep -n "WRITE_EXECUTORS|runExecute|checkAmountPolicy" src/safety-gateway.mjs
+157: const WRITE_EXECUTORS = Object.freeze({...})       ← cửa duy nhất cho write
+488: export function checkAmountPolicy(cap, rawAmount)
+516: export async function runExecute({...})
+→ Thứ tự gate trong source (đọc trực tiếp): (1) capability contract + forbidden ⇒ 403;
+  (1a) executor phải tồn tại; (1b) AUTHORIZATION (P8) + PROPOSAL_PRINCIPAL_MISMATCH;
+  (2) proposal phải có entity.id; (3) amount policy ⇒ 400; (4) kill switch; ...
+  ⇒ TÁI DÙNG NGUYÊN, không cần sửa cho Collect.
+
+$ ls apps/mobile/lib/features/chat/presentation/screens/ apps/mobile/lib/features/chat/presentation/widgets/
+screens/: chat_screen.dart, read_list_screen.dart
+widgets/: ai_fallback_button.dart, chat_bubble.dart, customer_offer_card.dart,
+          entity_picker.dart, ocr_sheet.dart, ocr_slots_form.dart,
+          pipeline_progress.dart, proposal_card.dart, read_drilldown_button.dart
+
+$ grep -rn -i "payment_screen|PaymentScreen|CollectScreen|collect" apps/mobile/lib --include=*.dart
+(0 kết quả)
+→ KHÔNG có PaymentScreen/CollectScreen: CollectScreen là tính năng MỚI.
+  Tái dùng được: entity_picker (picker ≤10 + bailout), proposal_card (render kết quả +
+  banner fail-closed), pipeline_progress, settings service, dio client, Riverpod pattern.
+
+$ grep -n "draft_only|allow_submit|write_doctype|correlation_field|direction_policy" capabilities.json
+  947: "payment.create": { ... }        (WRITE/HIGH, entities.required [party, amount],
+       direction_policy (suy chiều từ master — không từ câu, không từ body),
+       amount_policy clamp_to_outstanding "refuse_not_clamp",
+       execution.write_doctype "Payment Entry", correlation_field "custom_ai_action_id",
+       idempotent true, verify_document true)
+→ TÁI DÙNG làm nguồn sự thật. Cần owner chốt cách đặt tên alias `payment.collect`
+  (plan §4) sao cho KHÔNG sinh hai policy song song.
+
+§5. APP THAM CHIẾU (~/htdocs_apps/erpn_mobile) — chỉ đọc, không copy
+--------------------------------------------------------------------------------
+$ wc -l camvlxd/camvlxd/services/payments.py camvlxd/camvlxd/gateway/erpnext.py \
+        app/lib/feature/payment/presentation/collect_screen.dart \
+        app/lib/feature/payment/application/collect_providers.dart
+   451 camvlxd/camvlxd/services/payments.py
+  2974 camvlxd/camvlxd/gateway/erpnext.py
+   446 app/lib/feature/payment/presentation/collect_screen.dart
+    89 app/lib/feature/payment/application/collect_providers.dart
+
+Pattern ĐÁNG lấy (ý tưởng, không phải code):
+ · require_payment_account(gw, account, mode) — validate TÀI KHOẢN khớp LOẠI phương thức;
+   chính họ đã ghi lại sự cố KI-09: "mode=cash + tài khoản ngân hàng trước đây trả 200 và
+   ghi tiền mặt vào tài khoản ngân hàng mà không ai thấy".
+ · _requested_allocations — mỗi dòng ≤ outstanding SỐNG, tổng ≤ số tiền thu, hoá đơn rời
+   khỏi list ⇒ INVOICE_NOT_FOUND (chống 2 máy trả cùng hoá đơn), chặn trùng hoá đơn.
+ · advance = amount − allocated ghi TƯỜNG MINH.
+
+KHÔNG được copy:
+ · _fifo_allocations — tự phân bổ hoá đơn CŨ NHẤT khi không có references (plan §2.1(11)/§8.2 cấm).
+ · Một `mode` cho cả giao dịch (họ cũng không làm được split — giới hạn cấu trúc PE, §2 probe 1).
+ · Chính sách submit theo phương thức của họ (cash ⇒ submit ngay; bank ⇒ nháp + cờ
+   camvlxd_transfer_state "chờ tiền về" + confirm_bank_transfer) — ghi nhận cho SalesScreen
+   tương lai (plan §13), KHÔNG đưa vào NEXT8.
+ · _full_invoice_allocations (trả đủ từng hoá đơn — luật riêng chiều trả NCC; plan §31).
+ · Sổ phụ mô phỏng (gw.reduce_invoice / memory gateway) — trên ERPNext thật, outstanding do
+   Payment Entry Reference quyết định.
+ · Hệ idempotency/audit riêng (Sync Log, camvlxd_*) — giữ hệ của repo mình.
+
+$ grep -rn "FIFO|oldest|allocat" app/lib --include=*.dart | head
+(app/lib không có allocation FIFO; FIFO nằm ở backend camvlxd/services/payments.py)
+$ grep -n "XÁC NHẬN|xác nhận|CheckboxListTile|SegmentedButton" \
+        app/lib/feature/payment/presentation/collect_screen.dart | head
+  31: String _mode = 'cash';
+ 111: final accounts = config.accountsFor(_mode);
+ 180: ...data.invoices.map((invoice) => CheckboxListTile(...))     ← tick từng hoá đơn
+ 197: child: TextField(...)                                      ← sửa số tiền từng dòng
+ 230: SegmentedButton<String>(...)                               ← chọn phương thức
+⇒ UX gần plan §8/§18 (chọn khách → tick hoá đơn → sửa số từng dòng → xác nhận); viết lại
+  theo design-system của mình, KHÔNG copy code.
+
+§6. VERIFIED PE MAPPING (kết luận để Phase 1 dùng)
+--------------------------------------------------------------------------------
+RECEIVE: payment_type="Receive", party_type="Customer"
+  paid_from = Sales Invoice.debit_to  → thực tế "1310 - Phải thu khách hàng - MP"
+  paid_to   = tài khoản tiền          → "1110 - Tiền mặt - MP" (cash) | "1210 - ACB ... - MP" (bank)
+  paid_amount = received_amount = tổng thu · source/target_exchange_rate = 1 (site VND)
+  references[] = 1..n dòng Sales Invoice (allocated_amount từng dòng)
+PAY: payment_type="Pay", party_type="Supplier"
+  paid_from = "1210 - ACB 110296868 - MP" · paid_to = Purchase Invoice.credit_to "2110 - ..."
+BẤT BIẾN ĐÃ ĐO: 0 < allocated ≤ outstanding SỐNG · Σ allocated + unallocated == paid
+  (difference_amount = 0 ở MỌI PE) · 1 PE = 1 tài khoản tiền ⇒ cash+bank = 2 PE.
+FIELD ĐỌC LẠI SAU GHI: name, docstatus, payment_type, party_type, party, company,
+  paid_from, paid_to, paid_amount, received_amount, unallocated_amount, difference_amount,
+  references[].{reference_doctype,reference_name,total_amount,outstanding_amount,allocated_amount},
+  mode_of_payment, reference_no, posting_date, custom_ai_action_id.
+
+§7. CHỨNG MINH KHÔNG ĐỤNG CODE SẢN PHẨM
+--------------------------------------------------------------------------------
+$ git status --short -- . ':!.agent_sessions'
+ M faq1.md
+ M todo1.md
+ M working.md            (3 file này đã bị sửa từ phiên TRƯỚC, không phải phiên này)
+?? apps/mobile/test/_probe_b0_voice_autosend.dart   (rác cũ)
+?? apps/mobile/test/_probe_review_test.dart         (rác cũ)
+?? chat-copilot-test-result.md / chat-copilot-test.md / result78.txt / todo-draft.md (cũ)
+
+$ git diff --stat -- apps mcp-erpnext nlp_service src scripts openspec
+(rỗng)
+→ KHÔNG file sản phẩm nào bị sửa trong phiên Phase 0.
+
+$ git check-ignore -v .plan/next8/phase0-result.md
+.gitignore:12:.plan   .plan/next8/phase0-result.md
+→ mọi artifact Phase 0 (report + probe + JSON) nằm trong .plan/ (gitignored) ⇒ không lọt commit.
+
+§8. KẾT LUẬN PHASE 0
+--------------------------------------------------------------------------------
+· REAL PE contract: ĐÃ XÁC MINH đủ 9 mục §32, có bảng mapping chốt bằng dữ liệu thật
+  (241 PE submit, 54 PE có unallocated, 1 PE 2 hoá đơn, 8 ca partial).
+· Điểm BẤT KHẢ THI cần owner quyết (§6.1 của report): cash+bank trong 1 PE = KHÔNG;
+  đề xuất NEXT8 = 1 phương thức/lần thu; split = backlog cần hợp đồng transaction-group.
+· Điểm RỦI RO đã đo được (§6.2): mode ngân hàng không có account row cho MP + code
+  fallback về tài khoản cash ⇒ phải sửa/từ chối ở Phase 1.
+· Code hiện có: tái dùng được xương sống (contract, gateway, idempotency, verify,
+  entity invariants, widget Flutter); 4 chỗ WRONG so với plan: oldest-first target,
+  1 reference/1 mode trong proposal, READ hoá đơn (field cố định + limit 100 + thiếu
+  company/docstatus), lookup nháp thiếu company.
+· Business Handoff + CollectScreen: MISSING (chưa có gì) ⇒ là code MỚI ở Phase 1–2.
+
+ĐIỀU KIỆN MỞ PHASE 1: owner chốt §6.1 (bắt buộc) + §6.2/§6.3/§6.4/§6.5.
+KHÔNG implement Collect WRITE / CollectScreen trước khi Phase 0 được duyệt.
+================================================================================

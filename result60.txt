@@ -1,0 +1,108 @@
+========================================================================
+RESULT 60 — PUSH ĐỢT DSH RUNTIME + CI BUILD APK (RUN #22) + VERIFY BINARY APK
+Timestamp: 2026-09-19 10:05 (giờ shell, UTC)
+Chỉ đạo user: "push code lên gh để build apk nhé"
+Phạm vi: KHÔNG viết code mới — commit/push đợt đã duyệt, kích CI, verify artifact
+thật, rồi đồng bộ docs. KHÔNG tạo/submit/cancel Payment Entry trên ERPNext.
+========================================================================
+
+== 1. TRƯỚC KHI PUSH — cây làm việc + 3 commit của đợt ==
+
+$ git status --porcelain=v1
+?? .gemini/
+?? .opencode/
+?? .review/
+?? initp
+   (chỉ còn rác local đã biết; không file code/docs nào chưa commit)
+
+$ git log --oneline -3
+7476051 docs: record the manual APK build (run #22) and why the push alone built nothing
+03338ae docs: the DSH runtime truth — npx is the way in, /tmp is not the default
+dc60a4e fix(dsh): resolve the agent runtime instead of hardcoding one machine
+
+   dc60a4e = vùng AN TOÀN (trust boundary + ràng buộc cứng: resolver runtime của
+   chế độ AI) — user đã duyệt trong chat sau khi agent trình bày file list + message.
+
+== 2. ĐIỀU KIỆN KÍCH HOẠT CI — phát hiện TRƯỚC khi push (không đoán) ==
+
+Workflow `.github/workflows/android-debug-apk.yml` lọc `paths: apps/mobile/**`.
+Đợt này chỉ sửa backend (`mcp-erpnext/src/`, `scripts/`) + docs ⇒ **push KHÔNG tự build**.
+⇒ Phải kích tay:
+
+    gh workflow run android-debug-apk.yml --ref change/flutter-chat-mvp
+
+   Đây là lý do THẬT khiến một `git push` không sinh APK mới (dễ bị tưởng là CI hỏng).
+
+== 3. CI RUN #22 — TRẠNG THÁI THẬT (đọc lại bằng gh, không chỉ tin dấu xanh) ==
+
+$ gh run view 35435259669 --json databaseId,status,conclusion,headSha -q '...'
+id=35435259669 status=completed conclusion=success head=03338aebd20782f46d0adf67d4cbac6d19cbe930
+
+   ⇒ success trên **head `03338ae`** (commit docs cuối của đợt).
+   artifact `erpn-chat-debug-apk` — zip **84.222.402 bytes** (đo lúc tải về),
+   hạn lưu 2026-12-17.
+
+== 4. VERIFY BINARY APK — CHẠY LẠI trong phiên ghi file này (bằng chứng tươi) ==
+
+$ ls -l /tmp/apk60/erpn-chat-debug-apk/app-debug.apk
+-rw-r--r-- 1 kythuat_hoangweb kythuat_hoangweb 165117508 Sep 19 09:46 app-debug.apk
+
+$ sha256sum /tmp/apk60/erpn-chat-debug-apk/app-debug.apk
+9da9a05f63b360b34ca0b161cf3ebb9d79407b5f282cc97f5d886cef48c0574f
+
+   So với run #21: `app-debug.apk` **165.117.508 bytes** — BẰNG ĐÚNG cỡ bản run #21
+   (không file Flutter nào đổi trong đợt này) ⇒ APK run #22 là bản build lại y hệt
+   về nội dung app, khác nhau ở hash của zip (timestamp build).
+
+$ iconv -f UTF-16LE -t UTF-8 /tmp/x60/AndroidManifest.xml | tr -d '\0' | grep -c 'Nghiệp Vụ AI'
+1
+   ⇒ label app **"Nghiệp Vụ AI"** nằm trong `AndroidManifest.xml` (string pool UTF-16LE).
+
+$ unzip -o -q app-debug.apk assets/flutter_assets/kernel_blob.bin   # debug ⇒ Dart ở kernel, KHÔNG phải libapp.so
+$ grep -a -c <marker> assets/flutter_assets/kernel_blob.bin
+Phân tích bằng AI    3
+Chat thường          2
+/dsh/ask             4
+dshAsk               3
+ttsEnabled          14
+voiceAutoSend       16
+erpn8788.loca.lt     3
+
+   ⇒ APK thật CHỨA: chế độ AI (DSH), TTS, auto-send sau STT, và endpoint CI nhúng.
+
+== 5. BÀI HỌC CỦA CHÍNH PHIÊN NÀY (đã đóng gói: skill `erpn-verify-first` + LESSONS_LEARNED)
+
+1. **grep trong gói NÉN là vô nghĩa.** Hai lần dò đầu ra 0 hit oan vì
+   (a) tìm trên zip ĐÃ NÉN (nội dung bị deflate), (b) `strings -el` trên SAI file.
+   Đúng: `unzip` ra rồi tìm trên file đã giải nén; AXML string pool là **UTF-16LE**
+   (đọc bằng `iconv -f UTF-16LE | tr -d '\0'`).
+2. **"Success" trên GitHub KHÔNG chứng minh artifact chứa code mới.** Phải tải về,
+   băm `sha256`, và grep marker code trong binary.
+3. **`paths` filter = push có thể không build gì.** Nói rõ điều này TRƯỚC khi để
+   user tưởng CI hỏng; kích tay bằng `gh workflow run ...`.
+
+== 6. CÒN LẠI / VIỆC NGƯỜI THẬT (không phải agent)
+
+- Cài **APK run #22** + smoke: mic · TTS · auto-send OFF/ON · và **chế độ
+  "Phân tích bằng AI"** (agent đã verify đường HTTP thật nhưng **CHƯA** verify UI
+  trên thiết bị).
+- **Bật lại `lt` trên Mac** — `https://llm9000.loca.lt/v1/models` đang trả
+  **503 Tunnel Unavailable** ⇒ mở lại được: DSH READ qua topology thật, và
+  `npm run dsh:check` **trên chính Mac** (xác nhận `source=npx-pinned`;
+  agent không truy cập được máy đó).
+- SUBMIT phiếu thu thật (chờ user quyết) · rotate key ERPNext · audio 150 câu ·
+  review `ai-rules.md` · duyệt app icon.
+
+== 7. TÀI LIỆU ĐÃ ĐỒNG BỘ TRONG CÙNG LƯỢT ==
+
+- `.project/` (kiến thức tĩnh, KHÔNG chứa progress): architecture (route /dsh/*,
+  module dsh-gateway, nhánh AI trong data flow) · patterns (resolver in nguồn thắng,
+  một chỗ quyết định spawn, guard ref.mounted) · integrations (run #22, dispatch tay,
+  cách verify APK, DSH_MODE, drift model) · modules/chat (chế độ AI + 2 endpoint mới)
+  · modules/copilot-backend (dsh-gateway + endpoint + dsh:check) · state-routing
+  (mode selector là state cục bộ) · design-system (sửa đoạn bị lặp + SegmentedButton)
+  · openspec.md + overview.md + README.md (trạng thái HEAD `7476051`, suite mới).
+- Root: checklist.md + next.md (gỡ marker "CHỜ DUYỆT COMMIT" đã lỗi thời của đợt
+  runtime) · faq.md (§6.12 push-không-build-APK, §6.13 chế độ AI cần gì) ·
+  openspec/changes/flutter-chat-mvp/tasks.md (§6.17–6.20) · working.md · handoff.
+========================================================================

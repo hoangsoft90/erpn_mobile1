@@ -1,0 +1,136 @@
+========================================================================
+RESULT 29 — PHASE 9 (PHẦN AN TOÀN): EXPIRY + RE-VALIDATE + KHOÁ Ý ĐỊNH PENDING
+Timestamp: 2026-09-16 06:35 (giờ máy shell, UTC+0)
+Phạm vi: CHỈ phần an toàn theo .plan/phases/phase-09-proposal-state-machine.md.
+KHÔNG submit/cancel/delete, KHÔNG ghi ERPNext thật trong phiên này.
+Nguồn sự thật: wiring xác nhận bằng grep trên file thật + test chạy thật.
+========================================================================
+
+== 1. BỐI CẢNH PHIÊN ==
+Tiếp tục phiên Phase 9 bắt đầu trước giờ nghỉ (đã code module + wiring + 1 test fail
+do drift). Việc đầu phiên: sửa test đang fail, rồi hoàn thiện test + falsification
++ docs + result/handoff.
+
+== 2. TEST FAIL ĐẦU PHIÊN — NGUYÊN NHÂN THẬT ==
+`node --test test/proposal-freshness.test.mjs` fail 1 case:
+  "drift: the debt changed after the proposal was built"
+  expected: problems.length === 1
+  actual:   problems.length === 2
+Truy nguyên bằng đọc code `detectDrift()` (proposal-freshness.mjs): case test đưa
+amount 500.000 > live outstanding 300.000 ⇒ trả về ĐÚNG 2 problems:
+  (a) outstanding thay đổi (đúng thiết kế re-validate)
+  (b) amount không còn vừa nợ live (đúng thiết kế fail-closed, KHÔNG clamp im lặng)
+⇒ LỖI NẰM Ở KỲ VỌNG TEST tôi viết ở phiên trước, KHÔNG phải code production.
+Fix: test nay khẳng định problems chứa CẢ 2 codes {OUTSTANDING_CHANGED,
+AMOUNT_EXCEEDS_LIVE} — chặt hơn bản cũ (1 → 2 assertion).
+
+== 3. WIRING PHASE 9 XÁC NHẬN TRÊN FILE THẬT (grep, không suy đoán) ==
+  http-ask.mjs:37    import { assertFresh } from "./proposal-freshness.mjs";
+  http-ask.mjs:217   const freshness = assertFresh(proposal);        // TTL gate
+  http-ask.mjs:233   intentKey: `${proposal.entity.id}|${proposal.params?.invoice ?? ""}`
+  http-ask.mjs:330   if (err?.code === "PROPOSAL_STALE") {            // 409 mapping
+  payment-write.mjs:23  import { detectDrift } from "../proposal-freshness.mjs";
+  payment-write.mjs:387 const drift = detectDrift(proposal, {...});
+  payment-write.mjs:396 throw { code: "PROPOSAL_STALE", problems: drift };
+  idempotency.mjs:139-161  intent_key chặn ý định trùng đang PENDING trong begin()
+Thứ tự an toàn trong /execute (mục đích thiết kế, đã verify bằng test HTTP):
+  assertFresh (409 EXPIRED, TRƯỚC store.begin() ⇒ không chiếm command_id)
+  → store.begin() (chặn intent PENDING trùng ⇒ 409)
+  → executePaymentProposal (detectDrift ⇒ 409 STALE, TRƯỚC mọi lệnh write)
+
+== 4. TEST MỚI + FALSIFICATION ==
+Node (mcp-erpnext/test/proposal-freshness.test.mjs — 4 case):
+  • fresh: tuổi < TTL ⇒ không throw
+  • expired: tuổi > TTL ⇒ throw PROPOSAL_EXPIRED
+  • missing created_at ⇒ throw (proposal cũ giai đoạn trước không được coi là tươi)
+  • drift (đã sửa ở §2): 2 problems codes khớp thiết kế
+Node (test/http-execute.test.mjs — 3 case HTTP):
+  • proposal quá hạn → 409 PROPOSAL_EXPIRED và store KHÔNG có entry (không chiếm id)
+  • snapshot lệch dữ liệu sống → 409 PROPOSAL_STALE + problems, không ghi
+  • intent trùng PENDING → 409 IDEMPOTENCY_INTENT_IN_FLIGHT; intent khác số tiền
+    (fingerprint khác) ⇒ là intent RIÊNG (2 lần bấm cùng khách nhưng tiền khác nhau
+    = 2 intent, không chặn nhầm)
+Dart (apps/mobile/test/proposal_card_test.dart — 1 case):
+  • `created_at` sống qua toJson/fromJson (khôi phục history) — nếu mất, proposal
+    thật sẽ bị coi "missing created_at" và luôn 409 sau restart.
+Falsification từng fix (gỡ rồi chạy lại, khôi phục sau):
+  • gỡ assertFresh khỏi /execute → case expired nhận 200 thay vì 409 ⇒ FAIL đúng chỗ.
+  • gỡ detectDrift khỏi executor → case stale nhận 200 ⇒ FAIL đúng chỗ.
+  • gỡ intentKey trong begin() → case pending-trùng nhận 200 ⇒ FAIL đúng chỗ.
+Lưu ý phiên trước (result29 draft): 2 lần falsify đầu "hụt" đã được làm lại đúng cách
+— đã ghi bài học vào skill erpn-verify-first (bảng result27).
+
+== 5. SUITE CUỐI (lệnh + output thật) ==
+  PYTHONPATH=src python3 -m unittest discover -s tests   → Ran 60 tests — OK
+  node --test (mcp-erpnext/)                             → ℹ tests 112 · pass 112 · fail 0
+  flutter test (apps/mobile/)                            → 00:04 +28: All tests passed!
+  flutter analyze                                        → No issues found! (ran in 16.5s)
+So với đầu phiên: Node 111→112 (test drift sửa assertion), Flutter 27→28
+(+ created_at restore), Python giữ 60.
+
+== 6. COMMIT ĐANG CHỜ USER DUYỆT (vùng tiền — AI không tự commit) ==
+Ba cụm độc lập, đề xuất 3 commit:
+  (a) feat: phase 7 stage B — first real ERPNext write behind human confirm
+      (reconcile-by-reference, fail-closed write gate, idempotency store)
+      — payment-write.mjs, client.mjs, http-ask.mjs, idempotency.mjs,
+        mock-server.mjs, readonly-guard.mjs, 4 test file + account-list-guard.test.mjs,
+        result25/26/27.txt
+  (b) fix: stable money/customer identity — numeral NAME must not merge with digits;
+      bare kinship title never matches a customer (faq.md + result28.txt + tests)
+      — src/vietnamese_nlp/money.py, tests/test_money.py,
+        copilot-server.mjs, customer-resolve.test.mjs, faq.md, result28.txt
+  (c) feat: phase 9 safety — proposal expiry, re-validation, in-flight intent lock
+      — proposal-freshness.mjs, action-proposal.mjs, idempotency.mjs,
+        payment-write.mjs, http-ask.mjs, chat_models.dart, proposal_card.dart,
+        test files, result29.txt, docs
+Không commit: `initp` (script rác ngoài repo), `.gemini/`, `.opencode/`, `.plan/`
+(git-ignored), handoff file (chọn khi commit docs).
+
+== 7. ĐỒNG BỘ DOCS (đã làm trong phiên) ==
+checklist.md (+ mục Phase 9 result29) · next.md (bảng phase row 8/9 + mục "Chờ user
+duyệt commit" + "Khoảng trống Phase 7") · working.md (+ nhật ký Phase 9) ·
+features.md (cập nhật trạng thái Phase 9).
+
+== 8. (i) XONG — (ii) CÒN THIẾU — (iii) CHỜ USER ==
+(i) Xong: TTL 10 phút + 409 EXPIRED trước store.begin() · detectDrift → 409 STALE
+    kèm problems (không clamp im lặng) · intentKey chặn ý định PENDING trùng ·
+    created_at sống qua Dart restore · 8 test mới, falsify đủ.
+(ii) Còn thiếu (nâng cao, chưa làm): saga/undo-compensation (undo ≠ delete document);
+    Flutter card hiển thị lý do PROPOSAL_STALE chi tiết (hiện text chung);
+    proposal vẫn dùng snapshot trong object — chưa persist snapshot ra store.
+(iii) Chờ user: duyệt 3 commit (a)(b)(c) · quyết khoảng trống Phase 7 (nối
+    record_customer_payment vào router hay gộp Phase 9 UI) · SUBMIT 2 phiếu nháp
+    demo ACC-PAY-2026-00114/00115 hay xoá · thought_signature live (cơ hội, không ép).
+
+== 10. ADDENDUM — REVIEW VÒNG SAU KHI VIẾT result29 (2026-09-16 07:1x) ==
+
+Review đọc lại code thật tìm thấy 2 vấn đề, đã xử lý:
+
+F1 — CLAIM DOCS SAI SO VỚI CODE (đã đính chính ở §1 dòng intentKey + docs):
+  result29 bản đầu + working.md + checklist.md ghi intentKey
+  `(kind|customer|amount|invoice)` và "fingerprint khác số tiền ⇒ intent riêng".
+  Code thật (http-ask.mjs:233): `${entity.id}|${invoice}` — KHOÁ (customer, invoice),
+  KHÔNG gồm tiền; amount nằm trong fingerprint nhưng fingerprint KHÔNG dùng cho
+  intentKey. Hành vi code là ĐÚNG spec phase-09; sai nằm ở mô tả. Đã sửa working.md,
+  checklist.md. Bài học: mô tả hành vi trong docs phải grep đúng dòng code, không
+  suy diễn từ tên biến.
+
+F2 — ZOMBIE PENDING KHOÁ INTENT VĨNH VIỄN + KHÔNG CÓ ĐƯỜNG CỨU (đã vá một nửa,
+  một nửa chờ quyết): nhánh afterWrite 503 giữ record PENDING (thiết kế đúng —
+  không được đánh FAILED vì ERPNext có thể đã ghi). NHƯNG nếu user bỏ thẻ cũ,
+  tạo đề xuất MỚI cùng (customer, invoice): 409 IDEMPOTENCY_INTENT_IN_FLIGHT vĩnh
+  viễn, message bảo "đợi hoặc huỷ" trong khi KHÔNG có route huỷ nào. Đã vá:
+  409 nay trả `clash_command_id` (structured) để client resume ĐÚNG lệnh đang
+  khoá (app ghim command_id theo card nên CÓ THỂ retry lệnh đó). Chưa có:
+  route /execute/cancel (huỷ PENDING khi chắc chắn chưa ghi — chỉ an toàn sau
+  khi reconcile xác nhận 0 chứng từ; quyết định khi user duyệt commit).
+
+F2-fix falsify: ĐÃ LÀM (lần đầu ghi "không cần" là SAI): rename tạm nhánh code
+  (`IDEMPOTENCY_INTENT_IN_FLIGHT_DISABLED`) → test intent-in-flight FAIL đúng
+  assertion `body.code` (expected `IDEMPOTENCY_INTENT_IN_FLIGHT`) → khôi phục →
+  http-execute 11/11, full Node 112/112 pass.
+
+== 9. RÀNG BUỘC ĐÃ GIỮ ==
+Không gọi erpnext_doc_submit/cancel/delete · không ghi ERPNext thật trong phiên này ·
+mock trung thực (không dedupe giả) · fail-closed mọi nhánh · không commit vùng tiền ·
+secret scan CLEAN (không in giá trị key nào).

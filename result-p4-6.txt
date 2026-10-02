@@ -1,0 +1,93 @@
+# P4-6-result — Hôm nay | Hôm qua (delta tuyệt đối) — Trụ D, mảnh cuối
+
+**Spec:** `.plan/plan4_final.md` §6 (delta tuyệt đối, không %) + §3.4 (công nợ = hiện tại) · **Depends:** P4-1→P4-5 · **Cấm đã đối chiếu:** `phases3/README.md` (không nút ghi từ drawer), plan4 §5.3 (không submit/xoá nháp từ drawer)
+
+## 0. §0 — đo TRƯỚC khi code (verify-first, 2026-09-21)
+
+| # | Đo được | Hệ quả thiết kế |
+|---|---------|-----------------|
+| 1 | Route `GET\|POST /read/daily-summary` **đã nhận `date`** từ P4-2 (`?date=YYYY-MM-DD`, mặc định `vnToday()`) | P4-6 **KHÔNG cần sửa server** — chỉ thiếu phía client. Xác nhận bằng đọc route, không suy đoán |
+| 2 | `CopilotApiClient.readDailySummary({date})` đã có tham số từ P4-2 | Client cũng đã sẵn; việc thật là **state + UI** |
+| 3 | `DrillIntent` **chưa có `date`**; `DrillListScreen._load()` chỉ gọi `readDrill(intent.id)` | Khoảng trống thật: drill "quá hạn" từ view Hôm qua vẫn đọc hiện tại ⇒ phải truyền ngày xuống |
+| 4 | Server dùng `Intl.DateTimeFormat("en-CA", {timeZone:"Asia/Ho_Chi_Minh"})` cho `vnToday()` | Client tính "hôm qua" bằng **đúng cùng cách** — nếu lấy ngày máy, máy lệch múi giờ ⇒ xin sai ngày |
+| 5 | Màn re-mount vào cache tươi (TTL 45s) ⇒ `initState` chỉ gọi 1 lần | Nếu fetch 2 ngày ngay từ đầu, lần re-mount thứ hai **mất hôm qua trong im lặng** (bắt được bằng test — xem §3) |
+
+## 1. Thiết kế đã chốt
+
+| Quyết định | Lý do |
+|---|---|
+| **Selector = `SegmentedButton`** (Hôm nay / Hôm qua), mặc định Hôm nay | Ít bề mặt nhất đủ việc; `viewDay` là state cục bộ, không đụng router |
+| **Delta CHỈ cho 2 chỉ số** `sales_invoices.amount` + `receipts.total` | §6 nói đúng hai chỉ số này; các block khác (SO/NH/nháp) không có "hôm qua" đáng so |
+| **Delta = hiệu TUYỆT ĐỐI** (`±Xđ`) + định tính (tăng/giảm/không đổi), **KHÔNG %** | §6 khóa: phần trăm dễ gây hiểu sai khi mẫu số nhỏ (một ngày 0đ ⇒ chia 0 hoặc "∞%") |
+| **Delta chỉ hiện khi đủ 2 ngày VÀ cả hai không partial** | §10: partial + số suy ra = hai lần nói dối; thiếu một vế ⇒ không hiện delta, không bịa 0 |
+| **Công nợ (receivables) LUÔN hiện tại**, kể cả khi xem Hôm qua | §3.4: công nợ không có khái niệm "của hôm qua" trong ERPNext (là số dư hiện tại) — bày số cũ ra là bịa |
+| **Chú thích UI khi đang xem Hôm qua** | Để người dùng không đọc số hiện tại thành số của ngày đang chọn |
+| **Drill giữ `date: null` khi xem Hôm nay** | Để **server** quyết định "hôm nay của tiệm" — không gửi ngày tính từ đồng hồ máy |
+| **Đọc Hôm qua LƯỜI** (chỉ khi user chọn) | Xem §3 — vừa tránh +1 lượt ERP mỗi lần mở, vừa sửa đúng bug re-mount |
+
+## 2. Thay đổi
+
+**Flutter** (`apps/mobile/`)
+
+| File | Thay đổi |
+|---|---|
+| `features/ops/presentation/screens/daily_summary_screen.dart` | `_viewDay` (null=Hôm nay) · `_yesterday` + `_yesterdayLoading` · `SegmentedButton` · `_deltaLine()` (tuyệt đối, không %) · tiêu đề 2 thẻ đổi theo view · note công nợ là hiện tại · tap chỉ số truyền ngày đang xem |
+| `features/ops/data/drill_models.dart` | `DrillIntent` thêm `date` (+ serialize vào query `date=`) |
+| `features/ops/presentation/screens/drill_list_screen.dart` | `_load()` **truyền `intent.date`** xuống client (bug thật — §3.5) |
+
+**Server:** KHÔNG đổi (đã có `date` từ P4-2 — xác nhận bằng đọc code ở §0, không đoán).
+
+## 3. Phát hiện thật trong phiên (4 cái, đều đã sửa)
+
+**3.1 — Xoá mutation sót do kill harness giữa chừng (P4-5).**
+Lần chạy falsify P4-6 đầu tiên, tôi huỷ harness khi nó đang chạy ⇒ **mutation P4-5 còn nguyên trên đĩa** (`_RowTile` quay lại hiện `0đ` thay vì `—`). Harness chỉ khôi phục trong luồng bình thường, không bắt SIGINT/SIGTERM.
+→ **Đã khôi phục file** + **thêm restore-on-signal vào `scripts/falsify/lib/harness.mjs`** (đăng ký `process.on('SIGINT'/'SIGTERM')` khôi phục mọi file đang giữ mutation). Đây là lỗi hạ tầng test, không phải lỗi sản phẩm — nhưng nếu không phát hiện thì lần commit sau sẽ mang theo code đã bị phá.
+
+**3.2 — Case falsify trỏ SAI Dart suite.**
+3 ca P4-6 khai `dartSuite: "drill"` trong khi test nằm ở `daily_summary_test.dart`. Harness báo **PROBLEM "no test ran"** — tức nó **không** cho RED giả (đúng thiết kế: không có test chạy thì không tính là đã chứng minh). Sửa: thêm mapping suite `summary` trong case. *Bài học: harness im lặng cho qua thì mới nguy; ở đây nó tự tố giác.*
+→ Đã kiểm: sau khi sửa, **20/20 RED, 0 PROBLEM**.
+
+**3.3 — Test yếu lộ ra qua falsify (drill theo ngày).**
+Ca "drill đọc đúng ngày đang chọn" ban đầu **vẫn PASS khi tôi bỏ `date` khỏi request** ⇒ assert của tôi chỉ kiểm "có request xảy ra", không kiểm **ngày cụ thể**. Siết lại: assert đúng `drillDates == ['2026-09-20']`. *Bài học nhóm 21 (harness phải đỏ được) đã bắt được chính test của tôi.*
+
+**3.4 — Bug thật: delta biến mất im lặng khi re-mount.**
+Test phát hiện: màn dựng lại với cache tươi ⇒ `initState` chỉ chạy 1 lần ⇒ `_yesterday` không bao giờ được nạp ⇒ xem Hôm qua ra delta rỗng, không lỗi, không cảnh báo.
+→ Sửa bằng **đọc lười**: chỉ fetch hôm qua khi user thật sự chọn. Phụ lợi: mỗi lần mở màn trở lại **1 lượt ERP** (như trước P4-6, không +1).
+
+**3.5 — Bug thật: `DrillIntent.date` có nhưng không ai truyền.**
+Tôi thêm field vào model rồi quên nối ở `DrillListScreen._load()` ⇒ drill từ Hôm qua vẫn đọc hôm nay. Bắt được vì test drill-day đỏ sau khi tôi siết assert (§3.3).
+→ Sửa: truyền `intent.date` xuống `client.readDrill`.
+
+## 4. Bằng chứng
+
+| Hạng mục | Kết quả thật |
+|---|---|
+| Flutter test | **248/248** (`+6` so với 242) |
+| `flutter analyze` | **0** |
+| Node suite | **523 — 521 pass, 2 fail (dsh từ B0)**, không đổi (không đụng server) |
+| Falsify P4-6 | **20/20 RED, 0 PROBLEM** (3 ca mới: bỏ delta-khi-partial · hiện delta khi thiếu 1 vế · drill bỏ ngày) |
+| Widget test mới | delta tuyệt đối **không chứa `%`** · không hiện delta khi partial · công nợ giống nhau ở cả 2 view · không gọi `/execute` |
+
+**Vòng lặp THẬT (read-only, site `Minh Phát Cám & VLXD`, 2026-09-21):**
+
+| Kiểm | Kết quả |
+|---|---|
+| `date=2026-09-21` (hôm nay) | HTTP 200, `partial=false` |
+| `date=2026-09-20` (hôm qua) | HTTP 200, `partial=false` |
+| **Receivables 2 ngày** | **488.935.625 / 4.700.000 — GIỐNG HỆT NHAU** ✅ đúng §3.4 (công nợ là số hiện tại, không phụ thuộc ngày) |
+| Sales invoices hôm nay / hôm qua | 4.063.547.840 / 21.100.506 — delta ± tuyệt đối tính đúng |
+| Receipts hôm nay / hôm qua | 320.000 / 320.000 |
+| Cross-check từng ngày bằng query trực tiếp ERPNext | **ALL MATCH** sau khi probe của tôi thêm lọc company |
+
+**Một lần nữa probe CỦA TÔI sai trước code:** lần chạy đầu lệch lớn (5.000.000.000 vs 320.000). Nguyên nhân: probe thiếu lọc company nên gom 10 phiếu thu của `DEMO POC CO` (site có 3 công ty). Route đã scope đúng — **probe sai, không phải server sai**. Đây là lần thứ 3 trong dự án (P4-4, P4-6, và issue1) ⇒ đã ghi vào skill. Đáng chú ý: đúng cái lỗi company-scope mà tôi vừa vá ở P4-5 (`appDrafts`) — nếu không vá thì con số 5 tỷ đó đã vào màn thật.
+
+## 5. Không làm (đúng ranh giới)
+
+- **Không** thêm % hay sparkline/chart — §6 khóa tuyệt đối, và delta của 1 ngày không đủ để vẽ xu hướng.
+- **Không** cho công nợ "của hôm qua" — §3.4: ERPNext không lưu số dư theo ngày ở đường đọc này; muốn có phải thêm truy vấn ledger riêng = phạm vi mới.
+- **Không** đụng `/execute`, không nút ghi nào từ drawer (test assert 7 cụm hành động cấm).
+- **Không** sửa server khi chưa cần (§0 đo được là không cần).
+
+## 6. Trạng thái
+
+Kỹ thuật **XONG**, test/lint/vòng-thật đều xanh. **CHƯA commit** — hàng chờ P4-1→P4-6 là vùng **đọc SỐ TIỀN** (Ponytail nhóm 2) ⇒ **AI không tự ký duyệt**, chờ user duyệt. Máy hiện **không có git** (`fatal: not a git repository`) nên chưa commit được kể cả khi được duyệt.

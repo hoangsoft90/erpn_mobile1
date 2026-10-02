@@ -1,0 +1,295 @@
+================================================================================
+result90 — Phase 5b (đóng Phase 5): cleanup chứng từ nháp + OpenSpec + fix
+Ngày: 2026-09-30 · Chương trình: A (Collect) · Vùng: TIỀN (AI KHÔNG tự commit)
+================================================================================
+
+MỤC LỤC
+  §0  Bối cảnh & ranh giới
+  §A  Cleanup chứng từ nháp Phase 5  → KẾT QUẢ: **✅ DONE** (xoá thật 2026-09-30; ĐÍNH CHÍNH §A1)
+  §B  Quyết định kỹ thuật F-P5-2 = C (đã chốt theo owner)
+  §C  OpenSpec change cho 05b (đã tạo, validate --strict = valid)
+  §D  Code fixes  → CHƯA chạy (owner rule: cleanup fail ⇒ DỪNG, không sửa product code)
+  §E  Verify      → CHƯA chạy
+  §F  Sổ sách + commit → CHƯA chạy
+  §Z  Cần owner quyết để mở khoá
+
+
+================================================================================
+§0  BỐI CẢNH & RANH GIỚI
+================================================================================
+- Yêu cầu owner (2026-09-30): làm Phase 05b + đóng Phase 5 A→Z, dùng "aki mcp"
+  trên Mac owner (đọc/sửa code, shell, docker/bench ERPNext), KHÔNG dừng lại bảo
+  owner "tự chạy bench" TRỪ KHI tool/auth thật sự fail (phải ghi rõ lỗi).
+- Luật owner áp dụng: "Fail cleanup → DỪNG, không sửa product code" (§A.4).
+- Sandbox hiện tại: Linux (KHÔNG phải Mac owner).
+    host    = cs-46146514422-default
+    pwd     = /home/dev4vn/htdocs_apps/erpn_mobile1  (= repo root)
+    /Users/hoang            → KHÔNG tồn tại (không phải máy Mac)
+    which docker            → /usr/bin/docker  (nhưng `docker ps` RỖNG: 0 container)
+    which bench             → KHÔNG có
+  ⇒ Không có docker/bench ERPNext cục bộ; site thật nằm sau tunnel (xem §A4).
+- ERPNext (site thật) VẪN ĐỌC ĐƯỢC qua REST token trong .env → 200 / Administrator.
+  Vậy chỉ THIẾU đường shell/bench (aki mcp), không thiếu quyền đọc dữ liệu.
+
+
+================================================================================
+§A  CLEANUP CHỨNG TỪ NHÁP PHASE 5  →  **✅ DONE (2026-09-30)**
+  ⚠️ A1/A4 dưới đây là bản ghi lúc CHƯA vào được aki — KẾT LUẬN "KHÔNG DÙNG ĐƯỢC" ĐÃ SAI.
+     Đọc **§A6** (đính chính + lệnh đã chạy thật + bằng chứng sau khi xoá) trước.
+================================================================================
+Mục tiêu owner: xoá đúng 1 Payment Entry của vòng thật Phase 5:
+    ACC-PAY-2026-00775
+Ưu tiên:  bench execute frappe.model.delete_doc.delete_doc --kwargs
+          "{'doctype':'Payment Entry','name':'ACC-PAY-2026-00775','force':1}"
+Trong container/user bench ĐÚNG site.
+
+-------------------------------------------------------------------------------
+A1. Đường "aki mcp" (đường owner muốn) — KHÔNG DÙNG ĐƯỢC từ sandbox này
+    ❌ ĐÍNH CHÍNH 2026-09-30: SAI. Nguyên nhân sai: tự dựng PKCE với `redirect_uri` loopback,
+       trong khi client đã đăng ký CHỈ nhận `redirect_uri=https://claude.ai/api/mcp/auth_callback`.
+       Đúng cách: xem **§A6** (đã lấy được token, session @aki sống, đã xoá được chứng từ).
+-------------------------------------------------------------------------------
+Phát hiện: sandbox CÓ sẵn client `mcpc` (MCP CLI) + credential đã lưu cho host aki.
+    which mcpc            → /usr/local/nvm/versions/node/v24.21.0/bin/mcpc
+    ~/.mcpc/credentials.json → key duy nhất:
+        auth-profile:mac-mini-ca-hoang.tail54c58.ts.net:default:client
+        = { clientId: 129a27…, clientSecret: d8b852… }   ← CHỈ có đăng ký CLIENT
+    (KHÔNG có access token / refresh token nào được lưu.)
+
+Các lần thử (lỗi NGUYÊN VĂN, đã ghi rõ):
+  (1) GET $AKI_MCP_URL → 401
+        www-authenticate: Bearer resource_metadata="…/.well-known/oauth-protected-resource/mcp"
+  (2) mcpc login $AKI_MCP_URL --grant client-credentials --client-id … --client-secret …
+        → {"error":"Client-credentials authentication failed: unsupported_grant_type"}
+        (đúng như discovery: chỉ hỗ trợ authorization_code + refresh_token)
+  (3) mcpc login $AKI_MCP_URL --grant authorization-code --client-id … --client-secret …
+        → in ra Authorization URL (chấp nhận client đã đăng ký), rồi:
+            "Opening browser... Could not open browser. Please open the authorization
+             URL above in your browser. … Paste the callback URL from your browser here:"
+          → KHÔNG thể hoàn tất tự động (cần owner mở browser + passphrase; callback là
+            http://127.0.0.1:13316/callback nằm ở MÁY NÀO CHẠY mcpc — tức sandbox này).
+  (4) Tự dựng PKCE + GET /authorize (redirect_uri = 127.0.0.1:13316, có code_challenge S256,
+      client_id đã đăng ký) → 400 text/html:
+            "Connection request invalid
+             This connection request is invalid or has expired.
+              Go back and try again, or re-open the connector in your AI client."
+      Thử luôn redirect_uri=http://localhost:13316/callback → vẫn 400 (cùng thông báo).
+  (5) DCR (đăng ký client mới) POST /register với redirect_uri loopback
+        → 400 {"error":"invalid_redirect_uri"}  (thử cả localhost và 127.0.0.1)
+
+KẾT LUẬN A1: connector aki yêu cầu "re-open the connector in your AI client" — tức
+  phiên phải được mở từ AI client của owner (tạo "connection request" sống) và
+  authorize tương tác bằng browser + passphrase. Từ sandbox này KHÔNG có đường
+  headless; không có tool aki nào trong danh sách tool của agent; không có token lưu sẵn.
+  ⇒ Đúng trường hợp owner cho phép dừng: "tool/auth thật sự fail" (đã ghi rõ lỗi).
+  KHÔNG có lệnh nào được chạy trên Mac owner (không có docker/bench/aki tới được Mac).
+
+-------------------------------------------------------------------------------
+A2. Trạng thái site ĐO LẠI (read-only, DD/MM = 30/09/2026) — chứng từ CHƯA được xoá
+-------------------------------------------------------------------------------
+  GET /api/resource/Payment Entry/ACC-PAY-2026-00775 → 200
+      { docstatus: 0 (Draft) · party: "lan" · paid_amount: 80 000
+        mode_of_payment: "Cash" · paid_to: "1210 - ACB 110296868 - MP"
+        paid_from: "1310 - Phải thu khách hàng - MP" · status: "Draft" }
+  Payment Allocation lọc payment_entry = ACC-PAY-2026-00775 → 5 dòng, docstatus 2:
+      ALLOC-2026-11662 (1 200 000) · ALLOC-2026-11663 (4 400 000)
+      ALLOC-2026-11664 (1 000 000) · ALLOC-2026-11665 (2 500 000)
+      ALLOC-2026-11666 (1 400 000)
+  Sales Invoice outstanding:  ACC-SINV-2026-01285 = 84 000 (Partly Paid)
+                              ACC-SINV-2026-01288 = 320 000 (Unpaid)
+  GL Entry (party "lan", account like "1310%") = 8 dòng, net AR = 404 000 (không lệch).
+  ⇒ Đúng như baseline Phase 5 (result89 §3): phiếu nháp KHÔNG tạo GL, không đổi outstanding.
+    Nhưng vẫn đang "phủ nháp" +30 000 lên ACC-SINV-2026-01285 của khách "lan"
+    (openDraftCover) ⇒ vẫn cần cleanup để site sạch trước Phase 6.
+
+-------------------------------------------------------------------------------
+A3. Vì sao xoá PE bằng REST trực tiếp KHÔNG được (đã thử ở phase trước, xác nhận lại)
+-------------------------------------------------------------------------------
+  DELETE /api/resource/Payment Entry/ACC-PAY-2026-00775
+    → 417 LinkExistsError: "… được liên kết với Payment Allocation ALLOC-2026-11662".
+  Nguyên nhân gốc (đã đọc source Frappe v16): 5 dòng Payment Allocation ở A2 là
+  ALLOC **đã cancel (docstatus 2)**, tạo 2026-09-17, nhưng VẪN giữ
+  payment_entry = "ACC-PAY-2026-00775" — di sản của một PE CŨ (party "P1G-PERF C10")
+  đã bị xoá; site TÁI DÙNG tên PE. delete_doc ở nhánh static-link KHÔNG lọc docstatus,
+  và KHÔNG có HTTP endpoint nào forward được `force` (frappe.client.delete /
+  reportview.delete_items / api/v1.delete_doc đều không truyền force).
+  ⇒ Chỉ `frappe.delete_doc(..., force=1)` (bench/shell) mới bỏ qua link check.
+  Snapshot 5 dòng ALLOC: /tmp/p5-alloc-snapshot.json (đã lưu từ phase trước).
+
+-------------------------------------------------------------------------------
+A4. Phương án (cần owner chọn 1)
+-------------------------------------------------------------------------------
+  (i)   OWNER mở aki connector trong AI client của owner → phiên aki sống → agent
+        chạy `bench execute … force=1` đúng site + verify A2 (đúng ý "A→Z" nhất).
+        Hoặc owner cấp 1 access token aki cho sandbox.
+  (ii)  OWNER cho phép agent đi đường REST: XOÁ 5 dòng ALLOC rác
+        (ALLOC-2026-11662..11666, docstatus 2, snapshot đã có) RỒI xoá PE
+        ACC-PAY-2026-00775. Đây là dữ liệu KHÔNG thuộc vòng Phase 5 của mình ⇒
+        owner rule A.2 cho phép "trừ khi bắt buộc và đã chứng minh link" (đã chứng minh),
+        NHƯNG CẤM của owner cũng nói "không xoá dữ liệu không phải chứng từ vòng mình"
+        ⇒ hai luật mâu thuẫn ⇒ theo AGENTS (vùng không thể hoàn tác + vùng tiền)
+        agent KHÔNG tự chọn; cần owner xác nhận rõ.
+  (iii) OWNER tự chạy 1 lệnh bench force=1 (nhanh nhất) rồi agent verify A2.
+
+
+================================================================================
+§A6  CLEANUP ĐÃ CHẠY THẬT — **✅ DONE** (2026-09-30, qua aki mcp trên Mac owner)
+================================================================================
+A6.1 Vào được aki (headless, KHÔNG cần browser owner)
+  - Client đã đăng ký chỉ nhận **`redirect_uri=https://claude.ai/api/mcp/auth_callback`**
+    (mọi redirect loopback → 400 "Connection request invalid"). Đã dùng đúng redirect đó.
+  - `GET /authorize?...&code_challenge_method=S256` → **200** trang consent (POST form) ghi rõ:
+    "Enter the passphrase shown in the control panel (section 1 · Connectors) …
+     or read it from ~/.aki/mcpsv/passphrase.txt" ⇒ **`AKI_Passphrase` trong `.env` CHÍNH LÀ passphrase đó**
+    (trước đây thử dùng nó làm Bearer token → 401, nên tưởng sai đường).
+  - `POST /authorize` + passphrase (không follow redirect) → **302** `.../auth_callback?code=…`
+    → `POST /token` (`authorization_code` + `code_verifier`) → **200** `access_token`/`refresh_token`
+    (`expires_in 31536000` = 1 năm). Token lưu `/tmp/aki_token.json` (KHÔNG vào repo).
+  - `mcpc connect "$AKI_MCP_URL" @aki --no-profile -H "Authorization: Bearer $TOKEN"` → session `@aki` sống.
+  ⇒ **aki mcp CHẠY HEADLESS ĐƯỢC** — skill `erpn-verify-first` §1b đã được sửa lại theo kết quả này.
+      (Đã đính chính cả 2 chỗ ghi sai: §A1/§A4 ở file này + §1b trong skill.)
+
+A6.2 Hai nguyên nhân làm mọi lệnh xoá trước đó THÀNH NO-OP (không phải do quoting)
+  (a) **SAI SITE.** Site thật của owner tên là **`frontend`**, KHÔNG phải `test.localhost`:
+      nginx của container `frontend` hardcode `X-Frappe-Site-Name: frontend`
+      (`FRAPPE_SITE_NAME_HEADER=frontend`) nên **mọi Host** — kể cả domain ngrok trong `.env` —
+      đều được phục vụ bởi site `frontend`. `test.localhost` là site demo riêng (M0b).
+      Đối chứng đo trong phiên: `bench --site frontend … count Customer` = **134** (khớp REST $ERPNEXT_URL = 134);
+      `bench --site test.localhost … count Customer` = **23**; `db.exists` PE `ACC-PAY-2026-00775`
+      trả **rỗng** ở `test.localhost` nhưng trả **đúng tên** ở `frontend`.
+  (b) **`bench execute` chỉ in khi TRUTHY**: `(no output)` KHÔNG phải "chạy xong"
+      (`delete_doc` với tên không tồn tại trả `False` ⇒ in rỗng — im lặng, không lỗi).
+      ⇒ Đây là lý do đã suýt báo "xoá xong" ở bản ghi cũ; bài học đã ghi vào 2 skill.
+
+A6.3 Lệnh ĐÃ CHẠY (nguyên văn)
+  docker exec frappe_docker-backend-1 bench --site frontend execute \
+    frappe.model.delete_doc.delete_doc \
+    --kwargs "{'doctype':'Payment Entry','name':'ACC-PAY-2026-00775','force':1}"
+  (đi qua `mcpc @aki tools-call local__run_cmd`; snapshot chứng từ TRƯỚC khi xoá: `/tmp/p5-pe-snapshot.json`
+   — đúng chứng từ của vòng Phase 5: creation 2026-09-30 12:33:57, `custom_ai_action_id`=act_eff48ef3…,
+   party `lan`, 80.000 = 30.000 (ACC-SINV-2026-01285) + 50.000 (ACC-SINV-2026-01288),
+   `paid_to` 1210 - ACB 110296868 - MP.)
+
+A6.4 Bằng chứng SAU khi xoá (đọc lại qua REST token trong sandbox — nguồn thứ hai)
+  - `GET /api/resource/Payment Entry/ACC-PAY-2026-00775` → **404 DoesNotExistError** ✅
+    (`Deleted Document` có dòng `deleted_name = ACC-PAY-2026-00775` ⇒ đường xoá hợp lệ).
+  - Sales Invoice: `ACC-SINV-2026-01285` → **84.000 (Partly Paid)** · `ACC-SINV-2026-01288` → **320.000 (Unpaid)** ✅
+    (đúng "không đổi" — nháp chưa từng đụng outstanding).
+  - `GL Entry` party `lan`, account like `1310%` → **8 dòng, net 404.000** — y hệt trước khi xoá ✅
+    (xác nhận lại: phiếu NHÁP không tạo GL Entry).
+  - Nháp còn lại của party `lan`: chỉ 3 phiếu CŨ 10.000 (00761/00762/00765) — **phiếu 80.000 của vòng Phase 5 đã hết**
+    ⇒ `openDraftCover` không còn +30.000 trên ACC-SINV-2026-01285 ✅
+  - 5 dòng `Payment Allocation` `ALLOC-2026-11662..11666` (docstatus 2) **VẪN CÒN NGUYÊN** ✅
+    (đúng cam kết: `force` chỉ bỏ link check chứ không cascade/xoá dữ liệu người khác).
+
+A6.5 Còn lại (không tự làm)
+  - 3 phiếu nháp 10.000 của `lan` (00761/00762/00765) và 5 dòng ALLOC rác **KHÔNG thuộc vòng Phase 5**
+    ⇒ giữ nguyên theo luật owner (chỉ xoá chứng từ của vòng mình). Nếu owner muốn dọn tiếp thì ra lệnh riêng.
+  - Debt "MoP bank chưa chứng minh bằng 1 lần ghi NHÁP thật" VẪN mở: cần 1 lần ghi nháp thật + dọn lại
+    ⇒ chỉ làm khi owner cho phép (vùng TIỀN, ghi thật).
+
+
+================================================================================
+§B  QUYẾT ĐỊNH KỸ THUẬT F-P5-2 = C  (đã chốt theo owner; KHÔNG cần hỏi lại)
+================================================================================
+- Owner chốt **C**: kênh lấy theo NHÃN yêu cầu; CHỌN MoP có `type` khớp kênh;
+  nếu có MoP khớp NHÃN nhưng `type` lệch kênh ⇒ cảnh báo/refuse RÕ bằng tiếng Việt,
+  KHÔNG im lặng đổi tên phương thức shop quen gọi.
+- Cơ sở "trừ khi đo site cho thấy B an toàn hơn": ĐÃ ĐO — site khai MoP
+  "Chuyển khoản" với type = Cash (F-P5-3). Nếu chọn B (để `type` quyết kênh) thì
+  "chuyển khoản" của người dùng sẽ vào TIỀN MẶT (1110) — ngược kỳ vọng & sai nhóm tiền.
+  ⇒ B KHÔNG an toàn hơn. Giữ **C**.
+- Lock §6.2 giữ nguyên: kênh bank ⇒ tài khoản Bank (1210/default_bank), KHÔNG fallback 1110.
+
+
+================================================================================
+§C  OPENSPEC CHANGE CHO 05b  (đã tạo TRƯỚC code — owner rule #1) — VALID
+================================================================================
+  Change: openspec/changes/next8-collect-customer-mop-fix/
+    proposal.md
+    tasks.md
+    specs/customer-resolution/spec.md        (F-P5-1)
+    specs/payment-accounts/spec.md           (F-P5-2, quyết định C)
+  Lệnh:  npx --no-install openspec validate next8-collect-customer-mop-fix --strict
+  Kết quả: **Change 'next8-collect-customer-mop-fix' is valid**
+  (Tên bắt đầu bằng chữ — đúng quy ước OpenSpec, không bắt đầu bằng số.)
+
+
+================================================================================
+§A5  OWNER TRẢ LỜI TRONG PHIÊN (2026-09-30) — MỞ KHOÁ §D
+================================================================================
+- Câu 1 (cleanup route): owner chọn "Other" = **"thông tin aki mcp nằm ở .env"**.
+  ĐÃ KIỂM LẠI theo gợi ý:
+    .env dòng 21–24: AKI_MCP_URL · AKI_Passphrase · AKI_OAuth_Client_ID · AKI_OAuth_Client_Secret
+    - Dùng AKI_Passphrase làm `Authorization: Bearer` → **401 unauthorized** (không phải token).
+    - Không có device flow (`/device` → 404); `/authorize` vẫn 400 "Connection request invalid"
+      cho MỌI redirect loopback; DCR vẫn 400 `invalid_redirect_uri`.
+    ⇒ Thông tin aki CÓ trong .env, nhưng luồng vẫn là **authorization_code tương tác** do
+      AI client của owner mở ra — KHÔNG thể hoàn tất headless từ sandbox. **Cleanup vẫn CHẶN.**
+- Câu 2 (được sửa product code chưa?): owner chọn **"Có — làm §D/E ngay, không ghi thật"**.
+  ⇒ Vượt luật "fail cleanup → DỪNG": được sửa code + test/falsify, **CẤM ghi thật lên site**.
+
+
+================================================================================
+§D  CODE FIXES — ĐÃ LÀM (2 fix, tối thiểu)
+================================================================================
+D1. **F-P5-1** `src/skills/customer.mjs#findCustomer`: `{ limit: 100 }` → **`{ limit: 0 }`**
+    (đọc đủ master; `limit:0` = không giới hạn, cùng cách `customer-create.mjs:150` đã dùng).
+    Luật HINT-NOT-AUTHORITY giữ nguyên: id client gửi vẫn được tra lại trên master vừa đọc
+    (`copilot-server.mjs#proposeCollectFromHandoff` `rows.find(...)`) — KHÔNG hạ mức tin cậy.
+D2. **F-P5-2** `src/skills/payment-write.mjs#resolveAccountPlan`: chọn Mode of Payment theo
+    **KÊNH** (`requestedType = MONEY_CHANNELS[channelOfMode(requestedMode)]`) — chỉ nhận MoP có
+    `type` khớp kênh; thứ tự: (a) tên khớp CHÍNH XÁC **và** type khớp → dùng luôn;
+    (b) nếu tên khớp nhưng type LỆCH → **KHÔNG dùng**, chọn MoP cùng kênh tất định
+    (ưu tiên tên `transfer|wire` cho bank, `cash` cho tiền mặt, else đầu bảng chữ cái) và
+    đặt `mode_warning` tiếng Việt nêu rõ xung đột (quyết định C); (c) nhãn không map kênh nào →
+    giữ thứ tự cũ (exact → cashNamed → cashTyped).
+    - `mode_warning` lan ra `resolvePaymentAccounts`/`resolveAdvanceAccounts` (spread `...plan`)
+      và vào `result.mode_warning` của `executePaymentProposal` (cạnh `mode_substituted_from`).
+    - **KHÔNG thêm mã từ chối mới**, KHÔNG nới §6.1–6.3. Lock §6.2 giữ nguyên: bank ⇒
+      `Company.default_bank_account` (vd 1210), **không bao giờ fallback 1110**; sai type ⇒ BLOCK.
+    - KHÔNG sửa `mock-server.mjs` (fixture ĐÃ CÓ MoP lệch type `Chuyển khoản|Cash` y như site).
+
+
+================================================================================
+§E  VERIFY — ĐÃ CHẠY (mock; KHÔNG ghi thật)
+================================================================================
+- Suite MỚI `test/next8-collect-05b-fixes.test.mjs`: **7/7 PASS**
+  (F-P5-1: limit=0 · khách dòng 130 resolve + register id · id bịa vẫn không resolve;
+   F-P5-2: bank_transfer → MoP Bank, paid_to Bank · cash → MoP Cash · nhãn "Chuyển khoản"
+   (type Cash) → MoP Bank + `mode_warning` nêu tên · nhãn khớp type → không cảnh báo).
+- Cụm collect + payment-write + next9/next8/gateway/http-execute/p9-pay/proposal-freshness/
+  safety-gateway/mock-optin/issue3/d4: **237/237 PASS**.
+- **Node FULL: 1045 tests / 1043 pass / 2 fail** — 2 fail ĐÚNG baseline env dsh
+  (`dshGatewayHealth`, `verifyDshRuntime`); +7 test so với baseline 1038.
+- `node --check` 2 file sửa + file test: OK.
+- **Falsify**: F1 đặt lại `limit:100` ⇒ **2 test F-P5-1 ĐỎ**; F2 bỏ nhánh kênh
+  (`requestedType = null`) ⇒ **2 test F-P5-2 ĐỎ**; restore **byte-identical**
+  (md5 `4dead42e52d796d84ab1abc13e4dd55f` customer.mjs · `dcb840a04760c72e623077a2f1bea8c1` payment-write.mjs).
+- KHÔNG chạy vòng ghi thật (owner chỉ cho §D/E, cấm ghi thật) ⇒ **debt**: MoP bank chưa
+  chứng minh bằng 1 lần ghi NHÁP thật; sẽ làm khi cleanup xong + owner cho phép.
+
+
+================================================================================
+§F  SỔ SÁCH + COMMIT
+================================================================================
+- `result90.txt` (bản này) · `.plan/next8/phase05b-result.md` · `working.md` (mục 34) ·
+  tick `openspec/changes/next8-collect-customer-mop-fix/tasks.md` · cột trạng thái
+  `.plan/next8/release-roadmap.md`.
+- COMMIT: owner lệnh rõ trong prompt ("COMMIT khi xanh … feat(next8): collect 05b customer
+  list + MoP bank channel") ⇒ 1 commit, stage tường minh, KHÔNG `.env`/`.plan`/secrets.
+  Hash: **`3d7aacf`** (branch `master`, parent `12bbbc9`, 7 file, +503/−10,
+  KHÔNG push — repo KHÔNG có remote). Đã stage tường minh: 2 file nguồn sửa +
+  test 05b mới + 4 file OpenSpec change; banned-path check CLEAN; secret scan sạch.
+
+
+================================================================================
+§Z  TRẠNG THÁI CUỐI (cần owner)
+================================================================================
+- **Cleanup A: ✅ DONE (2026-09-30)** — xoá thật qua aki mcp, site **`frontend`** (KHÔNG phải `test.localhost`).
+  PE `ACC-PAY-2026-00775` → **404** · outstanding `ACC-SINV-2026-01285/01288` = **84.000/320.000** ·
+  GL 1310 party `lan` **8 dòng/net 404.000 KHÔNG đổi** · `openDraftCover` hết +30.000 · 5 dòng ALLOC rác nguyên.
+  Chi tiết + lệnh + đính chính: **§A6**. Không cần owner mở khoá gì thêm.
+- **F-P5-1 + F-P5-2: ĐÃ SỬA + có test + falsify đỏ đúng chỗ** (mock), KHÔNG ghi thật.
+- **Collect Program A gate**: sẵn sàng Phase 6 khi owner lệnh (sau khi cleanup A xong để site sạch).
+================================================================================

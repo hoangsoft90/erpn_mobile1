@@ -1,0 +1,213 @@
+# result63.txt — issue1: tắt fallback-mock ngầm (cổng xin phép tường minh) + verify ERPNext THẬT
+
+**Phạm vi phiên:** `.plan/issue1_fix1.md` (KHÔNG theo `.plan/issue1_fix.md` — bản "xoá hẳn mock"
+của AI khác; đọc tham khảo, giữ mock cho CI/suite như đã chốt). Thứ tự đã làm đúng file:
+mục 6 (audit) → mục 6b (3 việc) → mục 2 (sửa `pickServerScript`) → mục 3 (`package.json`) →
+mục 5 (test + falsify). Cuối phiên: user báo ERPNext thật đã bật → verify lại trên site THẬT.
+
+---
+
+## 1. Nguyên nhân gốc (đã xác nhận bằng code, không suy đoán)
+
+`mcp-erpnext/src/mock-server.mjs` hard-code `CUST-00001 = "Nguyễn Thị Lan"` + hoá đơn/công nợ.
+`copilot-server.mjs:pickServerScript()` coi **"thiếu 3 biến ERPNEXT_*"** là tín hiệu chọn mock
+⇒ một lần khởi động quên export biến (launcher `dsh`) được diễn giải thành "OK, dùng dữ liệu giả",
+và `dsh` trả về một khách không tồn tại trong ERPNext thật như thể là thật.
+
+Đây là nhánh **fail-OPEN duy nhất** còn sót: mọi guard khác (idempotency, entity resolution,
+contract loader) đều fail-closed.
+
+## 2. mục 6 — AUDIT (đọc, không đoán)
+
+| Chỗ | `COPILOT_MOCK_OK`? | Cách truyền `ERPNEXT_*` | Hệ quả sau fix |
+|---|---|---|---|
+| `dsh.cordis.patch.yml` | **KHÔNG** ✓ | `!!js process.env.X \|\| ''` (dựa vào `dsh-app-boot` tự `loadEnvFile(repo/.env)`) | .env đủ 3 biến → REAL; thiếu → child **exit 2** (`ERPNEXT_NOT_CONFIGURED`) thay vì mock |
+| `dsh-e2e.patch.yml` | **KHÔNG** ✓ | `E2E_TARGET === 'real' ? … : ''` (literal `''` để dsh không ghi đè từ .env) | không `E2E_TARGET` → child **exit 2** (trước: mock). Comment đầu file đã sửa cho đúng |
+| Supervisor/service VPS | **KHÔNG có file nào** | `npm run start:ask` = `node src/http-ask.mjs --port 8788` | `.github/` + systemd/PM2 **không tồn tại trong checkout này** ⇒ không sửa được CI ở đây (xem §7 giới hạn) |
+| `.env` (gitignored) | — | **CÓ** đủ `ERPNEXT_URL/API_KEY/API_SECRET` (kiểm TÊN biến, không in giá trị) | target = REAL khi shell đã source .env |
+
+## 3. mục 6b — 3 việc bổ sung
+
+**(1) grep toàn repo** (`MOCK_SERVER|mock-server|E2E_TARGET|COPILOT_MOCK_OK`, bỏ `.plan/`):
+- `COPILOT_MOCK_OK`: **0 hit** trong code (chỉ có trong file kế hoạch) — biến mới, không đè gì.
+- `MOCK_SERVER`: chỉ `src/client.mjs` (định nghĩa + default hạ tầng), `src/index.mjs` (re-export),
+  `src/copilot-server.mjs` (nhánh opt-in) + `test/*`. **`scripts/` = 0, `apps/mobile/` = 0.**
+- `mock-server` (đường dẫn): chỉ trong `src/client.mjs` + comment test.
+- `E2E_TARGET`: chỉ trong `dsh-e2e.patch.yml` + 1 comment ở `dsh-gateway.mjs`.
+- ⇒ **Không có đường "im lặng dùng mock" nào khác**, VÀ được khoá bằng test tĩnh mới
+  (`test/mock-optin.test.mjs`: tripwire — thêm reference thứ hai vào `MOCK_SERVER` là đỏ).
+
+**(2) Thiếu-cấu-hình ≠ không-kết-nối-được** — `pickServerScript()` chỉ quyết định theo sự
+CÓ/THIẾU của biến, KHÔNG theo việc gọi ERPNext có thành công hay không ⇒ host chết
+(`http://127.0.0.1:1`, domain không tồn tại) vẫn resolve REAL và lỗi mạng ném ra lỗi thật.
+**Chứng minh bằng test** (ma trận 3 host chết × có/không opt-in → **không bao giờ** trả fixture)
++ test `unreachable-but-configured host still resolves to REAL`.
+
+**(3) Rà rò rỉ secret:** `ERPNEXT_API_KEY/SECRET` chỉ xuất hiện dưới dạng **TÊN biến**
+(`copilot-server.mjs` destructure · comment `index.mjs` · copy lỗi `safety-gateway.mjs`),
+không bao giờ là giá trị. `learning-log.mjs` chỉ đọc `LEARNING_LOG`/`LEARNING_LOG_DIR` ⇒ không có
+secret trong log. `buildDshChildEnv` xoá các key secret trước khi spawn dsh. Log target chỉ in
+**host**. ⇒ **Không tìm thấy rò rỉ.**
+
+## 4. mục 2 — Sửa `pickServerScript()` (1 điểm chốt duy nhất)
+
+```js
+if (!url && !key && !secret) {
+  if (env.COPILOT_MOCK_OK !== "1") throw new Error("ERPNEXT_NOT_CONFIGURED: …");
+  return MOCK_SERVER;
+}
+```
+
+Vì sao 1 điểm là đủ: mọi đường sống đều hỏi qua đây — `copilot-server.answerQuestion()` (cả `/ask`
+lẫn `copilotAsk()` mà dsh gọi), `http-ask.mjs` (3 chỗ), `safety-gateway.mjs`. Không nơi nào gọi
+`createMcpClient()` mà bỏ `serverScript` (đã grep + khoá bằng tripwire).
+Thêm: khi target là fixture, `main()` in thêm dòng WARNING nói rõ "not real ERPNext data".
+
+## 5. mục 3 — `package.json` + CI
+
+- `mcp-erpnext/package.json`: `"test": "COPILOT_MOCK_OK=1 node --test"` (**1 dòng**; mọi suite
+  mock nhận biến qua `MOCK_ENV = {...process.env}` nên không phải sửa từng file test).
+- CI: `.github/workflows/` **không có trong checkout này** ⇒ không sửa được ở đây; bất kỳ CI nào
+  chạy `npm test` sẽ tự nhận biến. (Ghi vào §7 giới hạn, KHÔNG tự tạo file CI.)
+
+## 6. mục 5 — Test + Falsify
+
+| Việc | Kết quả |
+|---|---|
+| 5.1 `pickServerScript({})` → **throw** (đổi assertion cũ `=== MOCK_SERVER`) | ✅ `target.test.mjs` (9 test) |
+| 5.2 `{COPILOT_MOCK_OK:"1"}` → `MOCK_SERVER` | ✅ |
+| 5.3 `{COPILOT_MOCK_OK:"true"}` → vẫn throw (đúng chuỗi `"1"`) | ✅ + ma trận `true/TRUE/yes/on/0/""/" 1"` |
+| **5.4 tái hiện bug gốc** | ✅ E2E: spawn copilot với env của launcher quên set → **exit 2**, stderr `ERPNEXT_NOT_CONFIGURED`, **stdout RỖNG** (không có `Nguyễn Thị Lan`/`CUST-00001`/số tiền nào). Kèm **control**: cùng env + opt-in → trả `CUST-00001 / 2.500.000` ⇒ chứng minh cổng là thứ chặn, không phải hỏng vì lý do khác |
+| 5.5 `npm test` | **Node 449 (447 pass, 2 fail)** — 2 fail = `dsh-gateway` cần runtime dsh (đỏ từ B0, môi trường). Trước fix 440 ⇒ +9 test mới, không regress |
+| 5.6 suite KHÔNG có `COPILOT_MOCK_OK` | ✅ **in `ERPNEXT_NOT_CONFIGURED` 1 lần rồi exit 124** (`timeout 90`, `test/copilot.test.mjs`) — không hề âm thầm so với fixture |
+| Falsify (`scripts/falsify/issue1-mock-optin.mjs`, TRONG REPO) | **5/5 RED** ✓ — gate bỏ · opt-in truthy · partial được cứu · reference thứ hai vào fixture · fixture mất dữ liệu gốc. Restore **byte-identical**, không sót `.falsify-bak` |
+
+**2 lỗi tự gây trong phiên này (đã sửa + đã ghi skill):**
+1. **Harness falsify treo + ĐỂ LẠI mutation trên đĩa.** Ca "gate bỏ" làm child *phục vụ tiếp* thay
+   vì exit ⇒ test E2E `await exited` **không bao giờ resolve** ⇒ harness bị `timeout` giết giữa
+   mutation ⇒ `src/copilot-server.mjs` **còn nguyên `if (false)`** + `.falsify-bak` sót lại.
+   Sửa 2 lớp: (a) test bound `Promise.race([exited, 15s])` (timeout = FAIL, không phải treo);
+   (b) harness bắt `SIGINT/SIGTERM` để khôi phục file đang dở. Đã kiểm lại: gate nguyên vẹn,
+   9/9 `target.test.mjs` xanh.
+2. **Tripwire tĩnh bắt chính harness của tôi** — file harness chứa đúng chuỗi `MOCK_SERVER`
+   (dùng trong mutation) mà tripwire quét cả `scripts/` ⇒ baseline đỏ. Sửa: harness dựng chuỗi
+   bằng ghép (`"MOCK" + "_SERVER"`) để bản thân file không chứa literal đó.
+
+## 7. VERIFY TRÊN ERPNEXT THẬT (user báo site đã bật) — và **1 BUG MỚI**
+
+Probe read-only, không ghi gì (không gọi `/execute`):
+
+| Kiểm | Kết quả |
+|---|---|
+| Site reachable | **HTTP 200**, 0.39s (`frappe.client.get_list` Customer) |
+| `"Nguyễn Thị Lan"` có trong ERPNext thật? | **KHÔNG** — `{"message":[]}`; không khách nào chứa `"Lan"` |
+| Khách có thật liên quan | có **`Nguyễn Thị B`** (và `Bùi Thị H`, `Chị Tư — thầu nhỏ`, …) |
+| Pipeline THẬT, câu của issue1: `Nguyễn Thị Lan còn nợ bao nhiêu` | ❌ **trả `Nguyễn Thị B không còn nợ gì.`** — `customer.id = "Nguyễn Thị B"`, `error_code: (none)` |
+| Pipeline THẬT, khách có thật: `Bùi Thị H còn nợ bao nhiêu` | ✅ đúng khách, `outstanding 0` |
+| Đường GHI: `thu tiền cho Nguyễn Thị Lan 500 ngàn` | ✅ **`ENTITY_PICK_REQUIRED`**, `customer: null`, **không có proposal** — WRITE không tự chọn khách fuzzy |
+
+### 7.1 Bug mới (nguyên nhân THỨ HAI của triệu chứng issue1) — ĐÃ ĐƯỢC USER DUYỆT VÀ SỬA (xem §9)
+
+`resolvePartyFromList()` (`src/copilot-server.mjs`) pha 2 dùng `String(name).includes(cand)`.
+`nameCandidates("Nguyễn Thị Lan …")` sinh MỌI substring, dài trước:
+`"Nguyễn Thị Lan"` → **0 hit** (đúng: không khách nào chứa nó) → vòng lặp đi tiếp →
+`"Nguyễn Thị"` → `"Nguyễn Thị B".includes("Nguyễn Thị") === true` → **hits.length === 1** →
+`return { row, ambiguous: false }`.
+
+⇒ Hệ thống **bỏ mất token phân biệt "Lan"** và trả lời tự tin về một khách KHÁC, **không báo
+ambiguous**. Đây đúng dạng "confident-wrong-customer" mà comment trong code từng ghi nhận cho
+`"chị Lan"` → `"Chị Tư"` (đã có guard `KINSHIP_TITLES`), nhưng guard đó chỉ chặn **danh từ thân tộc**,
+không chặn **tiền tố tên rất phổ biến** (`Nguyễn`, `Nguyễn Thị`, `Trần`, `Lê Thị`, …).
+
+- **Đường ĐỌC**: sai khách, không cờ ⇒ vi phạm "ambiguous → `answer: null` + reason (không bịa)".
+- **Đường GHI**: **an toàn** (P1 chặn auto-select fuzzy cho WRITE ⇒ `ENTITY_PICK_REQUIRED`).
+- **Hướng fix đề xuất (tối thiểu, fail-closed)**: ở pha substring, **bỏ** một hit duy nhất nếu nó
+  là tiền tố nghiêm ngặt của một candidate DÀI HƠN mà candidate dài hơn đó **0 hit** — nghĩa là
+  user đã gõ thêm token phân biệt mà không khớp ở đâu ⇒ phải ASK / `NO_MATCH`, không auto-pick.
+  Kèm test + falsify (ca "Nguyễn Thị Lan" vs "Nguyễn Thị B") và chạy lại golden 231 ca.
+- **Đã hỏi user** (vùng loại trừ an toàn: ràng buộc cứng + ranh giới alias khách hàng — AI không tự
+  ký duyệt). User chốt: **"Fix ngay theo hướng đề xuất"** ⇒ kết quả ở §9.
+
+## 9. SAU KHI USER DUYỆT — 2 việc bổ sung (cùng phiên)
+
+### 9.1 thêm validate lúc BOOT cho `http-ask.mjs` (user chọn)
+
+`main()` nay gọi `pickServerScript()` **trước** `server.listen()` — cùng thế với `resolveBindPolicy()`
+(đã có từ trước): thiếu cấu hình ⇒ launcher bắt lỗi ⇒ **`process.exit(1)`**, không bind cổng, không
+phục vụ fixture. In thêm `[http-ask] ERPNext target: REAL -> <host>` hoặc `fixture (COPILOT_MOCK_OK=1)`.
+**Cố ý KHÔNG probe mạng/auth lúc boot**: tunnel lên xuống thất thường, service không nên từ chối
+khởi động vì một nhịp mạng (đúng §8/6b-2 — lỗi kết nối phải nổi lên theo từng request).
+2 test mới: thiếu cấu hình ⇒ exit 1 + KHÔNG có `"ready":true` · có opt-in ⇒ boot + báo target.
+
+### 9.2 Fix rule 2b trong `resolvePartyFromList` (`src/copilot-server.mjs`)
+
+**Luật**: ở pha substring, bỏ một hit duy nhất khi **cả 3** điều kiện đúng:
+1. tên trong ERPNext **còn token phía sau** vị trí khớp (fragment là tiền tố NGHIÊM NGẶT của tên) —
+2. token kế tiếp user gõ là **name-like** (không chứa chữ số, không thuộc từ vựng ý định của router), và
+3. token đó **không xuất hiện** trong tên row.
+
+Khi bị bỏ, **chặn cả vị trí bắt đầu** (`blockedStarts`) để fragment ngắn hơn tại cùng vị trí
+("Nguyễn") không re-pick đúng row sai đó. Từ vựng ý định lấy từ **contract** (`listRouting()` — không
+hardcode), nên nhóm route mới tự động được phủ.
+
+**3 hồi quy do bản đầu của 2b gây ra, CHỈ full suite bắt được (đã sửa):**
+- `copilot E2E P1 §4.3` + `§4.4` và `a title hit must not outrank the real name fragment`:
+  văn bản `"payment cho chị Lan 500 ngàn"` ⇒ fragment `"lan"` bị chặn oan vì token kế tiếp là **số tiền**.
+  Đo thêm được `"…chị Lan năm trăm ngàn"` → token kế tiếp là **"năm"** (chữ, không phải số) ⇒ điều kiện (1)
+  "row còn token phía sau" mới là điều kiện đúng — và **`rowContinues` phải tính theo TỪNG field**
+  (nối display name + id làm id bị đọc thành "tên còn dài" — chính test tôi vừa viết bắt lỗi này).
+
+**Bằng chứng**: `test/entity-name-collision.test.mjs` **10 test** · `target.test.mjs` 9 ·
+`mock-optin.test.mjs` 7 · **falsify `scripts/falsify/issue1-resolver.mjs` 5/5 RED** +
+`issue1-mock-optin.mjs` **6/6 RED** (đã thêm ca boot), restore byte-identical, không sót mutation.
+**Node 461 (459 pass, 2 fail dsh-env từ B0)** · Python 62 OK.
+
+**Đo trên ERPNext THẬT (11 câu, trước ↔ sau):** chỉ **1 dòng đổi** — đúng ca bug:
+
+```
+Nguyễn Thị Lan còn nợ bao nhiêu
+  TRƯỚC: Nguyễn Thị B            (trả lời tự tin về SAI khách, error_code: none)
+  SAU:   null | AMBIGUOUS_ENTITY (từ chối + đưa lựa chọn)
+```
+
+10 câu còn lại **y nguyên** (khách thật `Nguyễn Thị B`, `Bùi Thị H`, `A` vẫn resolve đúng; các ca
+MISSING/AMBIGUOUS cũ không đổi) ⇒ **zero hồi quy trên dữ liệu thật**.
+
+### 9.3 Ghi nhận thêm (đo được, KHÔNG sửa — ngoài phạm vi đã duyệt)
+
+Trên dữ liệu thật, nhiều tên nhiều từ **không resolve được** (thận trọng, không sai khách):
+`Anh Ba — xây nhà`, `Chú Bảy — chăn nuôi`, `Công trình nhà ông An` (khớp ĐÚNG NGUYÊN VĂN mà vẫn
+MISSING), `Công ty TNHH ABC` → AMBIGUOUS. Một phần nguyên nhân nằm ở **Phase 1** (`'Anh Ba xây nhà'`
+→ `'xây nhà …'`: stripper ăn mất tên). Đây là **gap phủ sóng của entity resolution**, không phải lỗ
+hổng an toàn — đề nghị thành task riêng (Phase 6), KHÔNG tự mở rộng phạm vi phiên này.
+
+## 8. Giới hạn đo được (không giấu)
+
+- `http-ask.mjs` lúc phiên trước **chưa** kiểm cấu hình lúc khởi động: server vẫn listen, mỗi
+  request thiếu cấu hình trả `500 {error: "ask failed: ERPNEXT_NOT_CONFIGURED: …"}`.
+  **CẬP NHẬT: user đã duyệt và ĐÃ LÀM ở §9.1 cùng phiên** — validate lúc boot, `process.exit(2)`,
+  7/7 boot test + falsify. Bullets dưới đây giữ nguyên tư cách hạn chế CÒN LẠI của phiên.
+- CI workflows không có trong checkout ⇒ không xác minh được CI trên máy này.
+- 2 fail `dsh-gateway` là gap môi trường (máy không có dsh), không phải regression.
+- `npm run start:ask` là launcher được ghi trong tài liệu; chưa có systemd/PM2 thật để audit.
+
+## 10. Re-verify sau khi user bật ERPNext site (cùng ngày, site thật 122 Customer)
+
+Câu hỏi của user: các probe ERPNext-thật có lỡ chạy lúc site CHƯA bật, cho kết quả "thật" giả?
+Kiểm 3 lớp, tất cả READ-ONLY:
+
+1. **Dữ liệu khớp bản ghi:** site `HTTP 200` (0.37s); Customer `like %` = **122 rows**;
+   `like %Lan%` = `[]`; `like %Nguyễn Thị%` = đúng 1: `Nguyễn Thị B` — KHÔNG khác gì dữ liệu lúc
+   probe đầu, nên phép đối chiếu before/after vẫn hợp lệ.
+2. **Chạy lại 100% probe thật khi site đang bật:** probe 3 câu (issue1) + probe 11 câu —
+   **từng dòng khớp chính xác** bảng §9.2: ca bug `Nguyễn Thị Lan` → `null | AMBIGUOUS_ENTITY`,
+   10 ca còn lại y nguyên (`Nguyễn Thị B`, `Bùi Thị H`, `A` resolve đúng; MISSING/AMBIGUOUS không đổi).
+3. **Thử nghịch: site SẬP thì sao** — `ERPNEXT_URL=http://127.0.0.1:1` (config đủ, KHÔNG mock):
+   stderr in `ERPNext target: REAL -> 127.0.0.1:1`, client nhận **`isError: true` + `TOOL_ERROR:
+   [FrappeClient] Network error … fetch failed (HTTP 0)`** — pipeline **fail-loud**, không âm thầm
+   trả fixture. Kết luận: ngay cả khi 1 probe lỡ chạy lúc site chưa bật, thứ tệ nhất nó thấy là
+   `isError` (không thể lẫn vào bảng kết quả) ⇒ **không có số liệu thật-giả nào lọt vào result này**.
+
+Ghi nhận nhỏ (đo được, không sửa): khi `isError=true`, `structuredContent` rỗng nên probe script
+in `error_code: (none)` — dễ hiểu nhầm thoáng qua trong log; pipeline thì ổn. Bài học: probe nên
+kiểm `isError` trước khi đọc `structuredContent`.

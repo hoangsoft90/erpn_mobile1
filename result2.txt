@@ -1,0 +1,205 @@
+========================================================================
+RESULT 2 — ĐỢT FIX PHASE 1 (review money.py + false-positive + tiếng lóng)
+Timestamp: 2026-09-13 13:59
+Env: Linux VPS / cloud shell, Python 3.12.3. Repo erpn_mobile1, branch master.
+     git VẪN 0 COMMIT (user chọn "chưa commit gì cả"). 15 mục untracked.
+     AgentMemory DOWN. MCP cocoindex-code / codebase-memory-mcp KHÔNG expose.
+     Simplenote MCP KHÔNG có trong tool list. → Code Review làm thủ công.
+========================================================================
+
+SCOPE phiên này
+  - Chạy lại test xác nhận trạng thái Phase 1 trước khi quyết định commit
+  - Review money.py (code chạm TIỀN) theo yêu cầu user
+  - Fix các lỗi tìm được + thêm tiếng lóng miền Nam (user duyệt)
+  - Cập nhật docs + thêm phase Monetization vào roadmap
+  - KHÔNG commit. KHÔNG chạm dsh/MCP/ERPNext/STT.
+
+------------------------------------------------------------------------
+0. QUYẾT ĐỊNH USER CHỐT TRONG PHIÊN (2026-09-13)
+------------------------------------------------------------------------
+  a) Commit: CHƯA commit gì cả → để untracked, commit gộp sau
+  b) Cầu nối Python ↔ Flutter/dsh: HTTP SERVICE NỘI BỘ (localhost)
+     → 1 nguồn logic duy nhất; KHÔNG port sang Dart (tránh 2 bản lệch số)
+  c) "công nợ" → intent `receivable` (giữ nguyên, không sửa code)
+  d) Monetization: CÓ làm → đã thêm phase-15-monetization-ads.md
+  e) Tiếng lóng miền Nam: CÓ → đã làm trẹo/chai; bạc chờ user xác nhận mệnh giá
+
+------------------------------------------------------------------------
+1. TRẠNG THÁI TRƯỚC KHI SỬA (verify, không phải claim)
+------------------------------------------------------------------------
+  PYTHONPATH=src python3 -m unittest discover -s tests
+    → Ran 49 tests in 0.329s / OK
+  PYTHONPATH=src python3 tests/test_dialect_set.py
+    → money accuracy: 234/234 = 100.00%
+  CLI "Bác Hai trả 2tr5 tiền cám heo"
+    → amount 2500000, titles ["Bác"], text "Hai trả 2tr5 tiền cám heo"
+  5 fail-safe case (Bác Hai / hai trăm / anh Nam trả 10 / 2 triệu 500 / không triệu)
+    → amount = None cả 5  ✅
+
+------------------------------------------------------------------------
+2. REVIEW money.py — 4 FALSE POSITIVE THẬT TÌM ĐƯỢC
+------------------------------------------------------------------------
+Cách tìm: probe adversarial (corpus KHÔNG có lớp case này — đã grep xác nhận).
+
+  INPUT                        TRƯỚC   ĐÚNG RA  NGUYÊN NHÂN
+  "gọi anh Nam 0912345678"     912345678  None  rule "≥4 chữ số ⇒ tiền" nuốt SĐT
+  "mua 5 củ cải"                 5000000  None  "củ"=triệu (slang) vs "củ cải"
+  "mua 5 củ cải đường"           5000000  None  (cùng nhóm)
+  "tổng doanh thu 2024"             2024  None  năm bị coi là tiền
+  "anh Nam ở nhà 1234"              1234  None  số nhà
+  "mua 2 chai nước"          (sau khi thêm chai) "chai"=bottle vs "chai"=triệu
+  "số lượng 2000 bao"               (mới)  None  ngữ cảnh định danh
+
+  ROOT CAUSE: rule #2 của hợp đồng an toàn ("≥4 chữ số ⇒ tiền") quá rộng.
+  Mức độ nghiêm trọng: SĐT 10 số nếu lọt vào create_payment_entry (Phase 7)
+  = phiếu thu 912 TRIỆU VND. Vi phạm chính nguyên tắc "thà không trả amount
+  còn hơn trả sai".
+  Lưu ý: 234/234 = 100% KHÔNG phủ lớp lỗi này (corpus 0 case SĐT/năm/số nhà).
+
+------------------------------------------------------------------------
+3. ĐÃ SỬA
+------------------------------------------------------------------------
+3.1 Shape guard mới trong money.py — hàm `_looks_like_identifier()`
+    (a) SĐT: chuỗi toàn số, bắt đầu "0", dài 9..11  → loại
+    (b) Năm: 4 chữ số, giá trị 1900..2099, KHÔNG scale word, KHÔNG hậu tố → loại
+    (c) Ngữ cảnh định danh: từ ngay trước ∈ _ID_CONTEXT_WORDS
+        {nhà, số, lượng, mã, đường, ngõ, hẻm, cổng, phòng, sđt, điện, thoại, sim}
+        CỐ Ý KHÔNG đưa vào: đơn, bàn, lô, tầng, kệ, tủ, ghế, xe, biển, chứng
+        → vì chúng vừa là định danh vừa là danh từ thường; guard trên chúng
+          chặn nhầm câu thật ("mỗi đơn 5000" = mỗi đơn 5.000đ → bị trả None).
+          Đã verify lại: "mỗi đơn 5000"/"đơn này 5000"/"tổng cộng 5000" → 5000 ✓
+    (d) Scale word mơ hồ dùng như VẬT THẬT — dict _AMBIGUOUS_SCALE_NOUNS:
+        "củ" + {cải, hành, gừng, ớt, khoai, sắn, mì, mía, tỏi, nghệ, sả,
+                riềng, sen, ấu, dong, năng, từ, chuối, đậu, lạc}
+        "chai" + {nước, dầu, bia, mắm, tương, rượu, sữa, xăng, dấm, mật,
+                  thuốc, coca, sting}
+    Mọi nhánh fail theo hướng "KHÔNG có amount".
+
+3.2 Thêm tiếng lóng miền Nam vào BIG_SCALES
+    "trẹo": 1_000_000   "chai": 1_000_000
+    → "hai trẹo" = 2.000.000 · "một chai" = 1.000.000 · "một trẹo rưỡi" = 1.500.000
+    "bạc" KHÔNG thêm: không có mệnh giá cố định, đoán là nguy hiểm.
+
+3.3 Refactor nhỏ: `_is_valid()` nhận `has_suffix: bool` thay vì (text, end)
+    → hậu tố tiền tệ chỉ tính 1 lần, dùng chung cho cả _is_valid và _looks_like_identifier.
+
+3.4 Corpus: 234 → 247 money case (25 → 33 negative)
+    Thêm: neg-026..neg-033 (SĐT/số nhà/năm/định danh/củ cải/chai nước/trả 2000)
+          slang-001..slang-005 (trẹo/chai positive)
+    Challenge set: bỏ ch-001/ch-002 (đã hỗ trợ), cập nhật note ch-003,
+          thêm ch-012/ch-013 cho bug mới (xem mục 4).
+
+3.5 Unit test: 49 → 55 test
+    Thêm class TestSouthernSlangScales (2 test) + TestShapeGuards (4 test)
+    Mở rộng MUST_NOT_PARSE thêm 8 dòng (shape guard).
+
+------------------------------------------------------------------------
+4. BUG MỚI PHÁT HIỆN — CHƯA FIX (cần user duyệt)
+------------------------------------------------------------------------
+  HẬU TỐ TIỀN TỆ DÍNH LIỀN SỐ KHÔNG PARSE:
+
+    "anh Nam trả 2000 đ"    → 2000    ✅ (có dấu cách)
+    "anh Nam trả 2000đ"     → None    ❌
+    "anh Nam trả 500 đồng"  → 500     ✅
+    "anh Nam trả 500đồng"   → None    ❌
+    "anh Nam trả 5000 vnd"  → 5000    ✅
+    "anh Nam trả 5000vnd"   → None    ❌
+    "anh Nam trả 5000k"     → 5000000 ✅ (k nằm trong _SCALE_ALT nên dính liền OK)
+
+  NGUYÊN NHÂN (đã verify bằng _tokenize):
+    _tokenize('anh Nam trả 2000đ') →
+      word 'anh' · word 'Nam' · word 'trả' · other '2' · other '0' · other '0'
+      · other '0' · word 'đ'
+    Regex `num` có lookahead `(?!\w)` — "đ" là ký tự word (Unicode letter) nên
+    "2000" KHÔNG match được làm num token → cả biểu thức không bao giờ chạy.
+    → Đây là bug CÓ TỪ TRƯỚC đợt fix này (không phải do guard mới gây ra):
+      trước đó cũng không có num token nào nên amount = None.
+
+  TẠI SAO CHƯA FIX: fix phải sửa regex tokenizer — đây là vùng TIỀN, và user
+  đã chốt "AI không được tự ký duyệt" với code chạm tiền. Cần user duyệt.
+  Đã ghi thành ch-012 / ch-013 trong challenge set để không bị quên.
+
+  Mức độ: fail theo hướng THIẾU amount (an toàn), không phải sai amount.
+  Nhưng "hậu tố tiền tệ" đang được tài liệu quảng cáo là hỗ trợ → thực tế
+  chỉ đúng khi có dấu cách.
+
+------------------------------------------------------------------------
+5. HÀNH VI THAY ĐỔI CÓ CHỦ ĐÍCH (đọc kỹ trước khi phản đối)
+------------------------------------------------------------------------
+  "anh Nam trả 2000" → TRƯỚC: 2000 · SAU: None
+     Lý do: 2000 nằm trong dải năm 1900..2099, trần, không hậu tố → guard (b) loại.
+     Đây là lựa chọn fail-safe theo quyết định "an toàn số tiền > độ phủ".
+     Đường thoát: "2000 đ" (có dấu cách) hoặc "hai nghìn".
+     Đã ghi thành neg-033 để nếu sau này muốn đổi thì test sẽ đỏ (buộc quyết định lại).
+
+  "mua 2 chai nước" / "mua 5 củ cải" → None (đúng). "ba củ"/"hai chai" trần → vẫn ra số.
+
+------------------------------------------------------------------------
+6. KẾT QUẢ SAU KHI SỬA (verify lại, output thật)
+------------------------------------------------------------------------
+  PYTHONPATH=src python3 -m unittest discover -s tests
+    → Ran 55 tests in 0.334s / OK
+  PYTHONPATH=src python3 tests/test_dialect_set.py
+    → money accuracy: 247/247 = 100.00%
+  Corpus: money 247 (33 negative) · kinship 30 · synonym 45 · challenge 11
+  Ví dụ README đã chạy lại nguyên văn → tất cả vẫn đúng
+    (amount 10500000; text "Nam trả 10 triệu 500 nghìn tiền cám";
+     CLI "Cô Ba mua 20 bao cám 25 ký, còn nợ 5 triệu" → intents ["receivable"])
+
+  ⚠️ ĐỌC CON SỐ 100% CHO ĐÚNG: corpus do AI viết nên 100% là MONG ĐỢI, không
+  phải bằng chứng mạnh. Đợt này là ví dụ sống: 100% mà vẫn có 4 false positive
+  + 1 bug chưa fix. Giá trị thật nằm ở 33 negative case + challenge set.
+
+------------------------------------------------------------------------
+7. HÀNH VI ĐÃ XÁC NHẬN KHÔNG PHẢI BUG (giữ nguyên)
+------------------------------------------------------------------------
+  "2 triệu 500"                 → None        ✅ từ chối có chủ đích (ambiguous_tail)
+  "2 triệu 500 bao cám"         → 2000000 + qty 500 bao  ✅ (từ sau phân biệt được)
+  "320 nghìn một bao"           → 320000      ✅ (bug cũ đã fix vẫn giữ)
+  "không triệu"                 → None        ✅ (has_nonzero)
+  "mua 100 bao cám, giá 320 nghìn một bao" → 320000  ✅
+  "3 tạ cám"                    → None + qty 3 tạ  ✅ (đơn vị khối lượng, không phải tiền)
+
+------------------------------------------------------------------------
+8. FILE ĐÃ THAY ĐỔI TRONG ĐỢT NÀY
+------------------------------------------------------------------------
+  SỬA:
+    - src/vietnamese_nlp/money.py       (shape guard + trẹo/chai + refactor _is_valid)
+    - tests/test_money.py               (+2 class, +6 test, +8 dòng MUST_NOT_PARSE)
+    - tests/data/dialect_cases.json     (234→247 money, +8 neg, +5 slang, challenge mới)
+    - README.md                         (bảng shape guard, ví dụ tiếng lóng, safety contract)
+    - next.md                           (Phase 15, khoảng trống Flutter, quyết định chốt)
+    - features.md                       (tiếng lóng, shape guard, phase-15, khoảng trống)
+    - checklist.md                      (đợt fix, câu hỏi đã trả lời, nợ kỹ thuật mới)
+    - .plan/phases/production_roadmap.md (phase 15 + quyết định kiến trúc + khoảng trống)
+  TẠO:
+    - .plan/phases/phase-15-monetization-ads.md
+    - result2.txt (file này)
+    - handoff_20260913-1359.md
+
+------------------------------------------------------------------------
+9. GATE QUAN TRỌNG NHẤT — KHÔNG ĐƯỢC BỎ QUA
+------------------------------------------------------------------------
+  Trước Phase 7 (create_payment_entry — write ĐẦU TIÊN chạm tiền):
+    - BUG ch-012/ch-013 (hậu tố dính liền) PHẢI được fix hoặc chấp nhận có ghi rõ.
+    - Đợt fix này PHẢI được user review (code chạm tiền) trước khi coi là chốt.
+
+------------------------------------------------------------------------
+10. RỦI RO CÒN LẠI / VIỆC CẦN LÀM
+------------------------------------------------------------------------
+  Cần user quyết:
+    - Có fix bug hậu tố dính liền (ch-012/ch-013) trong đợt này không?
+    - `bạc` = bao nhiêu tiền? (ch-003)
+    - Khi nào commit? (đang 0 commit)
+    - Sửa phase-03 (PWA → Flutter)?
+    - Định nghĩa Flutter client track (khoảng trống lớn nhất, chặn phase-04 + phase-15)
+    - 4 câu của phase-15: ad provider · múi giờ "hết ngày" · danh sách tính năng pro · IAP?
+
+  Hạn chế môi trường:
+    - AgentMemory DOWN (đã thử lại 1 lần) → không gọi được /session/end, /remember
+    - MCP cocoindex-code / codebase-memory-mcp KHÔNG expose
+    - OCR không chạy được → Code Review phải làm THỦ CÔNG (chính cách tìm ra 4 bug)
+    - Simplenote MCP KHÔNG có trong tool list → bài học "hậu tố tiền tệ dính liền"
+      + "lookahead (?!\w) chặn nhầm ký tự Unicode" chưa ghi được (rất đáng dùng chung)
+    - Chưa có audio thật 3 miền (điều kiện còn thiếu của Phase 1) — chặn Phase 4
+========================================================================

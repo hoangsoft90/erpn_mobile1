@@ -1,0 +1,135 @@
+========================================================================
+RESULT 50 — P7 REVIEW VÒNG 2: 5 FINDING (JOB QUEUE) + FIX + FALSIFY 4 GUARD
+Timestamp: 2026-09-18 (giờ shell)
+Phạm vi review: mcp-erpnext/src/job-queue.mjs (mới) · http-ask.mjs (wiring
+enqueue /jobs /execute/cancel + runner mới) · test/p7-job-queue.test.mjs.
+KHÔNG gọi ERPNext thật, KHÔNG tạo Payment Entry, KHÔNG submit/delete.
+Nguồn bằng chứng: lệnh chạy thật dưới đây (không suy đoán).
+========================================================================
+
+== 1. BỐI CẢNH ==================================================================
+P7 (queue WRITE khi ERP tạm down) đã code kỹ thuật ở lượt trước, CHỜ DUYỆT.
+User yêu cầu "review code một lần nữa, để tìm lỗ hổng". Review đọc diff thật +
+grep call site, tìm ra 5 finding — trong đó F-A làm GÃY exit criteria của P7.
+
+== 2. 5 FINDING (đều là lỗ hổng thật, không phải nitpick) ======================
+
+F-A (nghiêm trọng — exit criteria P7 gãy NGOÀI test):
+    Job được enqueue khi ERP down, nhưng grep toàn repo:
+        $ grep -rn "\.drain(" mcp-erpnext/src/
+        (không có kết quả nào trong src/ ngoài job-queue.mjs định nghĩa)
+    ⇒ KHÔNG ai gọi drain() trong server thật. Job nằm QUEUED vĩnh viễn.
+    Exit criteria "queued → sau đó VERIFIED hoặc FAILED rõ" chỉ đúng trong test.
+
+F-B (job kẹt vĩnh viễn, vô hình):
+    drain() chạy trên dueJobs() (chỉ QUEUED/RETRYING). Job bị lưu RUNNING lúc
+    process chết giữa attempt ⇒ _load() nạp lại nguyên trạng RUNNING ⇒ không
+    bao giờ due lại ⇒ kẹt mãi, không xuất hiện ở pending() lẫn completed().
+
+F-C (/jobs không bao giờ cho thấy kết quả):
+    Endpoint chỉ trả pending() — job VERIFIED/FAILED BIẾN MẤT khỏi report ⇒
+    deliverable 2 ("notify khi VERIFIED/FAILED") bất khả thi về mặt API.
+
+F-D (cancel không nhả job):
+    /execute/cancel chỉ huỷ record idempotency, không đụng jobQueue ⇒ job đã
+    huỷ vẫn được replay sau đó, nổ ra FAILED (PROPOSAL_CANCELLED) gây nhiễu.
+
+F-E (dead code + doc sai):
+    import { writeFileSync, renameSync } không dùng; docstring ghi "rewritten
+    state file" trong khi code append-only.
+
+== 3. FIX ======================================================================
+- F-A: thêm `startJobRunner({ jobQueue, execute = runExecute })` trong http-ask.mjs
+       (timer JOB_QUEUE_POLL_MS, mặc định 15s; guard env-number finite>0 theo
+       bài học 451cd8f; unref(); cờ `draining` chống chồng tick; tick() ngay khi
+       start để job RETRYING nạp từ disk được xử lý liền). Gọi trong main().
+       `execute` có DEFAULT = gateway thật; main() KHÔNG inject (có assertion tĩnh).
+- F-B: _load() chuyển RUNNING → RETRYING + next_attempt_at = now (replay
+       idempotent ⇒ "outcome unknown" được thử lại, không đoán FAILED).
+- F-C: thêm completed(limit=20) (mới nhất trước) + /jobs trả {pending, completed}.
+- F-D: thêm release(commandId) — chỉ QUEUED/RETRYING nhả được; RUNNING bị từ chối
+       (attempt có thể đang bay); /execute/cancel gọi release sau khi reconcile
+       xác nhận 0 chứng từ.
+- F-E: xoá import chết, sửa docstring.
+
+== 4. LỖI TỰ BẮT TRONG LÚC SỬA (đã ghi skill) ==================================
+
+(1) Runner đóng cứng gateway thật ⇒ test F-A đầu tiên FAILED vì job chạy gateway
+    THẬT (env ERPNext trống), không phải gateway giả tôi inject:
+        ✖ F-A startJobRunner — drains queued jobs through the SAME gateway
+          AssertionError: the runner drained the queued intent
+          + actual - expected
+          + 'FAILED'
+          - 'VERIFIED'
+    ⇒ Fix thiết kế: tham số `execute = runExecute` + static assertion
+      `startJobRunner({ jobQueue })` trong main() và không có `execute:` ở server.
+
+(2) `await` trong callback test KHÔNG async ⇒ file test không load được:
+        file:///.../test/p7-job-queue.test.mjs:251
+          assert.equal((await q.drain({...})).length, 0, ...)
+                        ^^^^^
+        SyntaxError: Unexpected reserved word
+        ✖ test/p7-job-queue.test.mjs (63.343432ms)
+        ℹ tests 1  ℹ pass 0  ℹ fail 1
+    ⇒ Sửa `async () =>`. Bài học: khi node chỉ báo 1 fail ở dòng 1 của file test
+      ("test failed"), kiểm `ℹ tests N` khớp số mong đợi TRƯỚC khi đọc logic.
+
+(3) Falsify nhắm SAI ĐƯỜNG (từ lượt trước): gỡ guard terminal trong pending()
+    nhưng drain() dùng dueJobs() ⇒ 9/9 vẫn xanh, suýt kết luận sai là "test không
+    bám luật". Lần này falsify nhắm đúng hàm test đi qua.
+
+(4) `job-queue/` (jobs.jsonl chứa command_id thật) xuất hiện untracked ở repo root
+    sau E2E ⇒ đã thêm `.gitignore` cùng chỗ idempotency-store/ + learning-log/.
+
+== 5. FALSIFY 4 GUARD MỚI (bản sao /tmp, dùng test MỚI NHẤT — bài học P3) ========
+
+Bản sao: /tmp/falsify-p7r2 · /tmp/fp7a · /tmp/fp7c · /tmp/fp7d (đã xoá sau khi xong).
+
+F-B — gỡ block RUNNING→RETRYING trong _load():
+    $ node --test test/p7-job-queue.test.mjs
+    ✖ F-B crash recovery — a job persisted RUNNING reloads as RETRYING and is due immediately
+    ℹ pass 15  ℹ fail 1                       ✅ test bám đúng luật crash-recovery
+
+F-A — thay `jobQueue.drain({ runExecute: execute })` bằng `Promise.resolve([])`:
+    ✖ F-A startJobRunner — drains queued jobs through the SAME gateway (...)
+    ℹ pass 15  ℹ fail 1                       ✅ test bám đúng runner
+
+F-C — `completed()` return []:
+    ✖ F-C completed() — terminal jobs are reportable, newest intent first, capped
+    ℹ pass 15  ℹ fail 1                       ✅ test bám đúng luật report
+
+F-D — `release()` luôn từ chối (hành vi trước review):
+    ✖ F-D release() — queued/retrying jobs are cancellable after reconcile-proof; RUNNING is not
+    ✖ F-D release() — a RUNNING job is refused (attempt may be in flight)
+    ℹ pass 14  ℹ fail 2                       ✅ test bám đúng luật cancel-nhả-job
+
+== 6. TEST FILE XANH + KHÔNG FLAKE (runner dùng polling, không sleep cứng) =====
+
+    $ for i in 1 2 3; do node --test test/p7-job-queue.test.mjs; done
+    ℹ pass 16 ℹ fail 0 (run 1)
+    ℹ pass 16 ℹ fail 0 (run 2)
+    ℹ pass 16 ℹ fail 0 (run 3)
+    (log của runner trong lúc test: "[jobs] cmd-run → VERIFIED")
+
+== 7. FULL SUITE 3 NỀN TẢNG (sau fix) ==========================================
+
+    $ PYTHONPATH=src python3 -m unittest discover -s tests
+    Ran 60 tests in 0.384s
+    OK
+
+    $ cd mcp-erpnext && env -u ERPNEXT_URL -u ERPNEXT_API_KEY -u ERPNEXT_API_SECRET node --test
+    ℹ tests 228  ℹ pass 228  ℹ fail 0            (trước review: 221)
+
+    $ cd apps/mobile && flutter test
+    00:13 +69: All tests passed!
+
+    $ flutter analyze
+    No issues found! (ran in 5.3s)
+
+== 8. TRẠNG THÁI ===============================================================
+- P7 kỹ thuật: queue + runner thật + crash-recovery + report terminal + cancel
+  nhả job. Tất cả guard an toàn mới đều falsify được (mục 5).
+- GAP (ghi rõ, không tự làm): TTS client-side (spec ghi optional) · submit phiếu
+  thu thật (chờ user quyết).
+- KHÔNG chạm ERPNext thật trong phiên này. KHÔNG tự commit (vùng tiền).
+- Staged/đề xuất commit: xem result50 §9 (danh sách file + message) — chờ user duyệt.

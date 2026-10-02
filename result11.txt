@@ -1,0 +1,96 @@
+========================================================================
+RESULT 11 — APK NỐI ĐƯỢC VPS (bind policy + basic auth) + KỊCH BẢN THU ÂM
+Timestamp: 2026-09-14 10:05
+Env: Linux VPS (container 10.88.0.4, public IP NAT 35.194.130.120, tailscale
+cài nhưng NeedsLogin). Branch change/flutter-chat-mvp, commit c3d74c3.
+========================================================================
+
+== 1. KHẢO SÁT MÔI TRƯỜNG (chọn phương án endpoint theo dữ liệu thật) ==
+
+- ngrok binary + tunnel: KHÔNG có trên VPS này (tunnel ngrok ERPNext chạy bên
+  máy ERPNext/Mac) → không tái dùng được
+- tailscale0 interface: CÓ, tailscaled chạy, nhưng "tailscale status" = Logged
+  out (NeedsLogin) → cần user click link login 1 lần trước khi dùng được
+- eth0 = 10.88.0.4/16 (container) · public IP 35.194.130.120 là NAT, KHÔNG
+  bind trực tiếp được (EADDRNOTAVAIL khi thử --host <public-ip>)
+
+== 2. CODE: BIND POLICY + BASIC AUTH (http-ask.mjs) ==
+
+Quy tắc (được server TỰ CHẾ, không phụ thuộc người vận hành nhớ):
+- loopback (127.x/localhost/::1): không cần auth (như cũ)
+- non-loopback: BẮT BUỘC ASK_USER + ASK_PASSWORD (>=8 ký tự) — thiếu → server
+  TỪ KHỞI ĐỘNG (throw trước listen)
+- public interface (không thuộc RFC1918/CGNAT 100.x): cần thêm
+  ASK_ALLOW_PUBLIC=1 — quyết định tường minh, không accidental exposure
+- auth = HTTP Basic, so sánh timingSafeEqual, phủ CẢ /health
+- Test 8 case: refuse non-loopback-no-auth · refuse password ngắn · private
+  (10/192.168/172.16-31/100.x) OK với creds · public refuse không flag ·
+  public OK với flag · HTTP thật 401/200/wrong-pass
+- Bug thật tìm thấy bằng test trong đợt này: ASK_ALLOW_PUBLIC đọc process.env
+  thay vì env param → 2 test fail → sửa code (1 dòng)
+
+== 3. FLUTTER CLIENT (copilot_api_client.dart) ==
+
+- Gửi Authorization: Basic chỉ khi build với
+  --dart-define=COPILOT_AUTH_USER / COPILOT_AUTH_PASSWORD
+- Không credential trong code, không fallback âm thầm về anonymous
+
+== 4. CHẠY THẬT TRÊN VPS ==
+
+$ node mcp-erpnext/src/http-ask.mjs --port 8788 --host 0.0.0.0
+  → {"ready":true,"port":8788,"host":"0.0.0.0","auth":true}
+  (credentials sinh tự động vào .env: ASK_USER=copilot, ASK_PASSWORD=<random
+  18-byte, git-ignored, KHÔNG in ra report này>)
+$ ss -tlnp | grep 8788 → LISTEN 0.0.0.0:8788 ✅
+
+Verify trên interface mạng THẬT (10.88.0.4 — không phải loopback):
+  GET /health không auth  → 401 {"ok":false,"error":"unauthorized"} ✅
+  GET /health sai password → 401 ✅
+  GET /health có auth      → 200 {"ok":true,"service":"copilot-ask"} ✅
+  POST /ask có auth, câu hỏi thật "Khách smoke 2026-09-13-p1done còn nợ bao nhiêu"
+    → 200, answer: "Khách smoke 2026-09-13-p1done còn nợ 269.000đ (3 hóa đơn
+       chưa trả)." ✅ (ERPNext thật, đúng ground-truth)
+
+Verify từ MẠNG NGOÀI INTERNET (read_url http://35.194.130.120:8788/health):
+  → TIMEOUT 20s ❌  → port 8788 bị cloud firewall của hosting chặn từ internet
+  (môi trường shared hosting: chỉ port host-map sẵn mở). iptables/nft không
+  đọc được (container, không root). Đây KHÔNG phải lỗi code — service đúng
+  ở tầng network; việc mở port thuộc về nhà cung cấp hosting/user.
+
+== 5. KẾT LUẬN ENDPOINT (3 đường, chọn 1) ==
+
+a) TAILSCALE (khuyến nghị, an toàn nhất): user login tailscale trên VPS
+   (link trong output `tailscale status` — còn hiệu lực) + cài tailscale trên
+   điện thoại → /ask bind IP 100.x → PII KHÔNG đi internet công cộng, mã hóa
+   WireGuard. Cần đổi ASK_ALLOW_PUBLIC khỏi .env (không còn public).
+b) HOST MỞ PORT: yêu cầu hosting map public port → 10.88.0.4:8788. Sau đó
+   cấu hình hiện tại (0.0.0.0 + basic auth) dùng được ngay từ ngoài.
+c) NGROK TỪ VPS: cài ngrok + authtoken riêng của user → URL HTTPS công cộng
+   (ngrok có auth built-in riêng nếu muốn). Không tự cài vì cần authtoken user.
+
+== 6. CI WORKFLOW (commit c3d74c3) ==
+
+Build APK với dart-define từ repo Variables/Secret (KHÔNG hardcode endpoint):
+  vars.COPILOT_BASE_URL · vars.COPILOT_AUTH_USER · secrets.COPILOT_AUTH_PASSWORD
+TRẠNG THÁI: token GH hiện tại CHỈ ĐỌC variables (PUT → 404, fine-grained
+token thiếu quyền Actions variables write) → USER PHẢI tự dán 3 giá trị vào
+GitHub Settings (deep link trong report chat). Chưa dán → APK CI vẫn build
+được nhưng COPILOT_BASE_URL rỗng → app dùng default 127.0.0.1 (chỉ test cùng máy).
+
+== 7. TEST CUỐI (lệnh + output thật) ==
+
+$ cd mcp-erpnext && node --test  → ℹ tests 48 · pass 48 · fail 0
+$ flutter analyze --fatal-infos  → No issues found!
+$ flutter test                   → +13: All tests passed!
+
+== 8. KỊCH BẢN THU ÂM (việc 2b — CHỈ tài liệu, không code) ==
+
+docs/audio-collection-script.md: 150 câu (A công nợ 30 · B hóa đơn 20 ·
+C phiếu thu 15 · D tồn kho 25 · E số tiền khó 35 · F danh xưng 15 ·
+G fail-safe 10), mỗi câu có GT; hướng dẫn thiết bị/môi trường/đặt tên file/
+metadata; dùng tên khách + vật tư THẬT trong ERPNext test để chạy end-to-end.
+
+== 9. GATE PHÁP LÝ (xác nhận) ==
+
+KHÔNG code LLM Router/PII scrubbing trong phiên này — đúng giới hạn user đặt.
+SIGNOFF-phase5-pii.md vẫn CHỜ KÝ, gate ĐÓNG.

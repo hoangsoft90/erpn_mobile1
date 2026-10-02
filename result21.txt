@@ -1,0 +1,187 @@
+========================================================================
+RESULT 21 — FIX CREDIT NOTE (vùng tiền) + REVIEW VÒNG 2: 3 LỖI THẬT + VERIFY THẬT
+Timestamp: 2026-09-15 (giờ VN), phiên sau commit a379a71
+Env: Linux VPS, Node v24.20.0, Python 3.12.3, Flutter 3.47.2 stable / Dart 3.13.2.
+     Repo erpn_mobile1, branch change/flutter-chat-mvp.
+     HEAD = a379a71 (mac-custom config + patch + docs, đã duyệt + push).
+========================================================================
+
+== 1. ĐÃ COMMIT + PUSH (đợt đã duyệt trước đó)
+a379a71  feat: add mac-custom upstream (self-hosted, no quota) as daily dev chain
+         → gồm 2 config router + dsh-e2e.patch.yml + checklist/working/next +
+           result19.txt + result20.txt + scripts/llm-router.mock.json
+         (đã push lên change/flutter-chat-mvp)
+
+== 2. FIX CREDIT NOTE — đã áp dụng (user duyệt 2026-09-15)
+
+Nguyên văn vấn đề (result20 §4): khách CÓ credit note bị báo sai tiền.
+  trước fix : "Khách smoke 2026-09-15-p1b-wf1-2 còn nợ 269.000đ (3 hóa đơn)"
+  ERPNext thật: 171.800đ / 4 chứng từ
+
+Vị trí sửa (3 file, tất cả đều là `outstanding_amount`):
+
+  a) mcp-erpnext/src/skills/customer.mjs — helper `listUnpaidInvoices`
+     `Number(r.outstanding_amount) > 0`  →  `!== 0`
+     (helper này được CẢ `getCustomerBalance` lẫn sales skill dùng chung — verify
+      bằng đọc code: getCustomerBalance() gọi listUnpaidInvoices() ở dòng 69)
+
+  b) mcp-erpnext/src/skills/sales.mjs — `listUnpaidInvoices` cùng luật `!== 0`
+
+  c) mcp-erpnext/src/mock-server.mjs — thêm credit note vào mock để test hồi quy:
+     SINV-0004 CUST-00002 outstanding_amount = -320.000 (grand_total -320.000,
+     is_return: 1) + filter `erpnext_sales_invoice_list` của mock đổi theo
+     `!== 0` (mock phải mô phỏng ĐÚNG hành vi tool thô, nếu không test hồi quy
+     sẽ pass giả)
+     → ground truth mock: CUST-00002 = 7.500.000 − 320.000 = 7.180.000đ / 2 chứng từ
+
+  Lý do đúng: `> 0` biến "còn nợ" thành **công nợ GỘP**. Credit note (is_return)
+  có outstanding ÂM — nó vẫn là khoản chưa tất toán, phải nằm trong tổng ròng.
+
+== 3. NHÃN TRUNG TÍNH (user cho phép "nếu không tốn nhiều công")
+Đổi "hóa đơn chưa trả" → "**chứng từ** chưa thanh toán" trong câu trả lời
+(mcp-erpnext/src/copilot-server.mjs), vì tập kết quả giờ gồm cả credit note —
+gọi nó là "hóa đơn" là sai bản chất. Thêm 1 nhánh mới cho trường hợp dư tiền:
+  outstanding_vnd > 0 → "còn nợ X (N chứng từ chưa thanh toán)"
+  outstanding_vnd < 0 → "không còn nợ — hiện dư X (N chứng từ …, phần dư từ
+                          ghi trừ/credit note)"
+  == 0               → "không còn nợ gì" (như cũ)
+Nhánh `sales` (liệt kê hóa đơn) giờ in từng dòng kèm số có dấu:
+  "SINV-0003: 7.500.000đ, SINV-0004: -320.000đ" → đọc ra ngay khoản trừ.
+
+== 4. TEST (output thật)
+
+  Python (không đổi code Python, chạy lại cho chắc)
+  PYTHONPATH=src python3 -m unittest discover -s tests
+    Ran 58 tests in 0.533s — OK
+
+  mcp-erpnext
+  node --test   → tests 50 · pass 50 · fail 0 · duration_ms 9856
+    (49 trước đó + 1 test hồi quy mới)
+  Test mới (copilot.test.mjs):
+    "copilot E2E: credit note counts toward the receivable balance (result20 regression)"
+      - CUST-00002 rows = 2, outstanding = [-320.000, 7.500.000]
+      - answer chứa "7.180.000"
+    Test cũ sửa: "second customer resolves independently"
+      7.500.000 → 7.500.000 - 320.000 (= 7.180.000), open_invoices = 2
+
+  Flutter
+  flutter test → All tests passed! (14/14)
+    (2 test Dart sửa kỳ vọng chuỗi câu trả lời theo nhãn "chứng từ")
+
+  E2E thật ở tầng số tiền — KHÔNG qua LLM (số tiền không phụ thuộc LLM):
+  probe gọi thẳng answerQuestion() với ERPNext THẬT + NLP service thật:
+    Q: Khách làm tròn 2026-09-15-p1b-wf1-2 còn nợ bao nhiêu
+       ANSWER: ... còn nợ 457.875đ (1 chứng từ chưa thanh toán).   ✓ ground truth
+    Q: Khách smoke 2026-09-15-p1b-wf1-2 còn nợ bao nhiêu
+       ANSWER: ... còn nợ 171.800đ (4 chứng từ chưa thanh toán).   ✓ ground truth
+                                                                    (trước fix: 269.000đ/3)
+  ⇒ Cả 2 con số khớp ground truth độc lập. Fix xác nhận trên dữ liệu THẬT.
+
+== 5. CHƯA CHẠY ĐƯỢC: E2E đầy đủ qua mac-custom (blocker NGOÀI tầm agent)
+Probe tunnel Mac 3 lần liên tiếp:
+  lần 1: HTTP 503 · lần 2: HTTP 503 · lần 3: HTTP 503
+  body: "503 - Tunnel Unavailable"
+→ Tunnel `llm9000.loca.lt` (localtunnel chạy trên máy Mac) đã TẮT.
+  Việc cần người thật: chạy lại `lt` trên Mac. Sau đó chạy lại E2E đầy đủ
+  (dsh → router → mac-custom → MCP tool → NLP → ERPNext thật).
+⇒ `thought_signature` vẫn CHƯA verify live (từ result17/18/19) — không đổi.
+
+== 6. REVIEW CODE ĐỢT NÀY — 3 LỖI THẬT + 1 GHI NHẬN
+
+Đọc diff nguyên văn (không review từ trí nhớ). Phạm vi: 10 file modified.
+
+--- FINDING A (nặng nhất — không liên quan tiền nhưng nguy hiểm thật) ---
+`node --test` discover **MỌI** file trong `test/`, kể cả 2 batch runner:
+  test/batch-accuracy.mjs   (18 câu hỏi, gọi answerQuestion)
+  test/batch-groundtruth.mjs (dump khách/hóa đơn THẬT)
+Cả 2 là script chạy ở top-level, KHÔNG có guard. Bằng chứng:
+  node --test (đủ suite) → "✔ test/batch-accuracy.mjs (193ms)" và
+                            "✔ test/batch-groundtruth.mjs (1909ms)"
+  chạy tay 2 file đó dưới runner → 18 case chạy thật, in "fetch failed" ×18
+Hậu quả tiềm tàng: ai đó chạy `npm test` trong shell ĐÃ `source .env` (đúng
+điều kiện đã xảy ra!) sẽ bắn 18 câu vào ERPNext THẬT + IN TÊN KHÁCH + SỐ TIỀN
+THẬT ra stdout như một phần của unit test. Đây là rủi ro side-effect thật +
+rò dữ liệu, không phải lý thuyết.
+Fix: guard theo `process.env.NODE_TEST_CONTEXT` + so argv[1] với fileURLToPath.
+  ⚠️ Bài học phụ: guard phiên bản đầu của tôi dùng argv[1] MỘT MÌNH và SAI —
+  test runner spawn từng file thành child process nên argv[1] CHÍNH LÀ file đó,
+  guard không chặn được. Đã probe riêng để xác định tín hiệu đúng:
+    chạy trực tiếp     : NODE_TEST_CONTEXT=[unset]
+    dưới node --test   : NODE_TEST_CONTEXT=[child-v8]
+  Sau fix: `node --test` in ra dòng skip RÕ RÀNG (không im lặng):
+    "[batch-accuracy] discovered by the test runner — skipped. Run: node test/batch-accuracy.mjs"
+    duration 193ms→80ms và 1909ms→80ms; chạy trực tiếp vẫn chạy (verify cả 2).
+
+--- FINDING B (treo suite — chính là nguyên nhân các lệnh timeout 120s) ---
+Triệu chứng: `node --test` treo > 120s (2 lần liên tiếp). Chạy từng file thì
+6 suite kia pass hết, chỉ http-ask.test.mjs chết:
+  Error: ASK_USER/ASK_PASSWORD make no sense on a loopback bind — remove them
+    at resolveBindPolicy (http-ask.mjs:54)  ← throw trong SETUP
+  ✖ "/ask CLI main(): ready line on stdout then exit on close" — "no ready line"
+  ✖ test/http-ask.test.mjs — "Promise resolution is still pending…"
+Nguyên nhân gốc, 2 lớp:
+  ① Test KHÔNG hermetic: shell tương tác đã `set -a; source .env; set +a` →
+     `ASK_USER=copilot` + `ASK_PASSWORD` bị export vào MỌI process con. File test
+     chỉ strip `ERPNEXT_*` (fix result9), KHÔNG strip `ASK_*` → bind loopback
+     127.0.0.1 bị policy từ chối (đúng thiết kế của http-ask.mjs).
+  ② Setup nằm NGOÀI try: createAskServer() throw TRƯỚC try ⇒ `nlp.child.kill()`
+     trong finally không bao giờ chạy ⇒ tiến trình Python con rò lại ⇒ suite
+     KHÔNG exit ⇒ treo. Một lỗi fail-fast biến thành hang toàn suite.
+Fix: ① strip cả `ASK_*` (hermetic loop + env spawn của CLI test — cùng bản chất
+     với fix ERPNEXT_* result9); ② `try` mở ngay sau startNlpService, mọi thứ
+     (kể cả import + createAskServer) nằm trong try, finally `server?.close()` +
+     kill child. Không đổi logic sản phẩm — chỉ tính hermetic của test.
+Kết quả: chạy lại trong ĐÚNG điều kiện leak → 2/2 pass, 8602ms (trước: treo).
+
+--- FINDING C (kỳ vọng eval cũ, sẽ báo FAIL GIẢ) ---
+batch-accuracy.mjs có 5 assertion kỳ vọng chuỗi "(N hóa đơn" — sau khi tôi đổi
+nhãn sang "chứng từ", chúng KHÔNG THỂ khớp nữa. Lần chạy batch tới sẽ báo
+accuracy tụt vì lý do hình thức, không phải vì số tiền sai — đúng loại nhiễu
+làm hỏng phép đo exit-criteria phase-02.
+Fix: thêm `const DOC = /chứng từ|hóa đơn/;` và 5 chỗ đổi thành
+`has(answer, "(3 ") && DOC.test(answer)` ⇒ chấm theo SỐ TIỀN + SỐ LƯỢNG, không
+chấm theo danh từ. (Cố ý chấp nhận cả 2 danh từ để đổi nhãn sau này không tạo
+fail giả; nội dung câu hỏi người dùng hỏi vẫn giữ nguyên "hóa đơn".)
+
+--- FINDING D (ghi nhận, không phải lỗi) ---
+`getCustomerBalance` không trả `rows` (chỉ tổng + count) trong khi nhánh `sales`
+trả `rows`. Probe tôi viết in `rows` rỗng cho câu "còn nợ" → ban đầu trông như
+lỗi, thực ra là hành vi đúng theo thiết kế (khác nhánh). Không sửa.
+
+--- Các check khác ---
+| Check | Kết quả |
+|---|---|
+| secret scan (diff + file mới) | CLEAN (rỗng) |
+| .env | vẫn ignored: `.gitignore:47:.env` |
+| openspec | `validate flutter-chat-mvp` → "Change 'flutter-chat-mvp' is valid" |
+| ports | 8787 đã dừng sau probe (`pkill`), không process lạc |
+| OCR | không khả dụng trong env (đã ghi checklist) → review thủ công |
+| impact | chỉ test/ + skills/ + copilot-server.mjs; không code nào import 2 skill này ngoài copilot-server |
+
+== 7. FILE THAY ĐỔI ĐỢT NÀY (CHƯA COMMIT — vùng tiền, chờ user)
+
+  Sửa (10):
+    mcp-erpnext/src/skills/customer.mjs        `!== 0` + comment lý do
+    mcp-erpnext/src/skills/sales.mjs           `!== 0` + comment lý do
+    mcp-erpnext/src/mock-server.mjs            credit note SINV-0004 + filter mock
+    mcp-erpnext/src/copilot-server.mjs         nhãn "chứng từ" + nhánh dư tiền
+    mcp-erpnext/test/copilot.test.mjs          +1 test hồi quy, sửa 1 test cũ
+    mcp-erpnext/test/http-ask.test.mjs         hermetic ASK_* + try/finally (FINDING B)
+    mcp-erpnext/test/batch-accuracy.mjs        guard runner (A) + DOC regex (C)
+    mcp-erpnext/test/batch-groundtruth.mjs     guard runner (A)
+    apps/mobile/test/chat_controller_test.dart kỳ vọng chuỗi mới
+    apps/mobile/test/chat_data_test.dart       kỳ vọng chuỗi mới
+  Mới: result21.txt (file này)
+
+  Đề xuất commit:
+  fix: count credit notes in the receivable balance (net, not gross); make the
+  unit suite hermetic and stop the test runner executing the real-ERPNext batch
+
+== 8. CÒN TREO (không phải việc agent)
+- Tunnel Mac `llm9000.loca.lt` tắt → E2E đầy đủ qua mac-custom chờ user bật `lt`
+- `thought_signature` live verify (chờ 1 session dsh thật)
+- rotate key ERPNext · dán 3 giá trị GitHub Settings · chọn endpoint lâu dài
+- thu audio 150 câu (blocker Phase 4) · test APK trên thiết bị thật
+- review `.project/ai-rules.md`
+- Zen (để sau, giữ billing-blocked)
+========================================================================

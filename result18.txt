@@ -1,0 +1,187 @@
+========================================================================
+RESULT 18 — E2E SAU REVIEW §N: CHẶN BỞI QUOTA NGÀY (bằng chứng nguyên văn)
+Timestamp: 2026-09-15 14:47-14:55 giờ VN (07:47-07:55 UTC)
+Code: đợt SAU review §N (commit be57052) · harness mới (dsh-e2e.patch.yml +
+llm-router.e2e.json) · ERPNext THẬT · Gemini 3.6-flash
+========================================================================
+
+== A) COMMIT ĐỢT result17 (user duyệt)
+  be57052 "feat: gateway carries Gemini thought_signature (tool sessions complete)
+  + durable E2E harness" — 10 files, +856/-15 → push change/flutter-chat-mvp OK
+  (49317a7..be57052). Secret scan CLEAN trước khi stage; .env vẫn git-ignored.
+
+== B) KIỂM TRA QUOTA BẰNG AUDIT TRƯỚC KHI CHẠY (theo yêu cầu user)
+  (SỐ LIỆU Ở MỤC NÀY ĐÃ ĐƯỢC SỬA SAU REVIEW 2 LẦN — xem §J: bản đầu gộp nhầm 2 ngày
+   quota; bản sửa lần 1 vẫn dùng số đếm THÔ chưa lọc `attempts` có `gemini`)
+
+  Quét TOÀN BỘ audit tìm được (repo `llm-router-audit/` + /tmp): **117 file, 302 dòng**.
+  Lưu ý: tập này lẫn cả audit của các lần chạy test (upstream là mock in-process),
+  nên chỉ số "status 200" thô (**83**) KHÔNG dùng được làm số quota — phải lọc theo
+  upstream THẬT đã được thử (`attempts` có `gemini`).
+  Số lần generate THÀNH CÔNG qua provider THẬT:
+    tổng (toàn bộ audit còn giữ được)                        : **17**
+    mốc <  07:00 UTC (01:28–01:46Z, thuộc ngày quota TRƯỚC)   : **10**
+    mốc >= 07:00 UTC (07:19, 07:37×2, 07:40, 07:41×2, 07:53Z) : **7**
+  → Mốc reset free tier ≈ **07:00 UTC** (nửa đêm Pacific). Ngày quota HIỆN TẠI
+    (>= 07:00 UTC) mới dùng **7** lần 200 → chưa thể tự nó chạm trần 20.
+  ⚠️ Audit của router KHÔNG phải sổ quota đầy đủ: các lần curl TRỰC TIẾP tới
+    provider (các probe tôi tự gọi) không đi qua router nên không xuất hiện ở đây —
+    muốn đếm đủ phải cộng cả chúng (hôm nay có ≥2 lần probe 200).
+  ⇒ Vì vậy KHÔNG được khẳng định "đã/ chưa chạm trần" chỉ từ audit; xem kết luận
+    theo BẰNG CHỨNG HÀNH VI ở §D và FINDING 2 của §J.
+
+== C) SESSION (1 lần, đúng harness mới, câu hỏi cần ≥2 tool-call)
+  Giờ chạy: 2026-09-15 14:53:13 +07
+  Prompt: "Khách làm tròn 2026-09-15-p1b-wf1-2 còn nợ bao nhiêu, và
+           Khách smoke 2026-09-15-p1b-wf1-2 còn nợ bao nhiêu?"
+  (ground truth lấy độc lập trước đó: 457.875đ / 1 hóa đơn chưa trả ·
+   171.800đ / 4 hóa đơn chưa trả — query REST thật, xem §F)
+
+  --- output dsh (nguyên văn) ---
+  [copilot] ERPNext target: REAL -> prevail-pantyhose-overvalue.ngrok-free.dev
+  dsh: SERVER: 502: {"message":"llm-router: all upstreams failed (tried: gemini-openai)","type":"llm_router_all_failed"}
+
+  --- audit (8 request) ---
+  {"...","attempts":["gemini-openai"],"status":502,"latencyMs":407,"messages":2}   ← title, 429
+  {"...","attempts":["gemini-openai"],"status":200,"latencyMs":4541,"messages":5}  ← **200 THẬT**
+  {"...","attempts":["gemini-openai"],"status":502,"latencyMs":9081,"messages":7}  ← turn tool-1, 503
+  {"...","attempts":["gemini-openai"],"status":502,"latencyMs":242,"messages":7}   ← 429
+  {"...","attempts":["gemini-openai"],"status":502,"latencyMs":936,"messages":7}   ← 429
+  {"...","attempts":["gemini-openai"],"status":502,"latencyMs":206,"messages":7}   ← 429
+  {"...","attempts":["gemini-openai"],"status":502,"latencyMs":421,"messages":7}   ← 429
+  {"...","attempts":["gemini-openai"],"status":502,"latencyMs":938,"messages":7}   ← 429
+
+== D) NGUYÊN NHÂN: 429 QUOTA – PHÂN LOẠI THEO BẰNG CHỨNG HÀNH VI (nguyên văn từ provider)
+  6× `gemini-openai status=429` body0:
+  [{
+    "error": {
+      "code": 429,
+      "message": "You exceeded your current quota, please check your plan and billing details.
+        ... * Quota exceeded for metric:
+        generativelanguage.googleapis.com/generate_content_free_tier_requests,
+        limit: 20, model: gemini-3.6-flash
+        Please retry in 42.457946511s.",
+      "status": "RESOURCE_EXHAUSTED", ...}}]
+  1× `status=503` — "This model is currently experiencing high demand..."
+
+  Bằng chứng về LOẠI bucket (không suy đoán từ con số):
+    · 429 ĐẦU TIÊN của session (§C) lúc 07:53:17 sau **11,5 phút im lặng** → nếu là
+      trần theo PHÚT thì phải 200.
+    · Ngay sau đó 4 giây, một turn khác nhận **200** (07:53:21) → trần theo phút
+      không giải thích được cặp 429→200 này.
+    · Probe quyết định SAU session (>15 phút im lặng hoàn toàn, §J): **429 tiếp**.
+    · Đếm số lần generate trong "ngày" (mốc 00:00 UTC): 17 qua router + ≥2 probe
+      trực tiếp ≈ **19-20** = sát `limit: 20`.
+  → Kết luận trung thực: hành vi là **429 bền vững sau im lặng dài** (khác hẳn
+    lỗi theo phút), nhưng **mốc reset/định nghĩa bucket CHƯA được xác lập chắc chắn**
+    từ dữ liệu này (2 mốc ứng viên cho ra 7 và ~20). Điều CHẮC CHẮN: đây là quota
+    phía provider, KHÔNG phải bug router; và "retry in 42s" là template gây hiểu nhầm.
+
+== E) ĐÁNH GIÁ TRUNG THỰC + QUYẾT ĐỊNH
+  - Router KHÔNG có lỗi trong session này: mọi 502 đều có `attempts:["gemini-openai"]`
+    (thực sự đã thử), lỗi 503/429 là của provider. Fix cooldown (result17 §B) đang
+    hoạt động đúng: không còn `attempts: []`.
+  - Có **1 turn 200 thật** (messages:5) ⇒ chuỗi + code sau review vẫn sống tới tầng
+    provider. Nhưng **turn replay tool (messages:7) KHÔNG lần nào nhận 200** ⇒
+    **đường `thought_signature` chèn lại CHƯA được verify live bằng code sau review**
+    (mới chỉ verify bằng test integration hermetic, router 19/19). Phải nói rõ,
+    KHÔNG được coi là đã xác nhận end-to-end.
+  - Theo đúng kỷ luật user ("không phải hôm nay nếu quota đã dùng" + không
+    retry-loop): **DỪNG, không chạy lại hôm nay** (429 còn dai dẳng sau >15 phút
+    im lặng ⇒ chạy lại là đốt session vô ích).
+  - **SỬA LẠI một câu tôi đã viết sai ở bản trước của file này:** "audit đã ghi
+    đúng 20 lần 200 ⇒ cạn đúng lúc" — SAI. Đếm lại toàn bộ audit (§B, chạy lại
+    bằng script lọc `attempts` có `gemini`): **17** lần 200 qua provider thật trong
+    cả ngày LỊCH 2026-09-15 (UTC) = **10** trước + **7** từ mốc 07:00 UTC — tức con
+    số cũ trộn 2 ngày quota VÀ tự nó cũng sai (20 vs 17). Số thật của ngày quota
+    hiện tại = **7**. Chi tiết + cách sửa: §J.
+
+== F) GROUND TRUTH CHO LẦN CHẠY KẾ TIẾP (đã lấy sẵn, không tốn quota)
+  "Khách làm tròn 2026-09-15-p1b-wf1-2"  → 1 hóa đơn, chưa trả 1
+       ACC-SINV-2026-00047  grand 457875  outstanding 457875   ⇒ TỔNG **457.875đ**
+  "Khách smoke 2026-09-15-p1b-wf1-2"     → 5 hóa đơn, chưa trả 4
+       ACC-SINV-2026-00048  89000 · 00049 90000 · 00050 0 · 00051 90000 ·
+       ACC-SINV-2026-00052  -97200 (credit note)
+       ⇒ TỔNG **171.800đ**
+  → Kỳ vọng lần sau: câu trả lời nêu cả 457.875đ và 171.800đ, và audit phải cho
+    thấy ≥3 turn (title + tool-call 1 + tool-call 2/final) = ≥2 tool-call thật.
+
+== G) KẾ HOẠCH LẦN CHẠY KẾ TIẾP (sau reset ~14:00 giờ VN ngày kế)
+  1. Đếm `status:200` ĐI QUA ROUTER trong audit **tính từ mốc reset 07:00 UTC** (các
+     probe curl trực tiếp tới provider phải cộng tay — audit không ghi chúng);
+     nếu tổng ≥20 → KHÔNG probe (probe "cho chắc" ở lần trước đã tiêu mất slot cuối),
+     chờ reset. Đừng đếm theo ngày LỊCH (bẫy đã mắc ở §D/§J).
+  2. Chạy DUY NHẤT 1 session với đúng prompt ở §C + ground truth §F.
+  3. Xác nhận ≥2 tool-call bằng audit (số turn có tool result) + xác nhận số tiền
+     khớp §F.
+  4. Nếu turn replay tool vẫn lỗi KHÁC 429/503 → lúc đó mới là bug của mình.
+
+== H) VERIFY 0-QUOTA VỚI CODE SAU REVIEW (bù cho việc §C không lên được provider)
+Mục đích: chứng minh đợt sửa §N KHÔNG phá plumbing, và chạy được bất cứ lúc nào
+kể cả khi provider đang từ chối vì quota (như session §C).
+
+Chuỗi: nlp_service + `scripts/mock-llm.mjs` (:8899) + router + dsh (mock ERPNext)
+  [copilot] ERPNext target: mock -> mock (in-memory)
+  Trả lời từ ERPNext (mock LLM chỉ đọc lại kết quả, không tự tính):
+    **Nguyễn Thị Lan còn nợ 2.500.000đ (1 hóa đơn chưa trả).**
+  === dsh exit: 0
+  audit: 200 × 3 turn — **messages 5 → 2 → 7** (turn `messages:7` CHÍNH LÀ turn
+  replay kết quả tool) với `attempts:["mock"]`
+→ Kết luận trung thực: plumbing (kể cả turn replay tool) đi qua code sau review
+  vẫn nguyên vẹn. Đây KHÔNG phải bằng chứng cho logic `thought_signature` (mock
+  không trả signature) — cái đó vẫn chờ 1 lần chạy thật (xem §G).
+
+PHÁT HIỆN THIẾT KẾ (đáng ghi để không mất thêm session nào): router **lọc chain
+theo `model`** (`candidates(wantModel)`), nên mock (`model: mock-copilot-1`) bị
+loại khi client xin `gemini-3.6-flash` → lần chạy 0-quota đầu tiên hỏng với
+`all upstreams failed (tried: gemini-openai)` (chain chỉ còn gemini). Đây là
+ĐÚNG thiết kế (mock không bao giờ được âm thầm trả lời thay LLM thật) — nhưng
+phải có đường test: thêm `scripts/llm-router.mock.json` với upstream mock
+**KHÔNG khai `model`** (upstream thiếu `model` = wildcard, khớp mọi tên model).
+Cả 3 config đều hợp lệ qua `loadConfig`.
+
+== J) REVIEW LẠI BÁO CÁO NÀY (2026-09-15, sau khi user yêu cầu review)
+Phạm vi review: những gì vừa làm — `scripts/llm-router.mock.json` (mới),
+`result18.txt`, docs, 2 skill. Không có code runtime nào khác thay đổi sau be57052.
+
+FINDING 1 (SAI SỰ THẬT trong báo cáo của chính tôi — đã sửa §B/§D/§E):
+  Tôi viết "audit hôm nay đã ghi đúng 20 lần 200 ⇒ cạn đúng lúc". Sai vì:
+    - Ngày quota free tier reset theo nửa đêm Pacific ≈ **07:00 UTC**, KHÔNG phải
+      nửa đêm UTC — tôi lại glob theo ngày LỊCH trong tên file.
+    - Đếm lại (script lọc `attempts` có `gemini`, chạy lại trong §B): **17 lần 200**
+      qua provider thật trong ngày LỊCH = **10 lần thuộc ngày quota TRƯỚC**
+      (01:28–01:46 UTC) + **7 lần thuộc ngày quota HIỆN TẠI** (07:19–07:53 UTC).
+      (Bản review đầu tôi viết 20/13/7 — vẫn là số chưa lọc đúng; số đã verify là
+      17/10/7.)
+    - Tệ hơn: audit của router **không ghi** các lần curl trực tiếp tới provider
+      (các probe tôi tự gọi) → dùng audit làm "sổ quota" là thiếu.
+
+FINDING 2 (kết luận về bucket phải viết lại theo bằng chứng, không theo con số):
+  Sau khi sửa số, bằng chứng HÀNH VI (không đoán): 429 xuất hiện sau **11,5 phút**
+  im lặng, rồi 4 giây sau có turn **200**, rồi probe sau **>15 phút** im lặng vẫn
+  **429**. ⇒ Xác nhận "429 dai dẳng sau im lặng dài" (không phải trần theo phút),
+  nhưng **mốc/định nghĩa bucket không thể kết luận chắc từ dữ liệu này** (mốc
+  07:00 UTC → 7 lần; mốc 00:00 UTC → 17 qua router + ≥2 probe ≈ 19-20 sát limit 20).
+  → Báo cáo giờ ghi *cả hai* con số + phần chưa xác lập, thay vì khẳng định một cái.
+
+FINDING 3 (rủi ro cấu hình mới — đã kiểm tra, chấp nhận được):
+  `scripts/llm-router.mock.json` chỉ có upstream mock ⇒ nếu vô tình dùng làm config
+  production thì MỌI request sẽ được mock LLM trả lời. Đánh giá: KHÔNG rò dữ liệu
+  và KHÔNG bịa số tiền (mock LLM chỉ đọc lại payload copilot, còn số tiền vẫn đến
+  từ ERPNext — và target ERPNext do patch quyết định, mặc định là mock). Vẫn giữ
+  tên file rõ nghĩa + `_note` giải thích. Không thêm guard runtime (tránh
+  over-engineering); nếu sau này muốn chặt hơn thì theo tiền lệ `ASK_ALLOW_PUBLIC`
+  của http-ask.
+
+FINDING 4 (kiểm tra chéo):
+  - `loadConfig` cả 3 config: OK (mock → wildcard `(upstream default)`); test
+    integration của router không phụ thuộc config nào trong repo (dựng config riêng).
+  - Schema `geminiThoughtSignatures` bắt buộc boolean (đã có test hard-error) —
+    mock config không khai field này → đúng kiểu shape, không bị luật validation mới.
+  - Router 19/19 sau tất cả thay đổi; secret scan CLEAN; ports rảnh.
+  - User-facing claim nào còn lại đều kèm lệnh + output thật (không có claim suông).
+
+== I) CHƯA COMMIT
+  result18.txt + `scripts/llm-router.mock.json` + docs (checklist/working/skill)
+  — chờ user duyệt.
+========================================================================

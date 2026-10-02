@@ -1,0 +1,130 @@
+========================================================================
+RESULT 42 — F2 (option b): AutomaticKeepAliveClientMixin cho ProposalCard
+Timestamp: 2026-09-16 (giờ shell)
+Chỉ đạo user: F2 = (b) AutomaticKeepAliveClientMixin; commit "để sau, đợi làm F2
+rồi gộp" (F1 + F3 + F2 = MỘT commit).
+Phạm vi: chỉ Flutter client (proposal_card.dart + test). KHÔNG đụng server,
+KHÔNG đụng ERPNext, KHÔNG saga (chờ duyệt §7), KHÔNG Phase 4/8/10/11.
+========================================================================
+
+== 1. VẤN ĐỀ F2 (từ result40, đã đo bằng probe) ==
+`ListView.builder` DISPOSE item ngoài viewport ⇒ card đã ghi bị rebuild sạch:
+nút [Xác nhận] QUAY LẠI trên thẻ đã ghi. Probe result40 (P2): trước scroll
+`success=1 button=0` → sau scroll ra/vào `success=0 button=1`.
+Tiền vẫn an toàn (P2b: bấm lại gửi CÙNG command_id ⇒ server replay), nhưng UI
+hiển thị ngược với sự thật đã ghi — đúng loại "hiểu nhầm" phải sửa.
+
+== 2. FIX (option b — không đổi schema) ==
+apps/mobile/lib/features/chat/presentation/widgets/proposal_card.dart
+
+  class _ProposalCardState extends ConsumerState<ProposalCard>
+      with AutomaticKeepAliveClientMixin {
+    @override
+    bool get wantKeepAlive =>
+        _confirming || _result != null || _error != null ||
+        _rejectionCode != null;
+
+  build(): super.build(context);   // bắt buộc — bookkeeping register/release
+
+Chọn `wantKeepAlive` CÓ ĐIỀU KIỆN (không phải `=> true`) để card chưa từng được
+bấm vẫn scroll đi bình thường — lịch sử chat dài không ghim mọi card trong RAM.
+Card giữ alive khi và chỉ khi nó ĐANG SỞ HỮU state cục bộ:
+  - `_confirming`  : đang ghi (nếu unmount giữa chừng thì kết quả về sau bị mất)
+  - `_result`      : đã ghi xong (đây chính là F2)
+  - `_error`       : lỗi mạng (giữ để user thấy lý do, khỏi bấm lại mù)
+  - `_rejectionCode`: STALE/EXPIRED (dấu cục bộ — bản persisted vẫn ở model)
+
+== 3. TEST HỒI QUY (apps/mobile/test/proposal_card_test.dart) ==
+'result41 F2: a written card keeps its result through a ListView recycle
+ (option b — AutomaticKeepAliveClientMixin)'
+
+Harness `_hostInListView`: card ở đỉnh ListView 60 item (filler cao 120) — đúng
+setup của chat screen thật. Dùng MỘT instance proposal cho cả test (bài học
+probe result40: tạo proposal mới mỗi build ⇒ đổi command_id ⇒ test nói dối).
+
+Assertions:
+  1. tap confirm → 'Đã ghi phiếu thu: PE-M001' hiện, FilledButton biến mất
+  2. drag -5000 (card ra khỏi viewport) rồi drag +6000 về đỉnh
+  3. SAU recycle: vẫn thấy 'Đã ghi phiếu thu: PE-M001'      (fix F2)
+     KHÔNG còn FilledButton                                  (không mời ghi lại)
+     writes == 1                                             (không /execute lần 2)
+
+$ flutter test test/proposal_card_test.dart --plain-name "result41 F2"
+00:01 +1: All tests passed!
+
+== 4. FALSIFY (bắt buộc — vùng tiền) ==
+Gỡ đúng fix: bỏ `with AutomaticKeepAliveClientMixin` + bỏ `super.build(context)`
+(giữ `wantKeepAlive` vô nghĩa, không mixin thì không được gọi).
+
+$ flutter test test/proposal_card_test.dart --plain-name "result41 F2"
+  Expected: exactly one matching candidate
+    Actual: _TextContainingWidgetFinder:<Found 0 widgets with text containing
+            Đã ghi phiếu thu: PE-M001: []>
+  Which: means none were found but one was expected
+  the write result must survive the ListView recycle
+  ... test failed (line 653)
+
+⇒ Test bắt ĐÚNG lỗi F2 (kết quả ghi mất sau recycle) — không phải xanh giả.
+Khôi phục fix:
+$ grep -c "FALSIFY-MARKER" .../proposal_card.dart        → 0
+$ grep -n "AutomaticKeepAliveClientMixin\|super.build(context)" ...
+    59:  with AutomaticKeepAliveClientMixin {
+    70:  /// (option b — AutomaticKeepAliveClientMixin)  [doc comment]
+    208: super.build(context);
+
+== 5. FULL SUITE (sau khi khôi phục) ==
+$ PYTHONPATH=src python3 -m unittest discover -s tests     → Ran 60 tests — OK
+$ cd mcp-erpnext && node --test                            → ℹ pass 120 · fail 0
+$ cd scripts && node --test                                → ℹ pass 19  · fail 0
+$ cd apps/mobile && flutter test                           → 00:04 +39: All tests passed!
+$ cd apps/mobile && flutter analyze                        → No issues found!
+(Flutter 38 → 39: +1 test hồi quy F2)
+
+== 6. GIỚI HẠN CÒN LẠI CỦA OPTION (b) — ghi rõ, không giấu ==
+Option (b) giữ state trong RAM: kết quả ghi KHÔNG sống qua app restart
+(option (a) mới persist qua schema). Chấp nhận được vì an toàn tiền KHÔNG phụ
+thuộc phần hiển thị này — 2 test đã có chứng minh 2 nửa của chuỗi:
+  - `proposal_card_test.dart` 'ChatTurn history round-trip preserves the
+    proposal command_id' ⇒ sau restart, command_id của card được giữ nguyên.
+  - cùng file, test 'network error then retry on the SAME card → ONE stable
+    command_id, retry is served as replay' ⇒ bấm lần 2 với cùng id ⇒ server
+    replay, không ghi phiếu thứ hai.
+⇒ Sau restart nút có thể hiện lại, nhưng lần bấm đó là REPLAY phía server.
+(Chưa có test E2E restart-app→bấm→replay trong 1 test; nếu muốn chắc chắn tuyệt
+đối thì đó là việc của option (a) hoặc một test tích hợp riêng — không tự mở.)
+
+== 7. TRẠNG THÁI COMMIT — ✅ ĐÃ COMMIT `4546997` (user duyệt 2026-09-16: "commit nhưng KHÔNG push")
+
+$/ git commit  → [change/flutter-chat-mvp 4546997] fix: chat UI crash/fail-open
+  guards + keep a written card alive
+  4 files changed, 272 insertions(+), 8 deletions(-)
+
+$/ git status -sb → ## change/flutter-chat-mvp...origin/... [ahead 1]   ← CHƯA PUSH
+
+⚠️ Lần commit đầu (`d754487`) bị git GỘP subject thành 1 dòng dài (dòng nối thụt
+đầu trong cùng đoạn với subject bị git fold bằng space: "…alive — mounted
+      after await; …") — đã sửa bằng `git commit --amend` (chỉ đổi MESSAGE,
+không đổi nội dung: `git show --stat` vẫn đúng 4 file +272/−8). Bài học: subject
+phải là 1 dòng riêng, mọi dòng nối phải cách subject bằng 1 dòng trống.
+⇒ commit cuối: **4546997** (subject sạch, 4 file, ahead 1, chưa push).
+
+Staged (4 file, +272/−8), secret scan staged diff = 0 hit:
+  apps/mobile/lib/features/chat/data/chat_models.dart        (F3 tolerant parse)
+  apps/mobile/lib/features/chat/presentation/widgets/proposal_card.dart (F1 + F3 + F2)
+  apps/mobile/test/chat_data_test.dart                       (F3 regression)
+  apps/mobile/test/proposal_card_test.dart                   (+4 regression: F1×2, F3, F2)
+Message dùng (gộp F1+F3+F2 theo yêu cầu user):
+  fix: chat UI crash/fail-open guards + keep a written card alive
+  (+ body: F1 mounted-after-await · F3 tolerant problems[] · F2 keep-alive +
+   hạn chế option (b) · falsify · suite · evidence result40/41/42)
+
+KHÔNG stage: .env · idempotency-store · .plan · .gemini/ · .opencode/ · initp ·
+docs/evidence (checklist/next/working/result37-42/setup-test/handoff — chờ duyệt
+lần sau, có thể là commit docs riêng).
+
+== 8. CHƯA LÀM TRONG PHIÊN (đúng gate) ==
+- Saga / compensation (REVERSING/REVERSED): ⏸️ CHỜ USER DUYỆT §7 phase-09.
+- F4 (clone attachRejection đổi command_id khi seed null): latent, ghi nhận,
+  KHÔNG sửa.
+- Không đụng ERPNext thật · không Phase 4/8/10/11.
+========================================================================

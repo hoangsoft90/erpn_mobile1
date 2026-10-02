@@ -1,0 +1,62 @@
+================================================================================
+result85.txt — next8 / PHASE 2 — ĐÓNG CỔNG #2 (verify lại; CHỜ owner D5 + lệnh commit)
+Ngày: 2026-09-30 · Người chạy: agent
+Trạng thái: verify XANH · D5 = CHƯA XÁC NHẬN · COMMIT/PUSH = CHƯA CÓ LỆNH
+Nguyên tắc: KHÔNG commit vùng tiền · KHÔNG sang Phase 3 · KHÔNG gỡ 422 · KHÔNG sửa §6.2
+Tham chiếu: .plan/next8/phase2-result.md §9.5 · .plan/next8/ui-checkpoint-collect.md
+           · .plan/next8/commit-message-phase2.txt
+================================================================================
+
+§1. VERIFY LẠI (số đo phiên này)
+--------------------------------------------------------------------------------
+[A] Flutter collect screen
+  $ cd apps/mobile && flutter test test/collect_screen_test.dart
+  → All tests passed!  (+22)   [T1–T20 + T15b + T15c]
+
+[B] Flutter collect data
+  $ flutter test test/next8_collect_data_test.dart
+  → All tests passed!  (+16)
+
+[C] Node targeted 5 suite (wrapper COPILOT_MOCK_OK=1)
+  $ cd mcp-erpnext && COPILOT_MOCK_OK=1 node --test \
+      test/next8-collect-reads.test.mjs test/next8-collect-accounts.test.mjs \
+      test/next8-collect-propose.test.mjs test/next8-collect-handoff.test.mjs \
+      test/next8-collect-draft.test.mjs
+  → tests 50 · pass 50 · fail 0
+
+⇒ 0 fail mới. Không phải sửa gì trong scope Phase 2.
+
+§2. UI-CHECKPOINT (DoD D5) — CHƯA XÁC NHẬN
+--------------------------------------------------------------------------------
+- File hướng dẫn: .plan/next8/ui-checkpoint-collect.md (5 bước smoke + bảng tiêu chí V1–V13).
+  Đã kiểm: còn đúng (chạy backend MOCK cần COPILOT_MOCK_OK=1; data mock Lan 1 HĐ, Trần Văn Hai 2 HĐ).
+- Owner chưa trả lời trong phiên này ⇒ agent KHÔNG tick D5 PASS.
+- Owner chọn 1 trong 2 (đánh dấu vào phase2-result §9.5):
+    [ ] (a) đã smoke tay + CÓ ảnh  → D5 PASS
+    [ ] (b) chấp nhận bỏ qua ảnh, dựa T1–T20 + T6 → D5 PASS (theo thoả thuận)
+
+§3. COMMIT / PUSH — CHƯA CÓ LỆNH
+--------------------------------------------------------------------------------
+- Owner chưa ghi `COMMIT = CÓ` ⇒ KHÔNG commit, KHÔNG push (đúng yêu cầu).
+- Draft message sẵn sàng (chưa dùng): .plan/next8/commit-message-phase2.txt
+  (feat(next8): collect screen… · ghi VÙNG TIỀN · không nới lock).
+- Khi có lệnh: `git status` trước → stage TƯỜNG MINH file Phase 2 (source + test + openspec
+  liên quan) → KHÔNG stage `.plan/` · `.env` · `_probe_*.dart` · `node_modules` · build artifacts
+  → commit 1 lần → không force-push → push chỉ khi `PUSH = CÓ` (fast-forward only).
+
+§4. DEBT GIỮ NGUYÊN (không đụng)
+--------------------------------------------------------------------------------
+- D2  COLLECT_MULTI_INVOICE_NOT_READY (422 multi-HĐ) — Phase 3/4.
+- §6.2 account BLOCK / bỏ fallback Cash — Phase 3.
+- D3  references[] hardcode 1 dòng — Phase 3/4.
+- D4  split N PE — backlog.
+
+§5. FILE ĐỤNG PHIÊN NÀY
+--------------------------------------------------------------------------------
+- result85.txt (mới).
+- .plan/next8/phase2-result.md — thêm §9.5 (verify lại + D5 chưa xác nhận + commit chưa có lệnh).
+- KHÔNG đụng source/route/test. KHÔNG commit, KHÔNG git add.
+
+================================================================================
+CHỜ OWNER: (1) D5 — smoke + ảnh HOẶC đồng ý bỏ ảnh; (2) COMMIT = CÓ/KHÔNG; (3) PUSH = CÓ/KHÔNG.
+================================================================================

@@ -1,0 +1,76 @@
+# result98 — Phase 11 follow-up (acceptance readiness + openspec hygiene + CI check)
+
+Nguồn: prompt follow-up (A/B/C/D).   Ngày: 2026-10-02   Trạng thái: XONG phần agent làm được — DỪNG chờ owner.
+Đọc: .plan/next8/phase11-result.md + .agent_sessions/res14.md (res14 = ngữ cảnh next6, không đổi).
+KHÔNG tự commit/tag khi còn BLOCK keystore.
+
+================================================================================
+## A) Sẵn sàng acceptance
+
+### A.1 Smoke gateway — BLOCK mạng
+$ curl -m4 http://127.0.0.1:8788/health            → curl(7) không kết nối (000). Gateway local không chạy.
+$ curl -m8 http://mac-mini-ca-hoang.tail54c58.ts.net:8788/health → curl(28) timeout. Máy dev NGOÀI tailnet.
+Bù lại — MOCK gateway local (không ghi gì):
+  $ COPILOT_MOCK_OK=1 node src/http-ask.mjs --port 8788   (loopback, bỏ ASK_USER/PASSWORD)
+  /health → 200 {"ok":true,"service":"copilot-ask","port":8788}
+  (creds đặt trên loopback ⇒ gateway TỪ CHỐI khởi động "make no sense on a loopback bind" = fail-closed)
+⇒ A.1 THẬT = BLOCK mạng, không phải lỗi app.
+
+### A.2 Số vàng cho A2 (READ-ONLY, site frontend; _probe_11_golden_numbers.mjs)
+auth=200 user=ai-copilot@…  · company="Minh Phát Cám & VLXD" · wh="Kho Cám - MP" · today=2026-10-02
+  A2-a  "P1A-ACCEPT Customer còn nợ"      = 183.489.500 VND (179 HĐ chưa trả)
+  A2-b  "Anh Ba — xây nhà còn nợ"          = 1.160.000 VND   (4 HĐ)
+  A2-c  "CAM-HEO-25KG tồn @ Kho Cám - MP"  = 734
+  A2-d  "tóm tắt hôm nay" (đã ghi)         = 9 HĐ · 1.601.250 VND (nháp 0)
+Toàn site: 296 hoá đơn mở · 52 khách có nợ · Bin tồn≠0 chỉ 3 item (CAM-HEO-25KG 734 · P2-DELIVERY-ACCEPT 75 · CAM-GA-25KG 2).
+
+### A.3 1 vòng nháp — CHƯA chạy
+Cần owner nói rõ "cho phép 1 vòng nháp" (vùng tiền). Agent KHÔNG tự chạy. Không submit.
+
+================================================================================
+## B) Hygiene openspec
+
+### Archive đợt 2 (9 change ADDED-only valid, đã ship):
+  flutter-chat-mvp · next6-dsh-runtime-isolation · next7-a0-dsh-write-handoff ·
+  next7-c3-day-phrase · next7-voice-autosend · next8-collect-contract ·
+  next8-collect-safety-execute · next8-collect-screen · next8-sales-vertical
+  ⇒ TỔNG 24 change archived (đợt1 15 + đợt2 9). openspec/specs/ = 29 capability.
+  Mỗi archive: "Specs updated successfully" (chỉ +ADDED, ~0, -0).
+
+Purpose: điền thêm 7 spec mới (sales-screen/collect-screen/sales-execute/sales-money/sales-draft/
+  transaction-contract/payment-execute) + 17 spec đợt trước ⇒ 29/29 có Purpose thật.
+  $ grep -rl "TBD - created by archiving change" openspec/specs  → NONE
+  $ npx openspec validate --specs --strict  → 29 passed / 0 failed
+
+### BLOCK owner — 6 change còn lại (không archive an toàn):
+  next8-entity-selection-loop (18/20)  — 2 requirement thiếu SHALL/MUST (RFC2119)
+  next8-d3-shared-selection   (✓)      — 1 requirement ADDED THIẾU SCENARIO (ERROR) + 2 RFC2119
+  next8-d4-acceptance         (✓)      — 1 requirement thiếu RFC2119
+  next8-review-hardening      (✓)      — MODIFIED header "Session context can remember every
+                                        picker-backed entity kind" (chỉ resolve sau khi archive
+                                        entity-selection-loop — đang invalid)
+  next9-turn-entity-isolation (31/34)  — MODIFIED header "The chat list keeps each turn's outcome
+                                        on its own bubble" KHÔNG tồn tại ⇒ delta lệch scope
+  next7-a1-write-handoff-widening (11/14) — MODIFIED block BỎ SÓT 2 scenario của spec hiện tại
+                                        (CLI: copy "a complete payment sentence produces a proposal"
+                                        + "a missing slot is a clarification, not a half-filled card")
+Lý do BLOCK: spec mô tả WRITE-binding id (vùng tiền/quyền) — sửa scenario = đổi hợp đồng ⇒
+cần owner duyệt (AGENTS vùng loại trừ an toàn). KHÔNG tự sửa.
+
+================================================================================
+## C) CI / ký — CHỈ khi có secret
+$ gh secret list -R hoangsoft90/erpn_mobile1
+  COPILOT_AUTH_PASSWORD   (2026-10-01)
+$ gh variable list -R hoangsoft90/erpn_mobile1
+  COPILOT_AUTH_USER=copilot · COPILOT_BASE_URL=http://mac-mini-ca-hoang.tail54c58.ts.net:8788
+⇒ KHÔNG có KEYSTORE_BASE64/KEY_ALIAS/KEY_PASSWORD/STORE_PASSWORD ⇒ GIỮ BLOCK.
+   KHÔNG trigger workflow · KHÔNG fake artifact.
+
+================================================================================
+## D) Không làm (đúng yêu cầu)
+Không bịa PASS A1–A9 · không commit keystore · không bật submit · không Administrator ·
+không `git add .` · không tự commit/tag.
+
+## Output
+phase11-result.md cập nhật (§2 số vàng + smoke · §3 CI block · §4.3 archive 24 + 6 BLOCK · §10 checklist 1 trang)
+· result98.txt · DỪNG chờ owner (secret / phone A1–A9 / commit).

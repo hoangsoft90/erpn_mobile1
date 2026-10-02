@@ -1,0 +1,199 @@
+================================================================================
+result73.txt — RESTART COPILOT SERVER với .env mới + FILE XML MỚI ⇒ [XÁC NHẬN] TẠO NHÁP
+Ngày: 2026-09-25 · Project: erpn_mobile1 · Branch: change/flutter-chat-mvp
+Chứng minh: đường [Xác nhận] của app KHÔNG còn 500 `PO_COMPANY_UNRESOLVED` sau khi pin company.
+WRITE scope: 1 NHÁP Purchase Order · KHÔNG submit · KHÔNG huỷ gì · KHÔNG push.
+================================================================================
+
+## 0. ĐÃ LÀM GÌ
+
+Trước phiên này: `.env` đã được thêm `COPILOT_COMPANY="Minh Phát Cám & VLXD"` (result72 §6),
+nhưng **chưa từng chứng minh đường [Xác nhận] tạo được nháp** — lần verify trước chỉ chạy được
+tới `409 PO_DUPLICATE_DOC` (gửi lại tờ cũ) nên **không** phân biệt được company đã mở hay chưa.
+
+Phiên này:
+1. **Restart thật** copilot stack (2 terminal theo `faq.md` §8) với env lấy từ `.env`.
+2. Gửi **file XML MỚI** (`C26TYY / 0000128`) qua **HTTP thật + basic auth** ⇒ khoá nghiệp vụ
+   chưa từng có trên site nên **cổng chống trùng không thể là thứ trả lời**.
+3. Kiểm chứng **độc lập bằng REST** (không qua copilot).
+
+Script: `.plan/next4/loop-xml-confirm-draft.mjs` (nói chuyện với server ĐANG CHẠY, không dựng
+stack trong tiến trình như `loop-xml-dedupe-real.mjs`).
+File gửi: `.plan/next4/fixtures/xml-new-invoice.xml` (1 dòng hàng: 12 Bao CAM-GA-25KG).
+Site: host `prevail-…ngrok-free.dev` (chỉ host, không secret).
+
+## 1. RESTART — nguyên văn
+
+```
+$ set -a; . ./.env; set +a
+$ setsid nohup python3 -m nlp_service.server --port 8787      > /tmp/copilot-restart/nlp.log 2>&1 &
+  {"ready": true, "port": 8787}
+$ setsid nohup node mcp-erpnext/src/http-ask.mjs \
+      --port 8788 --host 10.88.0.4                            > /tmp/copilot-restart/ask.log 2>&1 &
+  [http-ask] ERPNext target: REAL -> prevail-…ngrok-free.dev
+  [authz] mode=single_tenant user=copilot permissions=[Sales User, Accounts User, Purchase User, Stock User]
+  {"ready":true,"port":8788,"host":"10.88.0.4","auth":true}
+
+$ ss -ltn
+  LISTEN 10.88.0.4:8788     ← gateway (auth)
+  LISTEN 127.0.0.1:8787     ← NLP service
+```
+
+**Vì sao bind `10.88.0.4` (IP private) chứ không `127.0.0.1` và không `0.0.0.0`:**
+`resolveBindPolicy` (`http-ask.mjs:136`) **throw** nếu bind loopback mà vẫn có `ASK_USER`/`ASK_PASSWORD`,
+còn bind public bắt buộc `ASK_ALLOW_PUBLIC=1` — mà `.env` **có cả 3 biến** (`ASK_USER`, `ASK_PASSWORD`,
+`ASK_ALLOW_PUBLIC`), tức deployment thật là **non-loopback + basic auth**. Chọn IP **private** để giữ
+đúng chế độ auth của `.env` mà **không expose** dịch vụ ra internet (đúng khuyến nghị trong chính
+thông báo lỗi của code: *"prefer a VPN/Tailscale IP"*).
+
+**Auth là thật, không phải trang trí:**
+```
+GET /health  không auth → HTTP 401
+GET /health  có auth    → {"ok":true,"service":"copilot-ask","port":8788}
+```
+
+Ghi chú: lúc boot có **8 job FAILED** (`đề xuất đã hết hạn (70x s > 600s)`) — là job PENDING
+còn sót của các probe phiên trước trong job store in-memory; **không liên quan** việc này, không ghi gì.
+
+## 2. FILE XML MỚI ⇒ [XÁC NHẬN] ⇒ NHÁP — nguyên văn
+
+```
+Purchase Order TRƯỚC: 7 (có business_doc_key: 1)
+
+/input/einvoice → 200 (1192 ms)  ok=true
+  identity = C26TYY / 0000128 · ngày 2026-09-20
+  party    = Đại lý Cám Bình Dương (tax_id)
+  lines    = ["12 Bao CAM-GA-25KG"]
+  warnings = []
+  source_document gửi /ask = {"kind":"purchase","invoice_no":"0000128","invoice_date":"2026-09-20","invoice_series":"C26TYY","seller_tax_id":"0300000002"}
+  câu gửi /ask             = đặt mua 12 Bao Cám gà thịt 25kg từ Đại lý Cám Bình Dương
+
+/ask → 200 (2091 ms)  ok=true
+  action=create_purchase_order  proposal_id=prp_580621b8-…
+  business_doc_key = bdk_6805548980563b22e6ea502ed4895d15
+  business_dedup   = (none)
+
+/execute → 200 (2402 ms)  ok=true
+  code=(none)  existing_doc=(none)
+  erpnext_doc=PUR-ORD-2026-00008
+  error=(none)
+
+Purchase Order SAU: 8  ⇒  TĂNG 1
+  PUR-ORD-2026-00008 · docstatus=0 · company=Minh Phát Cám & VLXD · supplier=Đại lý Cám Bình Dương · key=bdk_68055489…
+```
+
+⇒ **HTTP 200, không 5xx.** Đây chính là mã lỗi `500 PO_COMPANY_UNRESOLVED` của lần chạy đầu
+(result72 §2) — nay **đã hết** khi env có `COPILOT_COMPANY`.
+
+## 3. KIỂM CHỨNG ĐỘC LẬP BẰNG REST (không qua copilot)
+
+```
+GET /api/resource/Purchase Order/PUR-ORD-2026-00008
+{
+ "name": "PUR-ORD-2026-00008", "docstatus": 0, "status": "Draft",
+ "company": "Minh Phát Cám & VLXD", "supplier": "Đại lý Cám Bình Dương",
+ "transaction_date": "2026-09-25",
+ "custom_business_doc_key": "bdk_6805548980563b22e6ea502ed4895d15",
+ "grand_total": 3240000.0, "total_qty": 12.0
+}
+items: [{"item_code":"CAM-GA-25KG","qty":12.0,"uom":"Bao","rate":270000.0,"amount":3240000.0}]
+
+GET Purchase Order ?filters=[["custom_business_doc_key","like","bdk_6805%"]]
+=> 1 bản ghi: {"name":"PUR-ORD-2026-00008","docstatus":0, …}
+
+GET Purchase Order ?fields=["name","docstatus"]  (toàn bộ)
+=> 8 bản ghi: 00001..00005 = 1 (đã submit, có từ trước)
+              00006 = 0 · 00007 = 0 (nháp của các vòng thật trước)
+              00008 = 0 (nháp của vòng này)
+```
+
+3 điều được xác nhận bằng dữ liệu site (không phải bằng lời của copilot):
+1. **docstatus 0 ⇒ NHÁP**, chưa submit — đúng cam kết read-only-tới-Phase-7/write-phải-qua-gate.
+2. **company đúng** (`Minh Phát Cám & VLXD`) ⇒ cổng company đã mở, không ghi nhầm sổ công ty khác.
+3. **khoá nghiệp vụ mới chỉ 1 chứng từ mang** ⇒ tờ 0000128 đã đăng ký, gửi lại sẽ bị 409 (cơ chế
+   chống trùng của result72 vẫn nguyên).
+
+## 4. GIỚI HẠN — nói thẳng
+
+- **Server phục vụ APP không nằm ở máy này.** Đo trong phiên: `erpn8788.loca.lt/health` → **HTTP 503**,
+  `lt` **chưa cài** ở đây (`command -v lt` → no), không có tiến trình tunnel nào. APK vẫn trỏ
+  `https://erpn8788.loca.lt`. ⇒ Việc restart ở đây **chứng minh code + `.env` đúng**, nhưng **không**
+  làm app hết 500: máy/tunnel đang phục vụ app phải được thêm `COPILOT_COMPANY` **và restart**.
+- `transaction_date` của nháp là **2026-09-25** (ngày hôm nay), không phải `NLap` 2026-09-20 trong
+  file — hành vi sẵn có (ngày chứng từ do server đặt), **không** phải điều đang kiểm ở đây.
+- `proposal.params.supplier` in ra `undefined` — tên tham số nhà cung cấp trong proposal không phải
+  `supplier`, nhưng **nháp có đúng supplier** nên đây chỉ là nhãn trong script, không phải lỗi.
+- Nháp **00008 còn nguyên trên site** (cùng 00006/00007 từ các vòng trước) — tôi **không tự huỷ**;
+  nói một tiếng là tôi huỷ (hoặc bạn huỷ trên ERPNext).
+- Phiên này **không chạy** suite/falsify (không đổi code sản phẩm: chỉ thêm 1 script trong `.plan/`
+  + 1 fixture trong `.plan/`). Số suite giữ nguyên như result72: Node **807 / 805 pass / 2 fail**
+  (`dshGateway*` có sẵn từ B0), Flutter **310/310**, falsify a3 **12/12 RED**.
+
+## 5. TRẠNG THÁI TIẾN TRÌNH ĐỂ LẠI
+
+```
+129461  python3 -m nlp_service.server --port 8787
+129467  node mcp-erpnext/src/http-ask.mjs --port 8788 --host 10.88.0.4
+```
+Log: `/tmp/copilot-restart/{nlp,ask}.log`. Dừng: `pkill -f http-ask.mjs`.
+Chưa commit gì (`.plan/` bị gitignore; không đụng file sản phẩm).
+
+================================================================================
+## 6. RETEST (user: "tôi đã restart server, thử lại nhé") — 2 lần đo, 1 ĐẠT 1 KHÔNG
+================================================================================
+
+### 6a. Máy NÀY (stack local, khởi động lại lần 2) — ✅ ĐẠT
+
+```
+Dừng 129461/129467 → khởi động lại: nlp 129887 (08:57:33) + ask 129893 (08:57:33)
+  {"ready": true, "port": 8787} · {"ready":true,"port":8788,"host":"10.88.0.4","auth":true}
+FILE MỚI C26TYY/0000129 (.plan/next4/fixtures/xml-retest-invoice.xml)
+  /input/einvoice 200 (1233ms) → /ask 200 (2003ms) → /execute 200 (2201ms) ⇒ PUR-ORD-2026-00009
+  Đếm PO: 8 → 9 = +1 · REST độc lập: docstatus 0, company "Minh Phát Cám & VLXD",
+  item CAM-HEO-25KG ×8 @295.000 = 2.360.000 (rate 295.000 lấy từ ERPNext, KHÔNG phải 265.000 trong file)
+```
+
+### 6b. QUA TUNNEL `https://erpn8788.loca.lt` — ❌ VẪN 500 (đúng đường app dùng)
+
+Tunnel đã **sống lại** trong lúc đo (đầu phiên 503 → nay 401/200 ⇒ tunnel + auth hoạt động):
+```
+GET /health  qua tunnel, KHÔNG auth → HTTP 401          (⇒ server đầu kia bind non-loopback, auth bật)
+GET /health  qua tunnel, có auth   → HTTP 408 (1 lần, loca.lt flaky) — các request sau đều thông
+```
+Gửi file MỚI `C26TYY/0000130` qua tunnel:
+```
+/input/einvoice → 200 (1041 ms)  ok=true   party=Đại lý Cám Bình Dương (tax_id) · 6 Bao CAM-GA-25KG
+/ask            → 200 (1098 ms)  action=create_purchase_order · key=bdk_0376085de9727b343171f51d0d02b3da
+/execute        → 500 (862 ms)   ok=false
+   code=PO_COMPANY_UNRESOLVED
+   error="execute failed: có 3 company (DEMO POC CO, Minh Phát Cám & VLXD, SANLOAN) và chưa pin company
+          — đặt COPILOT_COMPANY trước khi tạo đơn mua"
+Đếm PO (REST độc lập): 9 → 9  ⇒ TĂNG 0 (fail-closed: KHÔNG ghi gì)
+```
+
+⇒ **Kết luận đo được:** server sau tunnel **đã được restart** (tunnel sống, `/health` 401/200, đọc ERPNext
+thật OK) nhưng **môi trường của máy đó vẫn THIẾU `COPILOT_COMPANY`** ⇒ bấm [Xác nhận] trên app **vẫn 500**.
+`.env` của **repo này** đã có biến đó, nhưng **máy đó không dùng `.env` này** (hoặc dùng checkout khác).
+Việc cần làm, ở **chính máy đó**: thêm `COPILOT_COMPANY="Minh Phát Cám & VLXD"` vào môi trường mà
+process gateway đọc (`.env` của checkout đó / unit systemd / PM2 ecosystem / lệnh `export` trước khi chạy)
+rồi **restart lại**, và tự kiểm bằng: `curl -u "$ASK_USER:$ASK_PASSWORD" https://erpn8788.loca.lt/health`.
+
+### 6c. Phát hiện phụ (cần xử lý trước build APK tiếp theo)
+
+API GitHub đọc bằng token trong `.env` (token còn sống, `/user` = 200): repo **hiện KHÔNG có
+Variables/Secrets nào** (`actions/variables` → rỗng; `actions/secrets` → rỗng; `environments` → 0).
+Workflow luôn truyền `--dart-define=COPILOT_BASE_URL="${COPILOT_BASE_URL}"` — **kể cả khi var trống**.
+Đo ngữ nghĩa Dart (`.plan/next4/dart-define-probe.dart`):
+```
+dart run                                  → PROBE_VAR=[DEFAULT_USED]   ← define KHÔNG truyền
+dart run --define=PROBE_VAR=              → PROBE_VAR=[]  len=0        ← truyền RỖNG ⇒ '' (KHÔNG lấy default)
+dart run --define=PROBE_VAR=http://100.1.2.3:8788 → PROBE_VAR=[http://100.1.2.3:8788]
+```
+⇒ Với repo ở trạng thái hiện tại, APK build ra sẽ mang `COPILOT_BASE_URL=""` (rỗng) chứ **không** rơi về
+default trong code (`http://127.0.0.1:8788`), và `_applySettings()` bỏ qua fallback rỗng ⇒ app **không có
+endpoint** cho tới khi người dùng tự nhập ở ⚙️ Settings. **Chưa kết luận được APK cũ** (run 36107839795)
+mang giá trị gì: đếm chuỗi trong `kernel_blob.bin` không phân biệt được với hằng số trong code
+(`https://erpn8788.loca.lt` ×4 — cũng chính là `AppConstants.defaultGatewayBaseUrl` gợi ý trong Settings;
+`http://127.0.0.1:8788` ×2 — hằng số `defaultCopilotBaseUrl`). Cần **đặt lại repo Variables**
+(`COPILOT_BASE_URL`, `COPILOT_AUTH_USER` + secret `COPILOT_AUTH_PASSWORD`) trước lần build sau.
+

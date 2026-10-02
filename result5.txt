@@ -1,0 +1,151 @@
+========================================================================
+RESULT 5 — DSH E2E WIRING: PYTHON BRIDGE + COPILOT MCP SERVER + TRANSCRIPTS
+Timestamp: 2026-09-14 01:55
+Env: Linux VPS, Python 3.12.3, Node v24.20.0, npm 12.0.2.
+Repo erpn_mobile1, branch master, git VẪN 0 COMMIT (chờ user duyệt riêng).
+AgentMemory DOWN · MCP cocoindex-code/codebase-memory-mcp không expose ·
+OCR không chạy được · Simplenote MCP không có → Code review thủ công.
+========================================================================
+
+1. MỤC TIÊU CỦA TASK VÀ GIỚI HẠN THỰC TẾ
+------------------------------------------------------------------------
+User yêu cầu: dsh (đã cài) → Web UI → skill layer Phase 2 (mock) →
+vietnamese_nlp Phase 1, ghi transcript nguyên văn.
+
+KIỂM TRA THẬT: dsh CHƯA được cài trên máy này.
+  which dsh                      → không có
+  npm ls -g @deepseek-ai/dsh     → không có
+  ~/bin, ~/.local/bin, /usr/local/bin → không có
+Điều này KHẬP với Phase 0 (quy tắc "chỉ verify, KHÔNG cài dsh") — user nói
+"đã cài" không đúng với máy này. Quyết định: làm 100% phần còn lại của cầu
+nối (không cần dsh), chặn duy nhất chân "gõ câu trong Web UI" chờ user.
+
+Đã đọc source/docs THẬT trước khi code (bài học result4):
+  - npm tarball @deepseek-ai/dsh 0.1.x: CLI chỉ có `web`, `profile`,
+    `dump-config`; có gói dsh-headless; dsh-mcp-client 0.1.5-rc.1.
+  - docs/user/guide/mcp-memory.md + providers.md (repo GitHub chính thức).
+  - Example chính thức mcp-reference-memory.cordis.yml (đã lấy bằng
+    `curl | cat -A` để giữ nguyên byte thụt đầu dòng — read_url làm mất
+    indentation, nếu tin read_url là patch file SAI CẤP THỤT).
+
+2. ĐÃ XÂY (3 thành phần mới, 1 sửa nhỏ)
+------------------------------------------------------------------------
+2a. nlp_service/server.py — cầu nối Python (quyết định đã khóa: HTTP localhost)
+  - http.server ThreadingHTTPServer, STDLIB thuần (không thêm Flask —
+    Flask có cài trên máy nhưng 2 endpoint không đáng đổi lấy 1 dependency).
+  - Bind 127.0.0.1 CHỈ (khóa trong code, không phải convention).
+  - GET /health · GET|POST /normalize (?text= hoặc JSON body {"text": ...}).
+  - Lỗi trả {"ok": false, "error": ...} — KHÔNG bao giờ leak traceback.
+  - Chạy: python3 -m nlp_service.server (--port 8787 mặc định; --port 0 = test)
+  - ĐÃ VERIFY LIVE: "Bác Hai trả 2tr5 tiền cám heo" → amount 2500000,
+    titles ["Bác"], text "Hai trả 2tr5 tiền cám heo" (qua HTTP thật).
+
+2b. mcp-erpnext/src/copilot-server.mjs — MCP server chuẩn mà dsh đăng ký
+  - 1 tool duy nhất: copilot_ask { text } (annotations.readOnlyHint: true).
+  - Pipeline: normalize qua HTTP bridge → routeIntent() → skill factory →
+    client.callTool() (mock hôm nay, server thật = chỉ đổi serverScript)
+    → câu trả lời tiếng Việt XÁC ĐỊNH (KHÔNG có LLM trong pipeline này).
+  - Mỗi nhóm skill 1 nhánh trả lời riêng: customer (dư nợ), sales (hóa đơn
+    chưa trả), payment (phiếu thu — ghi rõ "ghi nhận phiếu thu là Phase 7"),
+    inventory (tồn kho, không cần khách).
+  - Fail-safe giữ nguyên: không route → answer null + reason; khách không
+    có trong mock → answer null (KHÔNG bịa ID); mọi con số COPY TỪ dữ liệu
+    ERPNext, không chỗ nào tự tính tiền.
+  - LỖI TỰ PHÁT HIỆN + ĐÃ SỬA ngay khi test: bản đầu route payment/sales
+    rơi vào nhánh balance (sai shape) → tách nhánh; sau đó lộ lỗi THỨ HAI
+    thuộc router: factory `sales`/`payment` không export findCustomer
+    (chỉ factory `customer` có) → "chị Lan đã trả..." die
+    "skills.findCustomer is not a function". Sửa ở ROUTER (đúng tầng):
+    findCustomer giờ chia sẻ cho sales/payment (vẫn là code của customer
+    skill, không nhân bản logic).
+
+2c. mcp-erpnext/dsh.cordis.patch.yml — file đăng ký cho dsh
+  - Sao chép cấu trúc BYTE-CHÍNH-XÁC từ example chính thức (curl + cat -A):
+    `- insert:` → list → {id, name: '@deepseek-ai/dsh-mcp-client', config:
+    {serverName, transport: stdio, command, args, cwd, env}}.
+  - ĐÃ VALIDATE: parse YAML đúng shape (stub tag !js) + biểu thức !!js
+    chạy trong node thật → đúng đường dẫn file tồn tại.
+  - ⚠️ CHƯA chạy được với dsh sống (dsh chưa cài) — ghi rõ trong file,
+    không ghi "đã verify với dsh".
+
+2d. scripts/ask-copilot.mjs — driver nói JSON-RPC stdio THẬT (spawn →
+  initialize → tools/call), --raw in nguyên văn từng dòng qua lại,
+  phục vụ transcript trong file này và test tay sau này.
+
+3. TRANSCRIPT NGUYÊN VĂN (chạy thật 2026-09-14 01:5x, không biên tập)
+------------------------------------------------------------------------
+Server: erpn-copilot v0.1.0 · pipeline: HTTP normalize → route → mock
+
+--- TRANSCRIPT 1 — NGUYÊN VĂN CÂU USER ĐÃ YÊU CẦU (kèm raw JSON-RPC) ---
+>> {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"ask-copilot-cli","version":"0.1.0"}}}
+<< {"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"erpn-copilot","version":"0.1.0"}}}
+>> {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"copilot_ask","arguments":{"text":"chị Lan còn nợ bao nhiêu"}}}
+<< {"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"{ ... }"}],"structuredContent":{"question":"chị Lan còn nợ bao nhiêu","normalized":{"original":"chị Lan còn nợ bao nhiêu","text":"Lan receivable bao nhiêu","amount":null,"titles":["chị"],"intents":["receivable"],"synonyms":[{"term":"còn nợ","canonical":"receivable"}]},"routed":{"group":"customer","matched":"receivable"},"customer":{"id":"CUST-00001","name":"Nguyễn Thị Lan"},"outstanding_vnd":2500000,"open_invoices":1,"answer":"Nguyễn Thị Lan còn nợ 2.500.000đ (1 hóa đơn chưa trả)."}}}
+QUESTION: chị Lan còn nợ bao nhiêu
+ANSWER:   Nguyễn Thị Lan còn nợ 2.500.000đ (1 hóa đơn chưa trả).
+
+--- TRANSCRIPT 2 ---
+QUESTION: Trần Văn Hai còn nợ bao nhiêu
+ANSWER:   Trần Văn Hai còn nợ 7.500.000đ (1 hóa đơn chưa trả).
+
+--- TRANSCRIPT 3 ---
+QUESTION: chị Lan đã trả bao nhiêu tiền
+ANSWER:   Nguyễn Thị Lan đã có 1 phiếu thu, tổng 8.000.000đ (mới nhất: PE-0001
+          ngày 2026-09-06). Ghi nhận phiếu thu mới là Phase 7 — Phase 2 chỉ đọc.
+
+--- TRANSCRIPT 4 ---
+QUESTION: trong kho còn bao nhiêu cám heo
+ANSWER:   CAM-HEO-25KG: 120 (kho Kho chính),CAM-GA-10KG: 40 (kho Kho chính)
+
+--- TRANSCRIPT 5 (câu ngoài phạm vi — phải từ chối, không bịa) ---
+QUESTION: xin chào
+ANSWER:   (no answer — no skill route matched — Phase 2 router covers
+          customer/sales/payment/inventory only)
+
+--- TRANSCRIPT 6 (khách không có trong ERPNext — không bịa ID) ---
+QUESTION: chị Hằng còn nợ bao nhiêu
+ANSWER:   (no answer — không tìm thấy khách hàng trong "Hằng receivable bao
+          nhiêu" (fuzzy matching đầy đủ là Phase 6))
+
+--- TRANSCRIPT 7 (danh xưng + slang + tiền) ---
+QUESTION: Bác Hai trả 2tr5 tiền cám heo
+ANSWER:   Trần Văn Hai chưa có phiếu thu nào trong hệ thống. Ghi nhận phiếu
+          thu mới là Phase 7 — Phase 2 chỉ đọc.
+  Ghi chú trung thực: "2tr5" đã được normalize = 2.500.000 trong
+  normalized.amount (Phase 1 làm đúng việc của nó) nhưng Phase 2 CHỈ ĐỌC nên
+  không ghi phiếu thu — tiền KHÔNG bị mất, chỉ chưa có chỗ ghi.
+
+4. TEST
+------------------------------------------------------------------------
+node --test (mcp-erpnext):  25/25 PASS (19 cũ + 6 E2E mới spawn thật:
+  Python service + copilot process + mock process, tuần tự & song song;
+  gồm test "xin chào" → null và "chị Hằng" → null)
+python unittest:            Ran 58 tests in 0.530s / OK (không regression)
+money accuracy:             259/259 = 100.00% (không đụng vùng này)
+
+5. SỐ DƯ THẬT CỦA MOCK DB (đối chiếu transcript)
+------------------------------------------------------------------------
+CUST-00001 Nguyễn Thị Lan: SINV-0001 còn 2.500.000 + SINV-0002 còn 0 → 2.500.000đ ✔
+CUST-00002 Trần Văn Hai:  SINV-0003 còn 7.500.000 → 7.500.000đ ✔
+PE-0001: Lan đã trả 8.000.000 (2026-09-06) ✔
+CAM-HEO-25KG: 120 bao, CAM-GA-10KG: 40 bao (Kho chính) ✔
+
+6. HẠN CHẾ ĐÃ BIẾT (ghi minh bạch, không giấu)
+------------------------------------------------------------------------
+- dsh chưa cài → chân "gõ trong Web UI" CHƯA chạy; patch file đã đúng format
+  chính thức nhưng CHƯA exercised với dsh sống.
+- Máy này KHÔNG có local LLM runtime (ollama/llamafile: không có) và KHÔNG có
+  key nào (DEEPSEEK/OPENAI/GEMINI/ANTHROPIC/OPENROUTER: unset — chỉ kiểm tra
+  tên biến, không in giá trị) → dsh web cần 1 trong hai mới chạy được.
+- Ghép tên khách hiện là longest-token-prefix (thô, trung thực); matching đủ
+  tốt là việc của Phase 6 theo roadmap.
+- Lỗi route payment (sai shape) và findCustomer (router thiếu) đã bắt được
+  NHỜ test E2E spawn thật, không phải bằng đọc code.
+
+7. VIỆC CẦN USER QUYẾT
+------------------------------------------------------------------------
+(1) Cài dsh thế nào: npx @deepseek-ai/dsh web (không cài vĩnh viễn) hay cài
+    hẳn? + cấp LLM backend (DEEPSEEK_API_KEY, hoặc OpenAI-compatible, hoặc
+    local runtime) — dsh web không chạy được nếu thiếu.
+(2) Commit vẫn chờ duyệt riêng (không chặn việc code).
+(3) ERPNext URL/API key/secret để chuyển mock → server thật.

@@ -1,0 +1,323 @@
+================================================================================
+result91 — Phase 5b (bổ sung): 1 VÒNG GHI NHÁP THẬT chứng minh F-P5-2 (MoP bank)
+            + quyết định FINDING 1 (hiển thị phương thức đã ghi)
+            + xử lý 2 nit FINDING 2 & FINDING 3 (cảnh báo gương · memo master theo request)
+Ngày: 2026-09-30 · Chương trình: A (Collect) · Vùng: TIỀN (AI KHÔNG tự commit)
+================================================================================
+
+MỤC LỤC
+  §0  Bối cảnh & quyền hạn trong phiên
+  §1  VÒNG GHI NHÁP THẬT (1 lần) — ✅ XONG, đúng 1 phiếu, KHÔNG submit
+  §2  Bằng chứng trên site thật (đọc lại bằng REST — nguồn thứ hai)
+  §3  Cleanup phiếu nháp vừa ghi — ✅ DONE (aki/bench force=1)
+  §4  FINDING 1 — QUYẾT ĐỊNH: HIỂN THỊ (không từ chối) + lý do
+  §5  Code + test + falsify cho FINDING 1
+  §5b FINDING 2 + FINDING 3 (2 nit còn lại) — code + test + falsify
+  §5c ĐO THẬT trên site (CHỈ ĐỌC) — nhánh FINDING 2 có bật được không?
+  §6  Regression
+  §7  Sổ sách
+  §Z  Trạng thái cuối
+
+
+================================================================================
+§0  BỐI CẢNH & QUYỀN HẠN TRONG PHIÊN
+================================================================================
+- Owner (2026-09-30, trong phiên, bằng văn bản):
+    "Cho phép 1 vòng ghi NHÁP thật để chứng minh MoP bank (rồi xoá đúng phiếu đó
+     bằng aki/bench)".
+  ⇒ Đây là quyền hạn MỚI, ghi đè "cấm ghi thật" của Phase 5b (result90 §E).
+    Phạm vi rất hẹp: ĐÚNG 1 phiếu NHÁP (docstatus 0) cho ca MoP bank, rồi xoá.
+    KHÔNG submit · KHÔNG tạo dữ liệu thứ hai · KHÔNG xoá gì khác.
+- Owner hỏi tiếp FINDING 1 (result90 §Z / code review): "hiển thị mode_warning
+  trên thẻ thu tiền hay đổi thành từ chối hẳn?" ⇒ §4 là câu trả lời + code.
+- aki mcp đã authorize từ đầu phiên (result90 §A6) ⇒ có đường shell/bench tới Mac.
+- Sandbox: repo /home/dev4vn/htdocs_apps/erpn_mobile1 · Node v24.21.0 · Python 3.12.3
+  · Flutter /google/flutter/bin · ERPNext thật qua `$ERPNEXT_URL` (ngrok) ·
+  site thật = **`frontend`** (KHÔNG phải `test.localhost`).
+
+
+================================================================================
+§1  VÒNG GHI NHÁP THẬT (1 lần) — ✅ XONG, đúng 1 phiếu, KHÔNG submit
+================================================================================
+Harness: `scripts/_probe_05b_bank_mop.mjs` (untracked, tiền tố `_probe_` — KHÔNG
+stage/commit). Nó chạy ĐÚNG chuỗi thật của app, không tắt đường nào:
+
+    /ask  →  /collect/propose  →  /execute        (mỗi bước ĐÚNG 1 lần)
+
+Chuẩn bị:
+  - Nạp `.env` (chỉ ERPNEXT_ , COPILOT_) — KHÔNG nạp `ASK_*` vì gateway từ chối
+    `ASK_USER`/`ASK_PASSWORD` khi bind loopback ("make no sense on a loopback bind").
+  - `delete process.env.COPILOT_MOCK_OK` ⇒ chắc chắn là deployment THẬT.
+  - Cần cầu NLP tiếng Việt: `PYTHONPATH=src python3 -m nlp_service.server --port 8787`
+    (lần đầu chạy bằng `&` thường thì tiến trình bị thu hồi khi lệnh kết thúc ⇒
+     phải `setsid … </dev/null & disown` mới sống qua lần gọi tool; đã ghi vào skill).
+    Không có nó thì `/ask` trả `NLP_UNAVAILABLE` và KHÔNG có ticket ⇒ không ghi gì
+    (fail-closed đúng thiết kế).
+
+Tham số vòng thật:
+    khách = `lan` · hoá đơn = ACC-SINV-2026-01285 (đang mở 84.000)
+    số tiền = 50.000 · kênh = `bank_transfer`
+  (3 phiếu nháp CŨ 10.000 của `lan` không liên quan; tổng "nháp phủ" sau vòng này
+   = 30.000 + 50.000 = 80.000 ≤ 84.000 ⇒ không vượt trần hoá đơn.)
+
+Kết quả `/execute` (nguyên văn từ harness):
+    ok=true · replay=false · status 200
+    erpnext_doc        = "ACC-PAY-2026-00775"
+    docstatus          = 0                      ← NHÁP, KHÔNG submit
+    mode_of_payment    = "Wire Transfer"        ← F-P5-2 ĐÚNG (trước đây là "Cash")
+    mode_substituted_from = "bank_transfer"
+    paid_vnd           = 50000
+    invoices           = ["ACC-SINV-2026-01285"] · allocated_vnd=50000 · unallocated_vnd=0
+    reference_no       = "7ab29325-bfca-467e-803d-c1a1a675c3bf"
+
+⚠️ GHI NHẬN QUAN TRỌNG: tên chứng từ **bị TÁI DÙNG** — phiếu nháp mới lại mang
+   đúng tên `ACC-PAY-2026-00775` của phiếu vừa xoá ở §A6 (result90). Đây là
+   **F-P5-4 tái hiện trên chính vòng của mình**: mọi đối soát PHẢI theo
+   `reference_no`/action id, TUYỆT ĐỐI không theo `voucher_no`/tên chứng từ.
+
+✅ DEBT ĐÃ ĐÓNG: "MoP bank chưa chứng minh bằng 1 lần ghi NHÁP thật" (result90 §E)
+   nay đã có bằng chứng THẬT: cùng 1 loại yêu cầu (`bank_transfer`), code CŨ ghi
+   `mode_of_payment = "Cash"`, code MỚI ghi `"Wire Transfer"` (type Bank).
+
+
+================================================================================
+§2  BẰNG CHỨNG TRÊN SITE THẬT (đọc lại bằng REST — nguồn thứ hai)
+================================================================================
+  GET Payment Entry/ACC-PAY-2026-00775
+      name=ACC-PAY-2026-00775 · docstatus=0 · party=lan · paid_amount=50000
+      mode_of_payment="Wire Transfer" · paid_to="1210 - ACB 110296868 - MP"
+      paid_from="1310 - Phải thu khách hàng - MP"
+      creation=2026-09-30 15:39:58 · reference_no=7ab29325-…-c1a1a675c3bf
+      ⇒ §6.2 PASS: kênh bank ⇒ tài khoản NGÂN HÀNG, KHÔNG rơi vào 1110.
+  GET Mode of Payment/"Wire Transfer"  → type=Bank · enabled=1 · **accounts: []**
+      ⇒ phương thức này KHÔNG khai tài khoản riêng ⇒ ERPNext không ghi đè `paid_to`
+         (thêm một lý do chọn theo `type` thay vì theo tên).
+  Sales Invoice: ACC-SINV-2026-01285 = 84.000 (Partly Paid) · 01288 = 320.000 (Unpaid)
+  GL Entry (party `lan`, account like `1310%`) = 8 dòng · net 404.000
+      ⇒ phiếu NHÁP KHÔNG tạo GL, KHÔNG đổi outstanding — y như trước vòng ghi.
+  Snapshot chứng từ trước khi xoá: `/tmp/p5b-pe-snapshot.json`.
+
+  ⚠️ KHÔNG có `mode_warning` trong kết quả: đúng như phân tích ở §4 — app gửi
+     **token kênh** (`bank_transfer`), mà `mode_warning` chỉ sinh khi NHÃN yêu cầu
+     trùng TÊN một MoP có `type` lệch (ca F-P5-3). Nghĩa là: trên site thật,
+     vòng "chuyển khoản" của app KHÔNG BAO GIỜ có cảnh báo ⇒ nếu chỉ hiển thị
+     `mode_warning` thì người dùng vẫn không biết ERPNext ghi phương thức nào.
+     ⇒ Đây là lý do §4 phải hiển thị **phương thức ĐÃ GHI**, không chỉ cảnh báo.
+
+
+================================================================================
+§3  CLEANUP PHIẾU NHÁP VỪA GHI — ✅ DONE (aki/bench force=1)
+================================================================================
+Lệnh (đúng site thật, qua `mcpc @aki tools-call local__run_cmd`):
+  docker exec frappe_docker-backend-1 bench --site frontend execute \
+    frappe.model.delete_doc.delete_doc \
+    --kwargs "{'doctype':'Payment Entry','name':'ACC-PAY-2026-00775','force':1}"
+
+Kết quả đọc lại sau khi xoá:
+  - PE `ACC-PAY-2026-00775` → **HTTP 404** ✅ (đúng phiếu vừa ghi, không phải phiếu khác)
+  - Nháp còn lại của `lan`: chỉ 3 phiếu CŨ 10.000 (00761/00762/00765, MoP `Cash`) ✅
+    ⇒ "nháp phủ" về lại 30.000, site sạch như trước vòng ghi.
+  - outstanding: ACC-SINV-2026-01285 = **84.000** · 01288 = **320.000** ✅ (không đổi)
+  - GL 1310 `lan` = **8 dòng · net 404.000** ✅ (không đổi)
+  - 5 dòng `Payment Allocation` rác (ALLOC-2026-11662..11666, docstatus 2) **vẫn nguyên** ✅
+
+⇒ Site đã trở về ĐÚNG trạng thái trước vòng ghi. Không còn dư 1 chứng từ nào của mình.
+
+
+================================================================================
+§4  FINDING 1 — QUYẾT ĐỊNH: **HIỂN THỊ**, KHÔNG từ chối
+================================================================================
+Lý do (theo thứ tự quan trọng):
+1. **Từ chối sẽ giết tính năng ở đúng ca phổ biến nhất.** Site thật khai MoP
+   "Chuyển khoản" với `type = Cash` (F-P5-3). Nếu biến "nhãn lệch type" thành
+   refusal thì MỌI lệnh thu tiền qua ngân hàng của chủ tiệm bị chặn — trong khi
+   tiền vào ĐÚNG tài khoản ngân hàng (1210) và đúng hoá đơn.
+2. **Đây là hoàn tất quyết định C của owner**, không phải quyết định mới: C nói
+   "cảnh báo/refuse RÕ bằng tiếng Việt, KHÔNG im lặng đổi tên phương thức"
+   ⇒ phần "cảnh báo" đã được implement ở API nhưng **chưa ai hiển thị** (0 consumer),
+   tức vế "không im lặng" chưa được thoả. Hiển thị là cách thoả nó mà không đổi luật tiền.
+3. **Chưa có gì là tiền chốt.** `/execute` chỉ tạo NHÁP; submit là bước riêng do
+   người làm trên ERPNext ⇒ thông tin hiện ngay sau khi ghi vẫn còn kịp để người
+   kiểm tra trước khi submit.
+4. **Refuse vẫn giữ nguyên chỗ cần refuse**: tài khoản sai `account_type`
+   (§6.2 BLOCK) và không xác định được MoP/tài khoản vẫn là lỗi cứng — KHÔNG nới.
+5. Bằng chứng §2 cho thấy hiển thị `mode_warning` KHÔNG đủ ⇒ phải hiển thị
+   **phương thức ĐÃ GHI** (`mode_of_payment`), và kèm `mode_warning` khi có.
+
+Đối tượng hiển thị: dòng kết quả thẻ thu tiền (`proposal_card.dart`) — chính thẻ
+này được màn hình Thu tiền dùng lại (`collect_screen.dart` render `ProposalCard`),
+nên 1 chỗ sửa phủ cả 2 luồng (chat + màn hình thu tiền).
+
+Câu chữ (tiếng Việt, ngắn):
+    'Đã ghi phiếu thu NHÁP: <doc> — <số>đ<…tail…> — phương thức ghi: "<ten>"[ · <mode_warning>] (submit là bước riêng trên ERPNext)'
+
+
+================================================================================
+§5  CODE + TEST + FALSIFY CHO FINDING 1
+================================================================================
+Sửa TỐI THIỂU (1 file sản phẩm + 1 file test, KHÔNG đụng Luật tiền):
+  - `apps/mobile/lib/features/chat/presentation/widgets/proposal_card.dart`
+      + helper `_paymentModeNote(result)` (đọc `mode_of_payment` + `mode_warning`,
+        trả '' khi server cũ không gửi gì ⇒ byte-compat),
+      + nối vào dòng "Đã ghi phiếu thu NHÁP …".
+      md5 sau khi restore falsify: `5345017ba2ee662dcb22818c39eef7cd`
+  - `apps/mobile/test/proposal_card_test.dart`
+      + 3 test mới (dùng lại helper `_confirmWith`):
+        1. tên phương thức ĐÃ GHI hiện ra ("phương thức ghi: \"Wire Transfer\"")
+        2. `mode_warning` hiện nguyên văn ("không khớp hình thức chuyển khoản")
+        3. server không gửi `mode_of_payment` ⇒ KHÔNG bịa dòng nào.
+
+Falsify (bắt buộc):
+  - Xoá đúng 1 chỗ dùng `_paymentModeNote(result)` khỏi dòng kết quả ⇒
+    `flutter test test/proposal_card_test.dart --plain-name "FINDING 1"`:
+    **2 test ĐỎ đúng chỗ** (test 1 + test 2), test 3 (khẳng định KHÔNG có) vẫn xanh.
+  - Restore nguyên trạng ⇒ file test **44/44 xanh**.
+
+Không đổi: mock/index/node source nào. KHÔNG thêm mã từ chối mới · KHÔNG đổi
+thứ tự safety-gateway · KHÔNG chạm `/execute` hay luật §6.1–§6.4.
+
+Spec: `openspec/changes/next8-collect-customer-mop-fix/specs/payment-accounts/spec.md`
+  + requirement MỚI "The method actually written is shown on the draft result"
+    (3 scenario: tên phương thức đã ghi · cảnh báo lệch type · server không gửi gì).
+  `npx --no-install openspec validate next8-collect-customer-mop-fix --strict` = **valid**
+  (lần đầu FAIL vì chèn requirement mới vào giữa requirement cũ làm mất scenario —
+   đã sửa thứ tự, đây là bài học nhỏ về format delta).
+
+
+================================================================================
+§5b FINDING 2 + FINDING 3 (2 nit còn lại) — code + test + falsify
+================================================================================
+Owner (2026-09-30, trong phiên): "Xử lý 2 nit còn lại: không cảnh báo khi tên
+phương thức được chọn đọc như kênh kia, và findCustomer đọc cả master ở mọi chỗ gọi".
+
+FINDING 2 (nit A) — `mcp-erpnext/src/skills/payment-write.mjs#resolveAccountPlan`:
+- Ngay sau `const accountType = MONEY_CHANNELS[channel];` thêm nhánh GƯƠNG của cảnh
+  báo nhãn-cũ: đọc TÊN phương thức ĐÃ CHỌN (`channelOfMode(modeName)`); khi tên đó
+  đọc như kênh NGƯỢC lại với kênh mà `type` đang dùng, `mode_warning` nói rõ tên +
+  loại ERPNext khai + hình thức phiếu thực ghi.
+- LỰA CHỌN và TÀI KHOẢN TIỀN KHÔNG đổi (vẫn theo `type`/§6.2) — chỉ bỏ im lặng.
+  Cảnh báo đã có (từ nhánh nhãn) KHÔNG bị ghi đè bằng cảnh báo yếu hơn này.
+- Test: `test/next8-collect-05b-fixes.test.mjs` dùng `only(name, type)`:
+  (a) ý định bank, phương thức tên "Cash" khai Bank ⇒ `mode="Cash"`, paidTo=BANK,
+      warning có "Cash"/"tiền mặt"/"Bank";
+  (b) ý định cash, "Wire Transfer" khai Cash ⇒ paidTo=CASH, warning có "chuyển khoản";
+  (c) ca bình thường của site (`Wire Transfer|Bank` cho bank) ⇒ `mode_warning === undefined`.
+- Falsify: tắt nhánh (`false && …`) ⇒ 2 test (a)(b) ĐỎ; khôi phục ⇒ xanh.
+  md5 `payment-write.mjs` = `49c372453814eb3e1dbad63b16d32f8f`.
+
+FINDING 3 (nit B) — `mcp-erpnext/src/skills/customer.mjs`:
+- Thêm `const masterReadCache = new WeakMap();` (module level), key = registry
+  `knownIds` mà MỖI request tự tạo (`copilot-server.mjs:693/:2464`, `read-views.mjs`,
+  `http-ask.mjs`) ⇒ 1 request đọc master MỘT lần, request sau vẫn đọc ERPNext mới
+  (HINT-NOT-AUTHORITY nguyên vẹn; caller vẫn tự re-validate id).
+- `findCustomer` kiểm memo trước khi gọi `mcp.callTool("erpnext_customer_list", { limit: 0 })`.
+- Test: 2 lần tra trong CÙNG request chia sẻ 1 lần đọc (lần 2 vẫn lọc + vẫn register),
+  registry MỚI đọc lại. (1 test định thêm "không registry ⇒ không memo" đã bỏ: `registerIds`
+  ném TypeError khi `knownIds` undefined — `findCustomer` luôn cần registry, chỉ memo là tuỳ chọn.)
+- Falsify: tắt ghi memo ⇒ test chia sẻ ĐỎ; khôi phục ⇒ 12/12.
+  md5 `customer.mjs` = `c9acfa861f98271cacf80cc0285dc247` (sau khi dọn lại thứ tự JSDoc
+  của `findCustomer` — thay đổi CHỈ ở comment; đã chạy lại 103/103 cụm liên quan + full
+  1050/1048/2 để xác nhận).
+
+Spec delta: `specs/payment-accounts/spec.md` += "A method whose NAME reads like the
+other channel is surfaced too" (3 scenario) · `specs/customer-resolution/spec.md` +=
+"One request reads the customer master at most once" (2 scenario) — chèn ở CUỐI file
+(bẫy: chèn giữa file làm `validate --strict` báo requirement cũ thiếu scenario).
+`npx --no-install openspec validate next8-collect-customer-mop-fix --strict` = **valid**.
+
+
+§5c ĐO THẬT TRÊN SITE (CHỈ ĐỌC) — NHÁNH FINDING 2 CÓ BẬT ĐƯỢC KHÔNG?
+================================================================================
+Harness MỚI (untracked, `_probe_`): `scripts/_probe_05b_mirror_readonly.mjs`.
+Đường ĐỌC THUẦN của chính bộ giải tiền production: `resolveAdvanceAccounts` →
+`resolveAccountPlan` → `erpnext_doc_list(Mode of Payment)` + `erpnext_account_list`
++ `erpnext_doc_get(Company)`. KHÔNG `/execute`, KHÔNG tạo/xoá chứng từ, KHÔNG sửa
+dữ liệu ERPNext (owner chưa cấp quyền ghi cho vòng này → không ghi).
+
+MoP THẬT đọc lại 2026-09-30 (6 dòng, enabled=1): Chuyển khoản|Cash · Cash|Cash ·
+Bank Draft|Bank · Wire Transfer|Bank · Credit Card|Bank · Cheque|Bank.
+
+Kết quả (company `Minh Phát Cám & VLXD`, direction=receive):
+
+| Nhãn request          | mode ghi vào    | channel        | paidTo                       | mode_warning |
+|-----------------------|-----------------|----------------|------------------------------|--------------|
+| `cash`                | `Cash`          | cash           | `1110 - Tiền mặt - MP`       | (không)      |
+| `bank_transfer`       | `Wire Transfer` | bank_transfer  | `1210 - ACB 110296868 - MP`  | (không)      |
+| `Tiền mặt`            | `Cash`          | cash           | `1110 - Tiền mặt - MP`       | (không)      |
+| `Chuyển khoản`        | `Wire Transfer` | bank_transfer  | `1210 - ACB 110296868 - MP`  | **CÓ** (lệch nhãn/loại) |
+| `Bank`                | `Wire Transfer` | bank_transfer  | `1210 - ACB 110296868 - MP`  | (không)      |
+| `Wire Transfer`       | `Wire Transfer` | bank_transfer  | `1210 - ACB 110296868 - MP`  | (không)      |
+
+KẾT LUẬN ĐO ĐƯỢC:
+1. **Nhánh FINDING 2 KHÔNG THỂ bật bằng dữ liệu shop hiện tại** — không nhãn nào
+   trong từ vựng của app tạo ra cảnh báo gương. Lý do ĐO ĐƯỢC (không phải suy đoán):
+   kênh bank luôn chọn `Wire Transfer` (tên đọc như bank → khớp); kênh cash khớp
+   ĐÚNG tên `Cash`. MoP "Chuyển khoản" (Cash-type, tên đọc như bank) chỉ tới được
+   bằng nhánh NHÃN, mà nhánh đó đã đặt cảnh báo TRƯỚC ⇒ `!modeWarning` chặn cảnh
+   báo gương. ⇒ Muốn chứng minh nhánh gương trên site phải ĐỔI dữ liệu MoP của
+   shop (vd tắt `Cash` để bộ giải rơi xuống `Chuyển khoản`) — đó là ghi vào cấu
+   hình shop, cần owner cho phép riêng.
+2. **Tặng thêm: cảnh báo của nhánh NHÃN CHẠY THẬT trên site** với nhãn tiếng Việt
+   `Chuyển khoản` (nguyên văn: "Phương thức \"Chuyển khoản\" đang được khai loại
+   Cash trên ERPNext, không khớp hình thức chuyển khoản — phiếu dùng một phương
+   thức ngân hàng khác; muốn dùng đúng tên \"Chuyển khoản\" thì sửa lại loại của
+   nó trên ERPNext"). Đây chính là chuỗi mà app nay HIỂN THỊ (FINDING 1) — và cũng
+   là bằng chứng vì sao FINDING 1 phải hiển thị `mode_of_payment` ĐÃ GHI: app gửi
+   token kênh nên đường nhãn không bao giờ chạy trên luồng thật.
+3. §6.2 xác nhận lại trên dữ liệu thật: cash ⇒ `1110`, bank ⇒ `1210`, không nhãn
+   nào đẩy tiền qua sổ của kênh kia.
+
+⇒ VÒNG GHI NHÁP THẬT **KHÔNG** CHỨNG MINH ĐƯỢC FINDING 2 (sẽ chỉ ra "không có
+cảnh báo" = kết quả rỗng, mà vẫn tốn 1 phiếu nháp + 1 lần xoá). Đã hỏi owner
+2026-09-30 với 3 đường (dừng / sửa TẠM MoP "Cash" rồi ghi nháp / ghi nháp nhãn
+"Chuyển khoản").
+
+**QUYẾT ĐỊNH CỦA OWNER: DỪNG — nhận bằng chứng ĐO THẬT (bảng §5c) + 3 unit test +
+falsify, KHÔNG ghi gì thêm lên site.** Lý do: nhánh gương là phòng vệ cho dữ liệu
+master bị khai ngược; shop hiện KHÔNG có dữ liệu đó (đo được), nên phiếu nháp
+thật sẽ chỉ trả về kết quả rỗng. ⇒ 0 chứng từ được tạo · 0 dòng dữ liệu bị sửa ·
+0 lần xoá. Site nguyên trạng như sau §3.
+
+
+§6  REGRESSION
+================================================================================
+- Flutter FULL: **429 pass / 3 fail** — 3 fail ĐÚNG baseline untracked
+  `test/_probe_review_test.dart` (baseline 426/3 ⇒ +3 test mới, 0 regression).
+- `flutter analyze`: **1 warning** đúng baseline (probe `_probe_b0_voice_autosend.dart`, untracked).
+- Node FULL (`mcp-erpnext`, `COPILOT_MOCK_OK=1 node --test`): **1050 test / 1048 pass / 2 fail**
+  — 2 fail ĐÚNG baseline env: `dshGatewayHealth` + `verifyDshRuntime` (thiếu binary `dsh`).
+  (baseline trước đó 1045/1043/2 ⇒ +5 test của FINDING 2/3, 0 regression.)
+- BẪY ĐO LƯỜNG (đã gặp và đã hiểu): nếu còn NLP bridge ở cổng 8787 lúc chạy full suite
+  thì xuất hiện fail THỨ 3 `issue3 /ask … label is REAL` (`test/issue3-erp-target.test.mjs:118`,
+  500 vs 200) — do `/ask` đổi hành vi vì NLP sống, KHÔNG phải regression từ code 05b.
+  Bằng chứng: kill bridge (`kill <pid>` / `pkill -f "nlp_service[.]server"`) rồi chạy riêng file
+  ⇒ 4/4 pass; chạy lại full ⇒ đúng 2 fail baseline.
+- Python: không đổi (63 OK như baseline).
+
+
+================================================================================
+§7  SỔ SÁCH
+================================================================================
+- `result91.txt` (bản này) · `result90.txt` §A6 (cleanup lần trước) ·
+  `.plan/next8/phase05b-result.md` (§3 debt đóng, §4 real round, §5 DoD) ·
+  `working.md` (mục 36) · `release-roadmap.md` (row 5b) ·
+  `openspec/.../tasks.md` §6 + §6b + §6c + §6d tick + §7 evidence.
+- Harness: `scripts/_probe_05b_bank_mop.mjs` (untracked — KHÔNG stage).
+- KHÔNG commit: thay đổi lần này chạm vùng TIỀN (dòng báo cáo tiền) ⇒ AI KHÔNG tự
+  commit; chờ owner lệnh. Commit code 05b trước đó vẫn là `3d7aacf`.
+
+
+================================================================================
+§Z  TRẠNG THÁI CUỐI
+================================================================================
+- **F-P5-2: ĐÃ CHỨNG MINH TRÊN SITE THẬT** (bank_transfer ⇒ MoP "Wire Transfer" type Bank,
+  paid_to 1210) — debt đóng. Site đã sạch (phiếu nháp vừa ghi đã xoá, verify 404 + số không đổi).
+- **FINDING 1: ĐÃ QUYẾT + ĐÃ LÀM** — hiển thị (không từ chối), có test pin + falsify đỏ.
+- **FINDING 2 + FINDING 3: ĐÃ LÀM** — code + test pin + falsify đỏ + spec delta,
+  `validate --strict` valid; full Node 1050/1048/2 (2 fail baseline env `dsh`).
+- **Còn mở (chờ owner)**: (1) lệnh commit cho thay đổi UI copy + spec/tasks (vùng TIỀN
+  ⇒ AI KHÔNG tự commit); (2) tuỳ chọn: tách requirement "hiển thị" thành change riêng
+  nếu owner muốn archive `next8-collect-customer-mop-fix` sạch theo phạm vi F-P5-1/F-P5-2 ban đầu;
+  (3) NLP bridge đã bị kill sau khi đo (nếu cần chạy E2E thật lại thì bật lại theo
+  công thức `setsid` trong skill `erpn-verify-first`).
+================================================================================

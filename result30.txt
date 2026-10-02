@@ -1,0 +1,88 @@
+========================================================================
+RESULT 30 — PHIÊN DOCS-SYNC: OPENSPEC + LESSONS_LEARNED + FAQ CẬP NHẬT
+Timestamp: 2026-09-16 07:21 (giờ shell)
+Bối cảnh: user yêu cầu cập nhật bộ file chuẩn cuối phiên (openspec · checklist ·
+features · next · faq · result mới nhất · handoff · LESSONS_LEARNED).
+Lưu ý quan trọng: mục 1–4 + 5 của prompt trước (commit 3 cụm a/b/c · nối
+payment_write vào router · route /execute/cancel · xoá 2 PE demo · faq §3) là
+VIỆC ĐANG LÀM — CHƯA HOÀN THÀNH, trạng thái thật nằm ở §4 và checklist.md.
+Không có lệnh git commit nào chạy trong phiên này (vùng tiền chờ duyệt —
+và việc chia 3 commit tách phẫu thuật chưa kịp thực hiện).
+========================================================================
+
+== 1. OPENSPEC (openspec/changes/flutter-chat-mvp/tasks.md) — ĐÃ CẬP NHẬT ==
+Lệnh + output thật:
+  npx openspec validate flutter-chat-mvp
+  → "Change 'flutter-chat-mvp' is valid"
+Thay đổi:
+  • 5.9 chuyển [ ] → [x]: fix credit-note ĐÃ COMMIT `6054458` (đã duyệt + push,
+    result21) — checkbox cũ còn treo là sai với thực tế.
+  • Thêm mục "## 6. Ngoài scope change này (Phase 6–9)" — pointer ngắn 6 mục:
+    6.1 Phase 6 ✅ `553d962` · 6.2 Stage A ✅ `8ebfc0e` · 6.3/6.4/6.5 CHỜ DUYỆT
+    COMMIT (a)(b)(c) · 6.6 việc treo của user. Mục đích: phiên sau mở tasks.md
+    là thấy ngay Phase 6–9 đang ở đâu, không phải dò resultNN.
+  • Không đụng specs/ (delta spec chat-client giữ nguyên — không có requirement
+    mới trong phiên).
+
+== 2. LESSONS_LEARNED.md — TẠO MỚI (68 dòng) ==
+File KHÔNG tồn tại trước đó (verify bằng `ls` trước khi tạo — đúng quy trình).
+Nội dung: bản TÓM TẮT CHỈ MỤC, KHÔNG nhân bản bảng skill:
+  • 6 nhóm lỗi lặp (tần suất ≥2): đoán contract · falsify hụt · fallback âm thầm ·
+    state sống sai vòng đời · báo động giả từ tool probe · docs claim lệch code.
+  • Top bài học theo thiệt hại (đọc source trước khi đoán; ERPNext không unique
+    reference_no ⇒ store là lưới duy nhất; unit xanh ≠ chạy thật; fail-closed;
+    vùng tiền không tự commit).
+  • Kỷ luật 5 bước trước khi báo "xong".
+Nguồn sự thật đầy đủ vẫn là `.agents/skills/erpn-verify-first/SKILL.md`
+(71 hàng bảng — số liệu từ `grep -c "^| "`).
+
+== 3. FAQ.md — ĐÃ SOI, SẼ SỬA (chưa sửa trong phiên này) ==
+Vị trí cần sửa sau khi nối router (item 2 của prompt trước — CHƯA làm):
+  • Đầu file "Ba hiểu nhầm nghiêm trọng nhất" dòng 2 ("HIỆN CHƯA có gì sinh ra
+    nút [Xác nhận]") — sẽ sai khi item 2 xong.
+  • §3.2 (dòng 130): toàn bộ đoạn "chưa có đường nào…chỉ được gọi từ test".
+  • §3.3 (dòng 144): chữ "Phase 2 chỉ đọc" — sẽ hết đúng khi router có nhóm ghi.
+  • §9 (dòng 341): 2 hàng đầu bảng ("Nối câu → proposal HIGH", "Sửa câu trả
+    lời cũ") sẽ chuyển từ "cần quyết" sang "đã làm".
+Không sửa trước khi code thật — FAQ chỉ mô tả hành vi ĐÃ kiểm (quy tắc của file).
+
+== 4. TRẠNG THÁI THẬT CỦA VIỆC ĐANG LÀM (kể từ prompt trước, chưa xong) ==
+Đã duyệt: commit 3 cụm a/b/c (result29 §6) — CHƯA chia commit nào.
+  Ngập ở bước kỹ thuật khó nhất: 5 file dùng chung giữa (a) Stage B và (c)
+  Phase 9 (http-ask.mjs, payment-write.mjs, idempotency.mjs, mock-server.mjs,
+  http-execute.test.mjs) — tách phải surgical (git apply --cached --reverse
+  từng hunk Phase 9) + test xanh từng trạng thái trung gian, làm cẩn thận hơn
+  là vội. Ưu tiên kế tiếp: nếu tách phức tạp quá ngưỡng, đề xuất gộp thành
+  1 commit duy nhất với body ghi rõ 3 phần — chờ user chốt lựa chọn.
+Item 2 (nối payment_write vào router + text cũ) — CHƯA BẮT ĐẦU.
+Item 3 (route /execute/cancel) — CHƯA BẮT ĐẦU (thiết kế đã rõ: chỉ huỷ PENDING
+  sau khi reconcile = 0 chứng từ, dùng lại reconcilePaymentEntry()).
+Item 4 (xoá 2 PE demo qua ERPNext) — CHƯA LÀM; bước đầu tiên bắt buộc: ĐỌC
+  source @casys/mcp-erpnext để tìm tool delete/cancel thật (không đoán — bài
+  học result4/25; có thể cần document.delete qua doc_create?/destroy tool nếu
+  có, hoặc phải xác nhận với user làm tay trên UI nếu tool không tồn tại).
+Item 5 (faq §3.2/§3.3/§9) — CHƯA LÀM (xem §3).
+
+== 5. DOCS ĐÃ ĐỒNG BỘ TRONG PHIÊN NÀY ==
+openspec/changes/flutter-chat-mvp/tasks.md (validate OK) · LESSONS_LEARNED.md
+(mới) · checklist.md / features.md / next.md / working.md (cập nhật trạng thái
+"chờ duyệt 3 cụm + item 2–5 đang làm") · faq.md (chỉ đọc, chưa sửa) ·
+handoff_20260916-0725.md (mới).
+
+== 6. SUITE (lần chạy xanh gần nhất trong phiên, trước docs-sync) ==
+  Node     ℹ tests 112 · pass 112 · fail 0
+  Python   Ran 60 tests — OK
+  Flutter  00:05 +28: All tests passed! · analyze No issues found!
+  git: HEAD 05dda38 · 36 file modified/untracked (đúng danh sách 3 cụm a/b/c
+  + faq + handoff/initp không commit).
+
+== 7. KẾ HOẠC NGAY SAU ĐÂY (thứ tự) ==
+1. Chia + tạo 3 commit a/b/c theo đúng message result29 §6 (surgical split),
+   push change/flutter-chat-mvp.
+2. Item 2: routeIntent() thêm nhóm payment_write → /ask thật trả proposal
+   create_payment_entry/HIGH → widget test khẳng định nút [Xác nhận] render
+   với JSON thật; sửa text "Phase 2 chỉ đọc"; cập nhật faq §3.2/§3.3/§9.
+3. Item 3: /execute/cancel + test + falsify.
+4. Item 4: đọc source tìm tool xoá PE → xoá 2 demo → verify outstanding gốc
+   không đổi (nếu tool không tồn tại: báo user xoá tay trên UI, không tự chế).
+5. result31 + handoff mới + docs sau mỗi bước lớn.

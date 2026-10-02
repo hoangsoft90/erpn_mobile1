@@ -1,0 +1,321 @@
+result92.txt — next8 / PHASE 6 SALES VERTICAL — TIẾP TỤC (audit code trên disk trước)
+Ngày: 2026-09-30 · Lệnh owner: audit code hiện tại BẮT BUỘC trước mọi sửa; chỉ implement phần THIẾU/LỆCH.
+Nguồn: đọc file trên disk bằng tool (không dùng res8/working/phase6-result làm nguồn sự thật).
+
+════════════════════════════════════════════════════════════════════════════
+§0. BẢNG AUDIT CODE — ĐÃ CÓ vs CÒN THIẾU (theo phase-06 §5.2–5.5)
+════════════════════════════════════════════════════════════════════════════
+
+── SERVER (§5.2 draft+proposal, §5.3 lifecycle, §5.5 execute+verify) ──
+| # | Mục (phase-06) | Trạng thái | Bằng chứng trên disk |
+|---|---|---|---|
+| S1 | `computeSalesTotals` — line_net→subtotal→grand_total, 2 tầng CK RIÊNG | ĐÃ CÓ | skills/sales-write.mjs:81-95 (subtotal trừ line_discount từng dòng; total = subtotal − order_discount) |
+| S2 | `buildSalesProposal` → erpn.proposal/v1, risk HIGH, mọi số từ server | ĐÃ CÓ | sales-write.mjs:167-380 (buildProposal action "create_sales_invoice_draft", risk HIGH; giá từ itemPriceRows+priceForLine) |
+| S3 | Giá: Item Price theo price list; không có ⇒ HỎI (không mặc định 0) | ĐÃ CÓ | sales-write.mjs:271-281 refusal SALES_PRICE_MISSING "không tự đặt giá" |
+| S4 | Thuế: chỉ chọn TÊN template | ĐÃ CÓ | defaultTaxTemplate() sales-write.mjs:144-158 |
+| S5 | Kho mặc định + NÓI RÕ đã dùng kho nào | ĐÃ CÓ | sales-write.mjs:336-341 warnings.push "chưa chọn kho — dùng kho mặc định X" |
+| S6 | Tồn kho chỉ CẢNH BÁO, không chặn | ĐÃ CÓ | stockFor() + warnings (không refusal); test "stock: a short item WARNS" |
+| S7 | credit = grand_total − actual_paid là SỐ DƯ | ĐÃ CÓ | sales-write.mjs:324-332; test F2 pin |
+| S8 | §6.1 ≤1 phương thức (propose + execute) | ĐÃ CÓ | validatePaymentMethods + boundary 422 METHOD_COUNT_INVALID (copilot-server.mjs:723-731) + executor MAX_METHODS check |
+| S9 | §6.2 tài khoản đúng loại hoặc BLOCK (propose) | ĐÃ CÓ | listMoneyAccounts + ACCOUNT_TYPE_MISMATCH / PAYMENT_ACCOUNT_UNRESOLVED (sales-write.mjs:210-250) |
+| S10 | §13 transfer lifecycle: bank ⇒ camvlxd_transfer_state=pending; cash ⇒ không set; không bao giờ nói "đã nhận tiền" | ĐÃ CÓ | buildSalesInvoiceData transferState; executor isBank; result.transfer_state; allocation_note "không gạch nợ..."; test pin nguyên văn |
+| S11 | Execute SI NHÁP qua /execute DUY NHẤT + advance PE (S1, references:[]) | ĐÃ CÓ | safety-gateway.mjs:491-515 executor "sales.create"; sales-write.mjs executor step 6 (resolveAdvanceAccounts + buildPaymentEntryData references: []) |
+| S12 | Verify đọc lại SI + PE đủ field | ĐÃ CÓ | executor step 5 (problems[] + SALES_WRITE_UNVERIFIED) + peProblems |
+| S13 | Idempotency double confirm ⇒ 1 SI + 1 PE | ĐÃ CÓ | action-id probe + store.setReference/complete; test "partial payment + idempotency" |
+| S14 | Route /sales/propose (rate limit read + metered proposal) | ĐÃ CÓ | http-ask.mjs:1151-1256 |
+| S15 | Capability sales.create (WRITE, sales_write, no_price=ask) | ĐÃ CÓ | capabilities.json:1827-1947 |
+| S16 | router.mjs sales_write bag (reads only) | ĐÃ CÓ | router.mjs:123-131 |
+| S17 | business-handoff screen "sales" | ĐÃ CÓ | business-handoff.mjs:63 |
+| S18 | Mock fixture free-draft SI (debit_to/uom/rate/2 tầng CK/correlation/camvlxd) | ĐÃ CÓ | mock-server.mjs:1298+ createSalesInvoice freeDraft |
+| S19 | Test ma trận §30 + pins F1–F7 | ĐÃ CÓ | test/next8-sales-vertical.test.mjs — 18 test (§30 rows + F1/F2 pins + drift + company scope) |
+| S20 | Gate capability tại /sales/propose (ticket sales.create mới được door này) | ❌ THIẾU → SỬA | proposeSalesFromHandoff nhận MỌI WRITE handoff (copilot-server.mjs:703-712 chỉ check type WRITE) — ticket payment.create dùng được door sales ⇒ lệch contract collect twin (door riêng từng flow); SỬA trong sales route (thuộc scope phase này) |
+| S21 | Gate capability tại /collect/propose (đối xứng) | ⚠️ LỆCH — KHÔNG tự sửa | touch collect route = vùng tiền đã chốt ⇒ theo §10 DỪNG hỏi owner; ghi nhận gap này |
+
+── FLUTTER (§5.4) ──
+| # | Mục | Trạng thái | Bằng chứng trên disk |
+|---|---|---|---|
+| F1 | data/sales_models.dart (SalesLineValue/SalesProposalRequest/SalesSummary/SalesProposeResult, tolerant parser) | ĐÃ CÓ | features/sales/data/sales_models.dart (167 dòng) |
+| F2 | data/sales_repository.dart + @riverpod provider | ⚠️ CÓ NHƯNG HỎNG | sales_repository.dart gọi client.proposeSales — method CHƯA TỒN TẠI trên CopilotApiClient ⇒ không compile; .g.dart chưa sinh |
+| F3 | CopilotApiClient.proposeSales → POST /sales/propose | ❌ THIẾU → SỬA | grep proposeSales trong copilot_api_client.dart: 0 hit |
+| F4 | application/sales_controller.dart (@riverpod, epoch, reset đổi khách/kho) | ❌ THIẾU → SỬA | features/sales/application/ không tồn tại |
+| F5 | presentation/screens/sales_screen.dart (4 khối Khách · Hàng hoá · Chiết khấu · Thu/Tổng) | ❌ THIẾU → SỬA | features/sales/presentation/ không tồn tại |
+| F6 | widgets item_line_editor / discount_section / sales_summary; tái dùng PaymentMethodSection | ❌ THIẾU → SỬA | chỉ có collect/presentation/widgets/payment_method_section.dart để tái dùng |
+| F7 | Route /sales + refuse tiếng Việt khi thiếu handoff | ❌ THIẾU → SỬA | app_router.dart chỉ có /chat /read /drill /summary /collect /settings |
+| F8 | Chat auto-open /sales khi handoff.screen == 'sales' | ❌ THIẾU → SỬA | chat_screen.dart:93 chỉ push('/collect') |
+| F9 | ProposalCard confirmable cho create_sales_invoice_draft | ĐÃ CÓ | chat_models.dart allowlist += 'create_sales_invoice_draft' (diff chưa commit) |
+| F10 | Test Flutter sales (models + screen) | ❌ THIẾU → SỬA | apps/mobile/test không có file sales |
+| F11 | ⚠️ HỎNG FILE: copilot_api_client.dart có 1389 byte NUL (0x00) cuối file | ❌ RÁC → DỌN | python đo: size 33871, content_end 32482; git diff so HEAD chỉ đúng phần NUL (không ẩn thay đổi nội dung nào) |
+
+── HỢP ĐỒNG / SỔ SÁCH ──
+| # | Mục | Trạng thái |
+|---|---|---|
+| C1 | openspec/changes/next8-sales-vertical (proposal/design/specs×4/tasks) | ĐÃ CÓ; validate --strict sẽ chạy lại khi đụng spec |
+| C2 | phase6-audit.md (6 mục §4 đo trên site thật) | ĐÃ CÓ (.plan/next8/phase6-audit.md + raw JSON) — KHÔNG làm lại |
+| C3 | phase6-result.md | ❌ THIẾU → viết sau khi xong |
+| C4 | result92.txt | file này |
+| C5 | Vòng nháp thật + verify REST + cleanup | ❌ CHƯA LÀM (owner đã cho phép 1 vòng, số nhỏ, không submit) |
+
+════════════════════════════════════════════════════════════════════════════
+KẾT LUẬN AUDIT: server ĐÃ ĐỦ về bản (S1–S19) — chỉ thiếu gate capability ở
+door sales (S20). Flutter MỚI CÓ data layer (F1) — còn thiếu client method,
+controller, screen, route, auto-open, test (F3–F8, F10). Không viết lại phần
+đã có; implement đúng phần THIẾU/LỆCH dưới đây.
+
+§1. VIỆC LÀM (theo bảng)
+  1. Dọn NUL tail copilot_api_client.dart (F11)
+  2. Server: gate capability /sales/propose (S20)
+  3. Flutter: proposeSales client (F3) → controller (F4) → screen 4 khối (F5/F6)
+     → route /sales (F7) → chat auto-open (F8) → build_runner
+  4. Test Flutter (F10) + regression Node/Flutter + falsify F1–F7 (restore md5)
+  5. Vòng nháp thật + verify REST + cleanup (C5)
+  6. Sổ sách: phase6-result.md + tick tasks.md + working.md
+(Các số đo thật bổ sung ở §2 trở xuống sau khi chạy.)
+
+════════════════════════════════════════════════════════════════════════════
+§2. ĐÃ CHẠY — SỐ ĐO THẬT + LỖI THẬT TÌM ĐƯỢC (chi tiết: `.plan/next8/phase6-result.md`)
+════════════════════════════════════════════════════════════════════════════
+
+── FALSIFY F1–F10 (vùng tiền/kho) ──
+Harness `.plan/next8/_falsify_phase6.mjs`: sửa byte nguồn ⇒ test được đặt tên ĐỎ ⇒ khôi phục
+byte-identical (sha256 trước/sau).
+  F1 gộp 2 tầng CK · F2 credit thành kênh tiền · F3 copy "đã nhận tiền" · F4 >1 phương thức
+  (2 cửa) · F5 fallback tài khoản ý định bank · F6 client thành thẩm quyền giá · F7 đoán company
+  · F8 đọc price list bằng LIST · F9 bỏ lọc selling=1 · F10 CK dòng = discount_amount
+  ⇒ **RED 10/10 · restore byte-identical 10/10** (`FINAL restore identical: YES`).
+
+── 3 LỖI THẬT chỉ lộ khi GHI THẬT (mock nói dối ở cả 3) ──
+ L1. `Selling Settings` là SINGLE: `erpnext_doc_list` = **HTTP 500**
+     (`MySQLdb.ProgrammingError: ('DocType','Selling Settings')`); `erpnext_doc_get` = 200
+     (`selling_price_list="Standard Selling"`). `resolvePriceList` đọc bằng LIST ⇒ **null**.
+ L2. `Item Price` giữ CẢ giá mua và giá bán ⇒ với price_list null, `priceForLine` rơi `pool[0]`
+     = dòng **Standard Buying** ⇒ hoá đơn BÁN ghi `rate=295000` (giá VỐN) thay vì `320000` (giá bán).
+ L3. `items[].discount_amount` là field **DẪN XUẤT**: gửi 20.000 ⇒ đọc lại **0**; ERPNext tự tính
+     `discount_amount = price_list_rate*qty − rate*qty` ⇒ CK DÒNG biến mất (CK ĐƠN vẫn còn vì
+     `discount_amount` bảng CHA là input).
+ Sửa (chỉ trong `skills/sales-write.mjs` + mock):
+   · `resolvePriceList` đọc Single bằng `erpnext_doc_get` (giữ list làm fallback)
+   · `itemPriceRows` lọc `selling = "1"` (chuỗi — theo tripwire repo) ⇒ bán không tiêu thụ dòng giá mua
+   · CK dòng gửi **cặp** (`price_list_rate`=giá bảng, `rate`=giá NET qua `netLineRate()`) + verify
+     cả 2 rate và discount dẫn xuất (dung sai 1đ/dòng cho làm tròn 2 chữ số)
+   · mock: `Selling Settings` chỉ trả qua doc_get (doc_list NÉM lỗi như site); dòng hàng SI DẪN XUẤT
+     `discount_amount`; thêm fixture `BUYONLY-CAM-25KG` (chỉ có giá mua)
+ → Đúng như `design.md` §3 đã ghi ("`rate` là giá thực ghi; `price_list_rate` để CK dòng có nghĩa");
+   bản implement cũ đặt 2 field bằng nhau nên CK dòng mất.
+ Đính chính đã ghi vào `openspec/.../design.md` §10 + 2 requirement mới trong
+ `specs/sales-draft/spec.md`; `openspec validate next8-sales-vertical --strict` = **valid**.
+
+── VÒNG GHI NHÁP THẬT TRÊN SITE `frontend` ──
+ `.plan/next8/_probe_sales_real_round.mjs` (untracked, `.plan/` không commit).
+ Lần 1: item `P2-DELIVERY-ACCEPT Stock Item` bị **vô hiệu hoá** ⇒ ERPNext 417 ⇒ 0 chứng từ.
+        (Item Price đọc được KHÔNG có nghĩa Item còn dùng được.)
+ Lần 2: `CAM-HEO-25KG` 1 Bao ⇒ SI **ĐÃ GHI** `ACC-SINV-2026-01294` nhưng **verify TỪ CHỐI**
+        (`discount_amount=0 (mong đợi 20000)`) ⇒ lộ L1/L2/L3. Chứng từ mồ côi đã xoá sạch.
+ Lần 3 (sau sửa): `/sales/propose` 200 (`price_list="Standard Selling"`, `unit_price=320000`,
+        line 20.000, order 50.000, total 250.000, credit 150.000) → `/execute` **200 OK**.
+   SI `ACC-SINV-2026-01294` (docstatus **0**): grand_total **250000** · `discount_amount` **50000** +
+     `apply_discount_on="Grand Total"` (CK ĐƠN, bảng CHA) · items[0] `price_list_rate` **320000** /
+     `rate` **300000** / `discount_amount` **20000** (CK DÒNG, bảng CON — ERPNext dẫn xuất) ·
+     `update_stock` 0 · `debit_to="1310 - Phải thu khách hàng - MP"` · `camvlxd_transfer_state`
+     **"pending"** · `camvlxd_transfer_amount` 100000 · `custom_ai_action_id`=act_c934619c… ·
+     `paid_amount` 0 (KHÔNG ghi tiền vào hoá đơn) · taxes 2 dòng rate 0 (site tự gắn Item Tax Template)
+   PE `ACC-PAY-2026-00777` (docstatus **0**): party "Nguyễn Văn Toàn" · `paid_amount` 100000 ·
+     `unallocated_amount` **100000** · **`references=[]`** (0 dòng gạch nợ — đúng S1, tiền đặt trước) ·
+     `paid_to="1210 - ACB 110296868 - MP"` (§6.2, KHÔNG fallback 1110) · `mode_of_payment="Wire Transfer"`
+ ⇒ Chứng minh thật: 2 tầng CK TÁCH đúng 2 bảng · nháp · không chuyển kho · PE advance chưa gạch nợ ·
+   làn CK ngân hàng `pending`, KHÔNG câu nào nói "đã nhận tiền".
+
+── CLEANUP (`.plan/next8/_probe_cascade_delete.mjs`) ──
+ Xoá plain REST bị chặn `LinkExistsError` vì automation của site gắn thêm chứng từ phụ:
+   SI: 4 `Audit Issue` (Fraud Detection, Critical) + 8 `Payment Ledger Entry` + 16 `GL Entry`
+       (đều is_cancelled=1, net 0)
+   PE: 1 `Audit Issue` + 2 `Payment Ledger Entry` + 4 `GL Entry` + 5 `Payment Allocation`
+       (ALLOC-2026-11679..11683)
+ Site về ĐÚNG baseline: SI **534/5** · PE **316/17** (trước vòng cũng 534/5 · 316/17) ·
+   0 tham chiếu còn sót (Audit Issue/PLE/GL theo voucher_no cả 2 chứng từ · Payment Allocation theo
+   payment_entry) — tất cả **= 0**.
+
+── SỐ ĐO KIỂM THỬ ──
+ `test/next8-sales-vertical.test.mjs` **20/20** (17 → +3: Single price list · buying-only ⇒ HỎI · CK dòng dẫn xuất)
+ **Node FULL** `npm test` (đã kill NLP bridge) = **1.070 / 1.068 pass / 2 fail** (2 fail ĐÚNG baseline env dsh;
+   baseline 1.067/1.065/2 ⇒ +3, 0 regression)
+ **Flutter FULL** = **439 pass / 3 fail** (3 fail ĐÚNG baseline `test/_probe_review_test.dart` untracked)
+ `flutter analyze` = **1 warning** đúng baseline (`_probe_b0_voice_autosend.dart:50 _onStatus`)
+ Tripwire repo `filter-literal-types` = **pass** (filter literal phải để dạng chuỗi — bản đầu tôi viết `1` đã bị tripwire bắt)
+ Python không đổi · `openspec validate --strict` = valid
+
+── GAP CÒN LẠI (chờ owner, KHÔNG tự làm) ──
+ S22 **KHÔNG có đường vào màn Bán từ chat**: `collectHandoffFor` trả `null` trừ khi capability =
+   `payment.create`; KHÔNG chỗ nào dựng ticket `sales.create`. Đo thật: `/ask "bán hàng cho Nguyễn
+   Văn Toàn"` → route nhóm ĐỌC (`customer_account`), `business_handoff` KHÔNG CÓ ⇒ màn Sales +
+   `/sales/propose` không tới được từ chat; nhánh auto-mở của chat là code chết. Vòng nháp vì vậy
+   phải dựng ticket TRONG TIẾN TRÌNH (`PROBE_FORCE_HANDOFF=1`) — chuỗi ERPNext thật vẫn chứng minh được,
+   nhưng đường chat→màn thì CHƯA. Sửa = mở mặt định tuyến WRITE mới trong vùng tiền ⇒ chờ owner.
+ S21 `/collect/propose` thiếu gate capability (đối xứng S20 đã sửa) — chạm vùng tiền đã chốt, không tự sửa.
+ Automation site gắn `Audit Issue` severity **Critical** ("Fraud Detection") cho MỌI chứng từ mới ⇒
+   mọi lần ghi thật đều sinh rác phải dọn cascade.
+ Rác cũ KHÔNG của phiên này: PE nháp `ACC-PAY-2026-00775` (Phase 5b) vẫn còn 200 trên site.
+
+KẾT LUẬN: vertical Sales đã có đủ server + màn Flutter + test + falsify + **1 vòng ghi nháp thật xanh**;
+3 lỗi money-correctness trên site thật đã tìm + sửa + khoá test; site về nguyên trạng.
+CÒN: đường vào từ chat (S22) — chờ owner quyết. **KHÔNG tự commit (vùng tiền + kho).**
+Sổ sách: `.plan/next8/phase6-result.md` + tick `openspec/changes/next8-sales-vertical/tasks.md` + `working.md`.
+
+═══════════════════════════════════════════════════════════════════════════════
+§3. PHASE 6 FOLLOW-UP — S21 + S22 (lệnh owner 2026-09-30) + VÒNG THẬT QUA CHUỖI CHAT
+═══════════════════════════════════════════════════════════════════════════════
+
+(a) S21 — gate capability cho /collect/propose (twin của S20):
+  `proposeCollectFromHandoff` (copilot-server.mjs) thêm sau kiểm WRITE:
+    if (screenForCapability(capabilityId) !== "collect") → 409 STALE_HANDOFF,
+  cùng câu trả lời DUY NHẤT như ca stale (không lộ ticket sống). Không đụng
+  safety-gateway / idempotency / luật payment.create (§10 giữ nguyên).
+
+(b) S22 — đường chat → màn Bán:
+  1. capabilities.json: nhóm định tuyến WRITE `sales_write` (keyword "bán hàng/
+     bán cho/lập hoá đơn bán" + notIf câu hỏi, đứng TRƯỚC nhóm đọc `sales`).
+  2. copilot-server.mjs: `salesHandoffFor()` (twin `collectHandoffFor`) — ticket
+     `sales.create`/screen `sales`, customer resolve, items/order_discount/
+     payment_methods MISSING, KHÔNG số nào vào ticket; gắn vào 3 đường guard
+     (!partyRow / require_picker / block) + nhánh builder riêng `proposal: null`
+     (chat không đề xuất bán tự do — câu nói không mang dòng hàng).
+  3. Flutter `chat_screen.dart:81-99` ĐÃ SẴN route `screen=='sales'` → `/sales`
+     (xác nhận đọc code — không sửa client).
+
+(c) LỖI THẬT đầu tiên khi test (đo được, không đoán):
+  `/ask "bán hàng cho …"` VẪN rơi nhóm ĐỌC. Nguyên nhân gốc: NLP synonym map
+  (src/vietnamese_nlp/synonyms.py, nhóm "sale") viết "bán hàng" → `sale` TRƯỚC
+  router ⇒ text không còn bắt đầu bằng keyword nào của `sales_write`. Đúng lớp
+  lỗi đã ghi sẵn ở `sales_order_write` ("tạo đơn"/"lên đơn" cũng bị "sale" nuốt).
+  Test dùng "bán cho …" (sống qua normalize) để pin đúng phần wiring; KHÔNG sửa
+  synonym (ngoài phạm vi S22 — gap ghi lại ở tasks.md §11).
+
+(d) Verify:
+  - test mới `mcp-erpnext/test/next8-s21-s22-capability-gate.test.mjs` = 4/4
+    (ticket sales từ chat · câu hỏi bán không mở màn · sales-ticket → collect
+    door 409 · collect-ticket → sales door 409).
+  - Falsify F11 (gỡ gate collect) + F12 (salesHandoffFor return null) thêm vào
+    `.plan/next8/_falsify_phase6.mjs` (chạy cả file test mới) ⇒ RED 12/12 ·
+    restore byte-identical 12/12 (sha256).
+  - Node FULL (kill NLP bridge trước) = 1.074 tests / 1.072 pass / 2 fail
+    (2 fail ĐÚNG baseline dsh env; 1.070 → +4 test, 0 regression).
+  - Flutter FULL = 439 pass / 3 fail (baseline `_probe_review_test.dart`) ·
+    analyze 1 warning (baseline). Python không đổi.
+  - openspec validate --strict = valid (thêm 2 requirement CUỐI
+    `specs/sales-draft/spec.md`: ticket từ chat + gate 2 chiều của 2 cửa propose).
+
+(e) VÒNG THẬT QUA ĐÚNG CHUỖI CHAT (site `frontend`, 1 vòng nháp owner đã duyệt):
+  Harness `_probe_sales_real_round.mjs` + `PROBE_ASK_TEXT` (bypass không cần nữa —
+  ticket thật từ /ask, KHÔNG dùng PROBE_FORCE_HANDOFF):
+    /ask "bán cho Nguyễn Văn Toàn" → ticket screen=sales (customer RESOLVED)
+    /sales/propose → 200 (price_list="Standard Selling", total 250.000)
+    /execute → 200 ok=true replay=false, command_id=1503e7d4-b4d9-4b60-8488-41b3aff5c239
+  REST verify (delete-mode):
+    SI ACC-SINV-2026-01294 docstatus 0: grand_total 250000 (300.000 − CK dòng
+    20.000 − CK đơn 50.000) · discount_amount 50000 + apply_discount_on="Grand
+    Total" (bảng CHA) · dòng: price_list_rate 320000 / rate 300000 /
+    discount_amount 20000 (bảng CON, derived) · net_amount 250000 · update_stock 0
+    · debit_to 1310 · camvlxd_transfer_state "pending" + amount 100000 ·
+    custom_ai_action_id act_a3d40001-47d6-4776-beb8-153dda84c243 · paid_amount 0
+    · taxes 2 dòng rate 0 · warehouse "Kho Cám - MP" · income 4110.
+    PE ACC-PAY-2026-00777 docstatus 0: party "Nguyễn Văn Toàn" · paid_amount
+    100000 · unallocated_amount 100000 · references=[] (0 dòng gạch, S1) ·
+    paid_to "1210 - ACB 110296868 - MP" · mode "Wire Transfer" · reference_no
+    "<command_id>:advance" · action_id act_cb74ecd3-01c0-404e-bea4-c55a23b98d1e.
+
+(f) Cleanup + baseline (cascade `_probe_cascade_delete.mjs`):
+    PE xoá 202 attempt 1; SI xoá sau khi peel 1 `Audit Issue` (AI-2026-28209);
+    đọc-lại 404 cả hai. Quét 3 id (2 action_id + command_id) trên Audit Issue /
+    Payment Ledger Entry / GL Entry / Payment Allocation ⇒ **0** ref sót.
+    Baseline khớp: SI 534/5 · PE 316/17.
+  ⚠️ Tên chứng từ TÁI SỬ DỤNG lần 2: SI mới lại mang đúng tên ACC-SINV-2026-01294
+    và PE ACC-PAY-2026-00777 của vòng trước (F-P5-4 tái hiện) ⇒ đối chiếu bằng
+    action_id MỚI, KHÔNG dùng tên.
+
+(g) Ranh giới giữ nguyên: KHÔNG submit · KHÔNG commit · KHÔNG push · không đụng
+  Collect §6.3/`payment.create` · /execute vẫn cửa ghi DUY NHẤT.
+  Còn mở (không của S21/S22): PE nháp cũ ACC-PAY-2026-00775 (Phase 5b);
+  NLP synonym "bán hàng"→`sale` nuốt mệnh lệnh (gap riêng, chờ owner).
+
+================================================================================
+§4 — FOLLOW-UP (2026-10-01): SỬA NLP SYNONYM "bán hàng" (lệnh owner)
+================================================================================
+
+Owner: "Sửa NLP synonym để 'bán hàng cho…' mở được màn Bán thay vì 'bán cho…'".
+
+(a) GỐC (đo bằng PYTHONPATH=src python3 -c "from vietnamese_nlp.pipeline import normalize"):
+    'bán hàng cho Nguyễn Thị Lan' -> 'sale cho Nguyễn Thị Lan' | intents ('sale',)
+    'bán cho Nguyễn Thị Lan'      -> unchanged                    | intents ()
+    ⇒ synonyms.py xếp "bán hàng" vào SYNONYM_GROUPS["sale"]; map_synonyms viết lại
+      TRƯỚC router ⇒ câu không còn bắt đầu bằng keyword của nhóm WRITE `sales_write`
+      (S22) ⇒ rơi nhóm ĐỌC `sales` ⇒ KHÔNG ticket ⇒ màn Bán không mở được từ chat.
+
+(b) SỬA (phương án hẹp nhất): BỎ "bán hàng" khỏi SYNONYM_GROUPS["sale"] trong
+    src/vietnamese_nlp/synonyms.py (giữ 'chốt đơn'/'tạo đơn'/'lên đơn'/'bán lẻ'/
+    'sales order'/'sale'). KHÔNG đụng router/capabilities/safety-gateway.
+    Đo lại: 'bán hàng cho Nguyễn Thị Lan' -> unchanged | intents ()
+            'bán được bao nhiêu hôm nay'  -> unchanged | intents ()
+            'chốt đơn cho Lan'            -> 'sale cho Lan' | intents ('sale',)
+
+(c) TEST KHOÁ:
+    tests/data/dialect_cases.json  syn-015 "bán hàng" expected_intents [] (+note)
+    tests/test_synonyms.py         +2 test (phrase sống nguyên; các phrase còn lại
+                                   vẫn ra 'sale')
+    test/next8-s21-s22-capability-gate.test.mjs dùng câu thật "bán hàng cho ..."
+                                   (trước là "bán cho ...") -> 4/4
+
+(d) VERIFY 2 CHIỀU (mock, qua /ask):
+    "bán hàng cho Nguyễn Thị Lan" -> business_handoff screen=sales,
+        capability=sales.create, customer RESOLVED CUST-00001, items/order_discount/
+        payment_methods MISSING, proposal=null, KHÔNG số trong ticket.
+    "bán được bao nhiêu hôm nay"  -> KHÔNG ticket, routed.group != sales_write.
+
+(e) FALSIFY: F13 mới (re-add synonym "bán hàng" ⇒ S22 test ĐỎ), backup/restore
+    synonyms.py — RED 13/13 · restore byte-identical 13/13.
+
+(f) REGRESSION: Python discover tests **65 OK** · Node targeted **4/4** ·
+    Node FULL **1074/1072/2** (2 fail ĐÚNG baseline dsh) · Flutter **439/3**
+    (baseline _probe_review_test.dart) + analyze **1 warning** (baseline).
+
+(g) TRADE-OFF ghi rõ: câu BẮT ĐẦU bằng "bán hàng" mà thiếu từ khoá câu hỏi trong
+    notIf (vd "bán hàng tháng này") nay MỞ màn Bán thay vì trả lời ĐỌC. Chấp nhận:
+    màn chỉ MỞ, không ghi gì; ghi vẫn phải qua /execute. Câu hỏi chuẩn vẫn ĐỌC.
+
+Ranh giới: KHÔNG commit · KHÔNG push · KHÔNG submit.
+
+================================================================================
+§5 — FOLLOW-UP 2 (2026-10-01): synonym 'tạo đơn'/'lên đơn' + VÒNG THẬT qua chat + COMMIT
+================================================================================
+
+(a) SỬA SYNONYM 'tạo đơn'/'lên đơn' (lệnh owner):
+    Trước: "tạo đơn"/"lên đơn" nằm trong SYNONYM_GROUPS["sale"] ⇒ bị viết thành
+    "sale" TRƯỚC router ⇒ câu LỆNH rơi nhóm ĐỌC `sales`.
+    Sau:  chuyển sang nhóm RIÊNG `sales_order` (label CHỨA chuỗi "sale") +
+    thêm keyword "sales_order" vào nhóm `sales_order_write` (capabilities.json).
+    Đo:  'tạo đơn cho Lan 10 bao cám heo' -> 'sales_order cho Lan ...' -> sales_order_write / sales_order.create
+         'lên đơn cho Lan chưa'          -> 'sales_order cho Lan chưa' -> sales / invoice.lookup (KHÔNG dead-end)
+    Test: tests/test_synonyms.py (66 OK) · b2-sales-order (24/24) ·
+          next8-s21-s22-capability-gate (5/5 — thêm ca 'tạo đơn cho …' mở đơn bán).
+
+(b) FALSIFY: thêm F14 (bỏ keyword sales_order khỏi route) + F15 (đổi label
+    sales_order -> order_draft) ⇒ **RED 15/15 · restore byte-identical 15/15**.
+
+(c) VÒNG NHÁP THẬT QUA CHUỖI CHAT (site `frontend`, PROBE_ASK_TEXT="bán hàng cho Nguyễn Văn Toàn"):
+    [1/3] /ask -> 200 · screen=sales · ticket THẬT (không PROBE_FORCE_HANDOFF)
+    [2/3] /sales/propose -> 200 · price_list="Standard Selling"
+    [3/3] /execute -> 200 ok=true replay=false
+        SI nháp ACC-SINV-2026-01294 (docstatus 0, grand_total 250000 =
+        300000 − 20000 dòng − 50000 đơn; dòng price_list_rate 320000 / rate
+        300000 / derived discount 20000; camvlxd_transfer_state "pending"
+        +100000; paid_amount 0; debit_to 1310; income 4110; warehouse "Kho Cám - MP")
+        PE nháp ACC-PAY-2026-00777 (party "Nguyễn Văn Toàn", paid 100000,
+        unallocated 100000, references=[], paid_to 1210 ACB, Wire Transfer,
+        reference_no "<command_id>:advance")
+    Cleanup cascade: PE + SI xoá ⟶ đọc-lại 404 cả hai; sweep theo 3 id
+    (2 action_id + command_id + reference_no) trên Audit Issue / Payment Ledger
+    Entry / GL Entry / Payment Allocation / Payment Entry Reference /
+    Sales Invoice Payment ⇒ **0 ref sót**; baseline **SI 534/5 · PE 316/17**.
+
+(d) COMMIT: b495c4b "feat(next8): sales vertical — ... [VÙNG TIỀN]" — 33 file.
+    Owner chốt phạm vi: CHỈ Phase 6 + S21/S22 + synonym (BỎ nhóm collect 05b
+    FINDING 1/2/3) và CHỈ 3 file Python của bản sửa synonym. KHÔNG push.
+    Nhóm 05b follow-up vẫn chờ lệnh commit riêng.

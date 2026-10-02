@@ -1,0 +1,457 @@
+# A-result.md — Workstream A: HĐĐT XML (`.plan/next3/implementation.md`)
+
+**Ngày:** 2026-09-24 · **Người làm:** agent (Buffy) · **Trạng thái:** A0 ✅ · A1 ✅ · A2 ✅ (code + mock)
+· **vòng E2E THẬT: ĐẠT — tạo được nháp `PUR-ORD-2026-00006` trên ERPNext thật (§3)** ·
+**R5 ✅ + R6 ✅ đã sửa VÀ kiểm chứng trên site thật (§2).**
+**Commit `74eb467`** (code + docs workstream A; **chưa push**).
+
+---
+
+## 0. Số suite ĐO ĐƯỢC trong phiên
+
+| Suite | Lệnh | Kết quả |
+|---|---|---|
+| Full Node (mock) | `cd mcp-erpnext && COPILOT_MOCK_OK=1 node --test` (58 file, chạy 2 nửa) | **743 test / 741 pass / 2 fail** — xem §0b |
+| Python NLP | `PYTHONPATH=src python3 -m unittest discover -s tests -q` | ✅ **63 test OK** (+1 cho R5) |
+| A1 parser | `node --test test/a1-einvoice-parser.test.mjs` | ✅ |
+| A2 route + pipeline | `node --test test/a2-einvoice-input.test.mjs` | ✅ 26/26 (a1+a2) |
+| Bug-fix real-site (R1/R2/R5) | `node --test test/a2-real-site-fixes.test.mjs` (MỚI, +1 test R5) | ✅ 3/3 |
+| UOM/B1 (+1 test R5) | `node --test test/b1-item-supplier-uom.test.mjs` | ✅ 17/17 |
+| PO/B4 (+2 test R6) | `node --test test/b4-purchase-order.test.mjs` | ✅ **23/23** |
+| Nhóm ảnh hưởng trực tiếp (13 file) | p3-classifier · b3 · b4 · b2 · p9-pay · payment-write · a1 · a2 · a2-real-site-fixes · m1 · b1 · correlation-field · c2-ocr-proposal | ✅ **221/221** |
+| Falsify P9-C (gồm ca J mới) | `node scripts/falsify/p9c-payment-pay.mjs` | ✅ **10/10 RED**, restore byte-identical |
+
+### 0b. Full Node suite (cuối phiên)
+
+58 file test. Chạy MỘT tiến trình bị môi trường kill giữa chừng (chạy nền, log rỗng) ⇒ chạy lại
+thành **2 nửa disjoint** (`head -29` + `tail -29`), không sót file:
+
+```
+cd mcp-erpnext && COPILOT_MOCK_OK=1 node --test $(ls test/*.test.mjs | head -29)   # 308 test / 306 pass / 2 fail
+cd mcp-erpnext && COPILOT_MOCK_OK=1 node --test $(ls test/*.test.mjs | tail -29)   # 435 test / 435 pass / 0 fail
+```
+
+⇒ **743 test / 741 pass / 2 fail**. Hai fail là **`dsh-gateway.test.mjs`**
+(`dshGatewayHealth` + `verifyDshRuntime`, timeout 30s mỗi cái) — lỗi **môi trường DSH có từ B0**,
+không liên quan workstream A. Baseline đầu phiên: **711 / 709 / 2** ⇒ **+32 test, 0 regression**
+(+28 workstream A, +2 R5, +2 R6).
+
+Python: `PYTHONPATH=src python3 -m unittest discover -s tests -q` ⇒ **Ran 63 tests — OK** (62 trước R5).
+
+---
+
+## 1. Đã ship
+
+### A0 — Spike (`A0-einvoice-formats.md`)
+Chọn **XML có cấu trúc (TT78)**; field map thẻ→slot; đo danh tính thật của site (MST NCC qua
+`erpnext_doc_list`, item thật, `custom_ai_action_id` ĐÃ CÓ trên PO/SO/QT, kho — xem gap §3).
+
+### A1 — Parser XML → slots (UNTRUSTED)
+- `src/einvoice/einvoice-xml.mjs` — parse thuần, không I/O, **không** gọi `/execute`, không ERP id.
+- `src/einvoice/einvoice-slots.mjs` — slots + resolve đối tác (MST trước, tên sau) + khớp item.
+- Fixture: `test/fixtures/einvoice/{tt78-basic,provider-namespace,edge-unmatched-item,edge-bad-number}.xml` (4 ≥ 3).
+- `test/a1-einvoice-parser.test.mjs`.
+
+### A2 — Vào pipeline app
+- Route `POST /input/einvoice` (`src/http-ask.mjs`): throttle → kind theo contract → parse fail-closed
+  → authz → **chỉ sau đó** đọc master data. Không proposal, không giá từ file, **không tạo master**.
+- Contract: `einvoice_policy` + accessor `einvoicePolicy()` + `einvoiceDocumentKinds()`, validate
+  fail-closed (`src/capability-contract.mjs`, `capabilities.json`).
+- Đọc NCC kèm MST: `listSuppliersWithTaxId` (`src/skills/purchasing.mjs`) qua `erpnext_doc_list`.
+- Mock phản ánh shape thật: `Supplier.tax_id` nullable + projection `fields` (`src/mock-server.mjs`).
+- `test/a2-einvoice-input.test.mjs` (route + E2E mock: file → slots → câu compose → `/ask`).
+- Loop thật: `.plan/next3/loop-a2-einvoice-real.mjs` (+ fixture dòng dịch vụ `.plan/next3/fixtures/`).
+
+---
+
+## 2. Bug THẬT tìm được nhờ vòng chạy thật (mock không thể lộ)
+
+### Bug R1 — Filter MCP truyền SỐ thay vì string ⇒ mọi `/ask` mua hàng thành 500
+
+> **Vì sao tripwire sẵn có không bắt được (đáng ghi lại):** repo **đã có** invariant repo-wide
+> `test/filter-literal-types.test.mjs` cho đúng luật này — nhưng regex của nó đòi **tên field có
+> ngoặc kép** (`[\"([a-z_]+)\"]`), nên dạng `[[side, "=", 1]]` (field là **biến**) chưa bao giờ được quét.
+> Đã **mở rộng chính tripwire đó** (không tạo test trùng) để phủ dạng field-biến, và kiểm chứng nó
+> "sống": đổi `"1"` → `1` trong `inventory.mjs` ⇒ **RED** đúng dòng (`skills/inventory.mjs: filter
+> [<field>,"=",1] uses a numeric/boolean value`); restore ⇒ **GREEN**.",
+- Đo được: `Tool erpnext_doc_list returned business error: Property /filters/0/2 must be string`.
+- 2 chỗ: `src/skills/inventory.mjs` (`listItemPrices`, dùng bởi **mọi** builder đơn) và
+  `src/skills/purchase-order-write.mjs` (đọc lại giá khi execute). Cả hai truyền `1` (số).
+- Đối chiếu trong repo: `sales-order-write.mjs` / `quotation-write.mjs` **đã** dùng `"1"` kèm comment
+  ghi đúng lỗi này — nhánh PO bị bỏ sót.
+- Sửa: dùng `"1"` + comment nêu số đo. Ghim bằng tripwire tĩnh quét **mọi** file skill/src + test
+  wire-level (`test/a2-real-site-fixes.test.mjs`).
+
+### Bug R2 — `catch` đọc biến khai trong `try` ⇒ thông báo lỗi thật bị nuốt
+- `src/copilot-server.mjs:1698`: khối `catch` của nhánh ghi đọc `customerId`/`customerName` — hai biến
+  được `let` **bên trong** `try`. Catch là **scope riêng** ⇒ `ReferenceError: customerId is not defined`.
+- Hệ quả thật: **mọi lần builder đường NCC từ chối** (PO / phiếu nhận) trả về user một `500`
+  vô nghĩa thay vì lý do tiếng Việt + `error_code`. Fail-closed vẫn giữ (không ghi gì).
+- Bằng chứng stack thật: `at answerQuestion (.../copilot-server.mjs:1698:60)` (probe
+  `.plan/next3/probe-ask-stack.mjs`).
+- Sửa: hoist 2 biến ra trước `try` (cả `try` và `catch` đều thấy). Ghim bằng test gọi thẳng
+  `answerQuestion` và khẳng định `error_code` là `PO_*` + reason tiếng Việt còn nguyên.
+
+### Bug R3 (P9-C, bug tiềm ẩn thật trên site) — fragment 2 ký tự làm guard hướng tiền từ chối oan
+- Đo được: câu `xử lý 500 nghìn cho nguyễn thị lan` sinh span **`lý`** (từ động từ "xử lý"), và
+  `"đại lý cám bình dương".includes("lý")` = **true** ⇒ `resolveSupplier` trả về NCC ⇒ guard
+  `PAYMENT_DIRECTION_AMBIGUOUS` chặn một lệnh trả tiền hợp lệ, kèm thông báo SAI ("tên có trong CẢ hai sổ").
+- Site THẬT có NCC đúng tên đó (A0: MST 0300000002) ⇒ đây là bug sống, không phải artefact của fixture.
+- Sửa (user chốt cùng ngày): pass substring yêu cầu fragment **≥ 3 ký tự**
+  (`MIN_SUBSTRING_FRAGMENT`, `src/copilot-server.mjs`). Tên ngắn vẫn khớp qua pass **exact**.
+- Ghim: test mới trong `test/p9-pay.test.mjs` (gồm cả **hạn chế còn lại được ghi rõ**: NCC tên đúng
+  `"Lý"` vẫn bị span `lý` khớp ở pass exact — trade-off có chủ ý, không giấu) + falsify **ca J** RED.
+
+### Bug R4 — PO hàng tồn kho KHÔNG có kho ⇒ ERPNext từ chối (417)
+- Đo được: `Dòng #1: Kho là bắt buộc đối với mặt hàng tồn kho CAM-GA-25KG` (HTTP 417).
+- Site **không khai** `Item Default.default_warehouse` cho item tồn kho (đo `erpnext_doc_get`).
+- Sửa (theo chốt user: dùng `Item Default` của ERPNext, fail-closed khi thiếu):
+  - `src/skills/inventory.mjs`: `getItemWarehouseHints` (đọc `erpnext_doc_get` — đường ĐO ĐƯỢC, vì
+    `item_get` không trả `item_defaults`, còn `doc_list` child doctype bỏ qua `fields`).
+  - `src/skills/purchase-order-write.mjs`: dòng hàng **tồn kho** lấy kho từ ERPNext; thiếu ⇒
+    `PO_WAREHOUSE_UNRESOLVED` (nêu rõ phải khai "Default Warehouse", **KHÔNG tự chọn kho**);
+    2 kho mặc định ⇒ câu hỏi, không tung đồng xu; hàng dịch vụ ⇒ không cần kho, không bịa field.
+  - `warehouse` chảy vào payload `erpnext_doc_create` (`buildPurchaseOrderData`).
+  - `src/router.mjs` + `src/copilot-server.mjs`: nối read + truyền `company` để ưu tiên đúng company.
+  - Contract: thêm `PO_WAREHOUSE_UNRESOLVED` vào `capabilities.json`.
+  - Mock: `erpnext_doc_get` cho `Item` (mặc định có kho, `MOCK_ERP_NO_ITEM_DEFAULT_WAREHOUSE` mô phỏng
+    đúng site thật) + test mới trong `test/b4-purchase-order.test.mjs`.
+
+### Bug R5 — UOM "Nos" của hóa đơn không parse được số lượng ✅ ĐÃ SỬA
+
+- Đo được (chạy thật với dòng dịch vụ): câu compose `3 Nos Phí vận chuyển & bốc xếp` ⇒
+  `PO_QTY_MISSING` (NLP hiểu "3 Bao" nhưng không hiểu "3 Nos").
+- **Đo site trước khi sửa** (probe read-only `.plan/next3/probe-r5-uom.mjs`, 2026-09-24) — không đoán:
+  - `UOM` **CÓ** `Nos` (`must_be_whole_number: 1`); **KHÔNG** có `Cái` / `Chiếc`.
+  - `Item PHI-VAN-CHUYEN` (dịch vụ, `is_stock_item: 0`) có **`stock_uom: "Nos"`**.
+  ⇒ `Nos` là tên đơn vị **của chính ERPNext**, không phải từ lạ ⇒ map **đồng nhất** là đúng, và
+  `Cái`/`Chiếc` **không được** đưa vào candidates (site không có ⇒ chỉ dẫn tới `UOM_UNKNOWN`).
+- Nguyên nhân gốc: token đơn vị chỉ được công nhận khi số đi kèm, mà bảng đơn vị của tầng Python
+  không có `nos` ⇒ số `3` bị đọc rồi **mất đơn vị** ⇒ quantity không tồn tại ⇒ builder từ chối và
+  **đổ lỗi cho câu nói của user** ("chưa rõ số lượng") dù file ghi rõ `3`.
+- Sửa (tối thiểu, **KHÔNG hardcode quy đổi** — không hệ số nào được thêm/bớt):
+  - `src/vietnamese_nlp/quantity.py`: `UNITS["nos"] = "nos"` (**alias đồng nhất**).
+  - `mcp-erpnext/src/uom.mjs`: `UOM_SYNONYMS.nos = ["Nos"]` — **đúng MỘT** candidate, là tên site có.
+- Ghim: `tests/test_pipeline.py::test_quantity_erpnext_nos_uom` (Python) +
+  `test/b1-item-supplier-uom.test.mjs` (candidates + `NO_CONVERSION_NEEDED`, `hidden_conversion` false,
+  và **không** biến alias thành default) + `test/a2-real-site-fixes.test.mjs` (compose → NLP → pair,
+  assert `problems` rỗng và số lượng vẫn là `3`).
+- Falsify (đã chạy thật): gỡ `"nos"` khỏi `quantity.py` ⇒ **RED đúng 1 test R5** (2 test kia vẫn xanh),
+  restore **byte-identical**; gỡ `nos: ["Nos"]` khỏi `uom.mjs` ⇒ **RED đúng test B1 mới**, restore byte-identical.
+- **Đã kiểm chứng trên SITE THẬT** (chế độ chỉ đọc mới `A2_ASK_ONLY=1`, xem §3.5): `/ask` thật trả
+  `normalized.quantities = [{value:3, unit:"Nos", canonical_unit:"nos", raw:"3 Nos"}]` ⇒ **R5 xác nhận
+  chạy trên site thật**, số `3` không còn bị mất.
+- Nối tiếp: sau khi R6 xong (§2/R6), chứng từ dịch vụ **đã** ra được proposal trên site thật — và hoá
+  ra ERPNext **CÓ** `Item Price` cho `PHI-VAN-CHUYEN` / `Nos` (`Standard Buying` **500.000**) nên cửa
+  `PRICE_MISSING` **không** bị chạm tới (đo ở §2/R6).
+
+### Bug R6 — đường ĐẶT HÀNG nhận item "ma" từ 1 từ trùng TÊN NHÀ CUNG CẤP ✅ ĐÃ SỬA
+
+- Lộ ra **chính vì R5 đã sửa**: trước R5 `quantities` rỗng nên **mọi** item đều `QTY_MISSING` và lỗi
+  hiện ở item đầu; sau R5 dòng đầu đã có số lượng nên lỗi lộ ra ở **dòng "ma" phía sau**.
+- Đo trên site thật (`.plan/next3/probe-r5-ask-full.mjs`, fixture dịch vụ): `/input/einvoice` **200**
+  (`PHI-VAN-CHUYEN`, qty **3**, uom **Nos**), câu `đặt mua 3 Nos Phí vận chuyển & bốc xếp từ Đại lý Cám
+  Bình Dương` → `/ask` **`PO_QTY_MISSING`** với reason `chưa rõ số lượng cho mặt hàng "Cám heo tăng
+  trọng 25kg"` — **mặt hàng câu nói KHÔNG hề nhắc tới**.
+- Nguyên nhân gốc (tái hiện **thuần logic, 0 server**: 3 item + 1 câu):
+  - `matchItemsByText` khớp theo tiền tố tên item, dài trước, **xuống tới `len = 1`** ⇒ item
+    `Cám heo tăng trọng 25kg` khớp đúng **1 từ** `"cám"`, và từ đó nằm **bên trong TÊN NCC**
+    `Đại lý **Cám** Bình Dương` (span 49..52).
+  - `matched` (đường ĐỌC — chỉ giữ `hit === bestLen`) **ĐÚNG**: chỉ `PHI-VAN-CHUYEN` (hit 6).
+  - `selectNonOverlappingItems` (đường ĐẶT HÀNG — giữ **mọi** `scored` không chồng span) giữ thêm
+    `CAM-HEO-25KG` (hit 1) ⇒ 2 dòng, dòng thứ hai không có số lượng ⇒ từ chối, và **thông báo nêu tên
+    một mặt hàng user chưa từng nói**.
+- Ảnh hưởng thực tế: **bất kỳ** câu đặt hàng nào nêu tên đối tác chứa từ trùng đầu tên item (site này:
+  `Đại lý **Cám** ...`) đều có thể sinh **dòng ma** hoặc từ chối sai.
+- **Hướng xử lý do USER chọn (2026-09-24): (b) — span nằm trong tên đối tác đã resolve KHÔNG phải là dòng.**
+  (Hai hướng còn lại đã cân nhắc và không chọn: (a) `hit ≥ 2` sẽ **chặn oan item có tên 1 từ**;
+  (c) loại theo chồng lấn sẽ cắt cả span user nói đúng.)
+- **Sửa (một helper, additive):** `maskPartyMention(text, partyNames)` trong `src/line-parse.mjs`
+  — **thay tên đối tác bằng dấu cách, GIỮ NGUYÊN ĐỘ DÀI**, rồi mới đưa vào `matchItemsByText`. Nhờ vậy
+  mọi offset span (kể cả cái `pairLinesPure` dùng để gán số lượng) **vẫn đúng**, chỉ đoạn tên đối tác
+  là không thể khớp item nữa. Điều kiện là **nằm trong** đoạn tên đối tác, nên item thật sự được user
+  nói ở NGOÀI đoạn đó **vẫn khớp** (có test ghim riêng). Dấu phải khớp **chính xác** (chỉ fold hoa/thường):
+  nếu tên resolve và câu khác dấu thì **không mask gì** — thà giữ nguyên hành vi còn hơn blank oan span user nói đúng.
+- **Nối vào CẢ 7 đường đặt hàng** (không chỉ PO — bug này có ở mọi đường, vd khách tên có `Cám`): PO
+  (`supplier_name`) · QT · SO (`customer_name`) · DN · SI (`so.customer_name`) · PR (`po.supplier_name`)
+  · SR (`resolved.customer.customer_name`). Đường ĐỌC **không đổi** (đã đúng sẵn nhờ luật `bestLen`).
+  `stock-adjustment` không có đối tác ⇒ không đổi.
+- Ghim: `test/b4-purchase-order.test.mjs` +2 test — (1) câu R6 **thật** ⇒ **ĐÚNG 1 dòng** `PHI-VAN-CHUYEN`
+  qty 3 uom `Nos`, không có dòng ma; (2) item user thật sự nói **ngoài** đoạn tên NCC **vẫn** thành dòng.
+- **Falsify (đã chạy thật):** `git stash` để trả `purchase-order-write.mjs` về bản trước R6 ⇒
+  **RED đúng test R6** (22 pass / 1 fail), `git stash pop` trả lại fix.
+- **✅ KIỂM CHỨNG TRÊN SITE THẬT** (`.plan/next3/probe-r5-ask-full.mjs`, **chỉ đọc**, không `/execute`):
+  `/ask` cho câu R6 nay trả **proposal bình thường**: **1 dòng** `PHI-VAN-CHUYEN` qty **3** uom **Nos**
+  rate **500.000** (`price_list: Standard Buying`, `conversion_factor: null`), `estimated_total_vnd`
+  **1.500.000**, `warnings: []` — **hết dòng ma, hết `PO_QTY_MISSING`**. (Giá 500.000 **khác** 150.000
+  trên file ⇒ lại là bằng chứng `rate_source: erpnext`.) Site **không** đổi trạng thái: vẫn 6 PO / 1 nháp.
+
+---
+
+## 3. E2E THẬT ĐẠT — 1 Purchase Order NHÁP từ XML HĐĐT (2026-09-24)
+
+**Chứng từ ERPNext thật: `PUR-ORD-2026-00006`** — đọc lại độc lập qua REST API (không tin response ghi):
+
+| Trường | Giá trị THẬT trên site |
+|---|---|
+| `name` | **`PUR-ORD-2026-00006`** |
+| `docstatus` | **0 (Draft)** — KHÔNG submit |
+| `status` | Draft |
+| `supplier` | `Đại lý Cám Bình Dương` (resolve từ XML theo **MST 0300000002**) |
+| `company` | `Minh Phát Cám & VLXD` (pin `COPILOT_COMPANY`) |
+| `transaction_date` | 2026-09-24 |
+| `grand_total` | 4.175.000 — **giá MUA từ ERPNext**; file ghi 4.427.500 nên đây là bằng chứng `rate_source: erpnext` |
+| `custom_ai_action_id` | `act_cf273951-1fd4-483b-adeb-5032d2392ce6` |
+| `items` | `CAM-GA-25KG` 10 Bao @270.000 · `CAM-HEO-25KG` 5 Bao @295.000 — **cả hai kho `Kho Cám - MP`** |
+
+### 3.0 Nhật ký 5 bước (mỗi bước đo được)
+
+Chạy thật trên site (không mock), `COPILOT_COMPANY="Minh Phát Cám & VLXD"`:
+
+| Bước | Kết quả THẬT |
+|---|---|
+| 1. `POST /input/einvoice` (`tt78-basic.xml`) | **200** — capability `purchase_order.create`; đối tác resolve **theo MST** `0300000002` → `Đại lý Cám Bình Dương` (`matched_by: "tax_id"`); 2 dòng file → item thật `CAM-GA-25KG` (10 Bao) + `CAM-HEO-25KG` (5 Bao); **warnings rỗng**; tiền trên file 4.427.500 chỉ để hiển thị |
+| 2. Câu compose | `đặt mua 10 Bao Cám gà thịt 25kg + 5 Bao Cám heo tăng trọng 25kg từ Đại lý Cám Bình Dương` |
+| 3. `POST /ask` | **200** — `purchase_order_write` (`matched: "đặt mua"`), proposal `create_purchase_order` **risk HIGH**; giá **từ ERPNext** `Standard Buying` 270.000 / 295.000 (file ghi 270.000 / 265.000 ⇒ chứng minh `rate_source: erpnext`), tạm tính 4.175.000 |
+| 4. `POST /execute` (chưa có fix kho) | **503** `PO_COMPANY_UNRESOLVED` (đúng — 3 company, chưa pin) → sau khi pin: **503** `retry_same_command_id` vì ERPNext trả **417 "Kho là bắt buộc…"** — executor xử lý ĐÚNG (không tạo bản ghi ma) |
+| 5. Sau fix kho | `POST /ask` → **`PO_WAREHOUSE_UNRESOLVED`** với thông báo hành động được: `"Cám gà thịt 25kg" là hàng tồn kho nhưng ERPNext CHƯA khai kho mặc định cho nó — khai "Default Warehouse" (Item Default) cho mặt hàng này trên ERPNext rồi thử lại (KHÔNG tự chọn kho)` |
+| **Chứng từ ERPNext thật tạo được** | ✅ **`PUR-ORD-2026-00006`** — docstatus **0**, đọc lại verified (bảng trên) |
+
+Kiểm tra độc lập sau mỗi lần chạy: `Purchase Order` trên site vẫn **5** bản ghi, tất cả `docstatus 1`
+(không có nháp nào lọt, không có bản ghi ma).
+
+### 3.1 Cấu hình site đã làm (tối thiểu, idempotent)
+
+- **Item Default / Default Warehouse**: gán `Kho Cám - MP` cho company `Minh Phát Cám & VLXD` trên
+  `CAM-GA-25KG` và `CAM-HEO-25KG` — script `.plan/next3/apply-item-default-warehouse.mjs`, chạy lại lần 2
+  in `already … (no change)` ⇒ idempotent, không đụng item nào khác.
+  Kho được chọn từ **lịch sử mua của chính site** (PO `PUR-ORD-2026-00005` đã nhập `CAM-GA-25KG` vào
+  `Kho Cám - MP`) — không bịa kho. Script tự **ABORT** nếu kho không tồn tại hoặc là node nhóm
+  (`is_group`), nên không thể gán vào chỗ ERPNext sẽ từ chối.
+- **Correlation field**: `custom_ai_action_id` **đã CÓ** trên `Purchase Order` (`Custom Field`, `unique: 1`)
+  ⇒ **không** cần chạy migration; giá trị thật đã nằm trên doc (bảng trên).
+- **Không** sửa gì khác trên site: không tạo Customer/Item/Supplier, không auto-submit, không xoá/huỷ gì.
+
+### 3.2 Gỡ intent treo của lần thử cũ — bằng route của chính gateway, không bypass
+
+Lần thử trước bị ERPNext từ chối 417 nên command để lại PENDING; chạy lại cùng ý định bị chặn đúng
+**409 `IDEMPOTENCY_INTENT_IN_FLIGHT`** (chống ghi trùng). Gỡ bằng `POST /execute/cancel`
+(`.plan/next3/cancel-stale-a2-intent.mjs`) — route này **chỉ huỷ khi ERPNext tự chứng minh 0 chứng từ**
+cho reference đó ⇒ trả `{"ok":true,"cancelled":true}` rồi mới tạo ý định mới. Không sửa store bằng tay.
+
+### 3.3 Kiểm chứng độc lập sau khi ghi
+
+`Purchase Order` trên site = **6** bản ghi, trong đó **đúng MỘT nháp** là `PUR-ORD-2026-00006`
+(5 bản còn lại `docstatus 1` có từ trước). Không bản ghi ma, không nhân bản.
+
+### 3.5 Chế độ "chứng minh mà KHÔNG ghi" — `A2_ASK_ONLY=1`
+
+Loop thật nay có nhánh **chỉ đọc**: `A2_ASK_ONLY=1 node ../.plan/next3/loop-a2-einvoice-real.mjs`
+dừng **ngay sau `/ask`**, **không** sinh `command_id`, **không** gọi `/execute` ⇒ không thể tạo thêm
+nháp thật. Dùng để kiểm chứng R5 trên site thật (run trên: quantity `nos` sống lại, nhưng lộ R6).
+Khi env này không đặt, loop chạy đầy đủ như cũ (lệnh trong §7 không đổi).
+
+### 3.4 Trạng thái Exit A
+
+**Exit A đạt trên ERPNext THẬT:** 1 XML mẫu → slots → proposal → confirm → **1 nháp** → verify đọc lại.
+
+---
+
+## 4. Việc đã làm đúng nhưng KHÔNG tự ý vượt
+
+- Không tạo Customer/Item/Supplier nào từ file XML.
+- Không tự chọn kho (12 kho của shop) — đưa quyết định về cho user.
+- Không submit, không xoá, không JE.
+- `Item Default` trên site: **chỉ sửa sau khi user cho phép rõ trong phiên này**, và chỉ đúng 2 item
+  của fixture, bằng script idempotent tự ABORT nếu kho sai (§3.1). Không tự ý làm trước đó.
+- `COPILOT_COMPANY` / `COPILOT_PURCHASE_*`: **không** ghi vào `.env` (cấu hình của user); loop tự
+  yêu cầu pin và fail-closed nếu thiếu.
+
+---
+
+## 5. File CODE mới / đổi (để review)
+
+**Mới:**
+```
+mcp-erpnext/src/einvoice/einvoice-xml.mjs          (parser)
+mcp-erpnext/src/einvoice/einvoice-slots.mjs        (slots + resolve đối tác/item)
+mcp-erpnext/test/fixtures/einvoice/tt78-basic.xml
+mcp-erpnext/test/fixtures/einvoice/provider-namespace.xml
+mcp-erpnext/test/fixtures/einvoice/edge-unmatched-item.xml
+mcp-erpnext/test/fixtures/einvoice/edge-bad-number.xml
+mcp-erpnext/test/a1-einvoice-parser.test.mjs
+mcp-erpnext/test/a2-einvoice-input.test.mjs
+mcp-erpnext/test/a2-real-site-fixes.test.mjs       (ghim bug R1 + R2 + R5)
+.plan/next3/loop-a2-einvoice-real.mjs              (loop thật, không ship production)
+.plan/next3/fixtures/hd-dichvu-vanchuyen.xml       (fixture riêng của loop)
+.plan/next3/A0-einvoice-formats.md                 (deliverable A0)
+.plan/next3/A-result.md                            (file này)
+.plan/next3/probe-*.mjs                            (probe read-only: a0/a2/warehouse/stack...)
+```
+
+**Đổi:**
+```
+mcp-erpnext/src/line-parse.mjs          (R6: maskPartyMention — tên đối tác không phải dòng)
+mcp-erpnext/src/skills/delivery-write.mjs      (R6: + party name cho DN)
+mcp-erpnext/src/skills/purchase-receipt-write.mjs (R6: + party name cho PR)
+mcp-erpnext/src/skills/sales-invoice-write.mjs   (R6: + party name cho SI)
+mcp-erpnext/src/skills/sales-return-write.mjs    (R6: + party name cho SR)
+mcp-erpnext/src/skills/quotation-write.mjs      (R6: + party name cho QT)
+mcp-erpnext/src/skills/sales-order-write.mjs    (R6: + party name cho SO)
+mcp-erpnext/src/http-ask.mjs            (route /input/einvoice)
+mcp-erpnext/src/capability-contract.mjs (einvoice_policy accessor + validate)
+mcp-erpnext/capabilities.json           (einvoice_policy; PO_WAREHOUSE_UNRESOLVED)
+mcp-erpnext/src/skills/purchasing.mjs   (listSuppliersWithTaxId)
+mcp-erpnext/src/skills/inventory.mjs    (filter string "1"; getItemWarehouseHints)
+mcp-erpnext/src/skills/purchase-order-write.mjs (filter string "1"; kho theo Item Default; payload)
+mcp-erpnext/src/router.mjs              (nối getItemWarehouseHints cho builder PO)
+mcp-erpnext/src/copilot-server.mjs      (MIN_SUBSTRING_FRAGMENT — R3; hoist customerId/customerName — R2; truyền company)
+mcp-erpnext/src/mock-server.mjs         (Supplier tax_id/projection; doc_get Item + item_defaults)
+mcp-erpnext/test/filter-literal-types.test.mjs (MỞ RỘNG: phủ filter có tên field là BIẾN — R1)
+mcp-erpnext/test/p9-pay.test.mjs        (test R3)
+mcp-erpnext/test/b4-purchase-order.test.mjs (fakeSkills + test kho; +2 test R6)
+mcp-erpnext/test/b1-item-supplier-uom.test.mjs (tripwire whitelist read-only; + test R5 `Nos`)
+mcp-erpnext/scripts/falsify/p9c-payment-pay.mjs (ca J)
+```
+
+**Code Python (R5):**
+```
+src/vietnamese_nlp/quantity.py             (ĐỔI: alias đồng nhất "nos" — R5)
+tests/test_pipeline.py                     (ĐỔI: +1 test R5)
+```
+
+---
+
+## 6. Còn lại (chưa làm, cần user quyết)
+
+- **A2.5 nháp thật**: ✅ **XONG** — `PUR-ORD-2026-00006` (§3), nhờ cấu hình `Item Default` (§3.1).
+- **R5** (UOM "Nos") — ✅ **ĐÃ SỬA** (§2/R5), ghim + falsify. **Chưa** kiểm chứng tiếp trên site:
+  (a) chưa chạy lại loop thật với fixture dịch vụ (sẽ tạo thêm 1 nháp thật — cần user cho phép);
+  (b) nếu ERPNext chưa có `Item Price` cho `PHI-VAN-CHUYEN` theo `Nos`, đường đó vẫn dừng ở
+  `PRICE_MISSING` (fail-closed đúng, **không** tự đặt giá) — cần khai giá mua trước khi hết cửa.
+- **R6** (đường ĐẶT HÀNG nhận item "ma" từ 1 từ trùng tên NCC — §2/R6) — ✅ **ĐÃ SỬA + kiểm chứng
+  trên site thật** (proposal dịch vụ ra đúng 1 dòng). Không còn là vật cản.
+- Chứng từ **dịch vụ** thật: đã ra **proposal** trên site; **chưa** bấm `/execute` cho nó (sẽ tạo nháp
+  thật thứ hai) — cần user cho phép riêng nếu muốn nháp thật cho dòng dịch vụ.
+- **Hộp thư B (optional)**: `business_doc_key` (số HĐ + ngày + MST) → 409 + `existing_doc`. **Chưa làm**
+  (task ghi optional sau A2 xanh).
+- **A3**: PDF text-layer.
+- Pin `COPILOT_COMPANY` trong `.env` của deployment (nếu chưa) — nếu không, MỌI lệnh ghi PO/SO trả
+  `PO_COMPANY_UNRESOLVED` (fail-closed đúng, nhưng tính năng không chạy).
+
+---
+
+## 7. Nhật ký lệnh (bằng chứng)
+
+```
+# A1 + A2 trên mock
+cd mcp-erpnext && COPILOT_MOCK_OK=1 node --test test/a1-einvoice-parser.test.mjs test/a2-einvoice-input.test.mjs
+# → 26/26 pass
+
+# nhóm ảnh hưởng trực tiếp sau 4 fix trong phiên
+cd mcp-erpnext && COPILOT_MOCK_OK=1 node --test test/p3-classifier.test.mjs test/b4-purchase-order.test.mjs \
+  test/b2-sales-order.test.mjs test/p9-pay.test.mjs test/payment-write.test.mjs test/a1-einvoice-parser.test.mjs \
+  test/a2-einvoice-input.test.mjs test/a2-real-site-fixes.test.mjs test/m1-customer-create.test.mjs \
+  test/b1-item-supplier-uom.test.mjs test/correlation-field.test.mjs
+# → 185/185 pass
+
+# falsify P9-C (gồm ca J)
+cd mcp-erpnext && node scripts/falsify/p9c-payment-pay.mjs
+# → RED ×10, restore byte-identical
+
+# Python NLP (KHÔNG dùng pytest — máy không cài)
+PYTHONPATH=src python3 -m unittest discover -s tests -q
+# → Ran 63 tests — OK
+
+# full suite (mock)
+cd mcp-erpnext && COPILOT_MOCK_OK=1 node --test
+# → §0b
+
+# vòng THẬT
+cd mcp-erpnext && ( set -a; . ../.env; set +a; export COPILOT_COMPANY="Minh Phát Cám & VLXD"; \
+  node ../.plan/next3/loop-a2-einvoice-real.mjs )
+# → §3
+
+# vòng THẬT, CHỈ ĐỌC (không tạo nháp) — dùng để kiểm chứng R5 / điều tra R6
+cd mcp-erpnext && ( set -a; . ../.env; set +a; export COPILOT_COMPANY="Minh Phát Cám & VLXD"; \
+  export A2_ASK_ONLY=1; export A2_XML="../.plan/next3/fixtures/hd-dichvu-vanchuyen.xml"; \
+  node ../.plan/next3/loop-a2-einvoice-real.mjs )
+```
+
+---
+
+# M1-SITE — `customer.create` chạy THẬT sau khi bỏ hardcode "Múa" (2026-09-24)
+
+Kết quả đầy đủ: `.plan/next4/M1-site-result.md` (bản tóm tắt dưới đây; `.plan/` bị gitignore).
+
+## M0. Nguyên nhân gốc + 2 fix chính
+
+1. **LinkValidationError**: payload hardcode `customer_group: "Múa"` — site không có group này
+   (đo thật: 123 customers; leaves = Commercial, Đại lý cấp 2, Government, Hộ nhỏ, Individual,
+   Non Profit, Trại lớn, Trại vừa; Territory = Rest Of The World, Vietnam; `customer_type`
+   Select reqd=1 default `Company`; `customer_group`/`territory` reqd=0).
+   ⇒ Phân loại resolve: (1) user/app → (2) env `COPILOT_DEFAULT_*` → (3) site tự khai
+   (Select default / leaf duy nhất) → (4) reqd ⇒ REFUSE, optional ⇒ trống + warning.
+   Value (1)/(2) không có trên site ⇒ `CC_PROFILE_INVALID` (typo phải to, không fallback âm thầm).
+2. **BUG THẬT mới ở vòng thật — fuzzy match chết cả feature**: site có customer tên **"A"**;
+   luật cũ `name.includes(have)` ⇒ `"khách test app m1".includes("a")` đúng (chữ a trong "app")
+   ⇒ MỌI lệnh thêm khách bị `CC_FUZZY_MATCH`. Fix: so khớp theo TỪ nguyên vẹn (token run),
+   ghim bằng test mới + falsify ca P.
+3. `listCustomers` `{limit:100}` → `{limit:0}` (đo: 20→20, 100→100, 0→123 — Frappe "no limit",
+   tool pinned không có offset). Trước fix: card dựng cho khách row 122/123 đã tồn tại.
+4. Migration `custom_ai_action_id` trên Customer ĐÃ CHẠY (user duyệt) — `VERIFIED`.
+5. Mock giờ mirror ERPNext: Link lạ ⇒ `LinkValidationError: Could not find Customer Group: Múa`,
+   Select ngoài options ⇒ ValidationError, reqd Select rỗng ⇒ site default, optional ⇒ null.
+
+## M1. E2E THẬT ĐẠT (site ngrok, Administrator; NLP+http-ask+curl CÙNG 1 lệnh, `unset ASK_USER ASK_PASSWORD COPILOT_MOCK_OK`)
+
+| Bước | Kết quả đo được |
+|---|---|
+| `/ask "thêm khách Khách Test App M1"` | Card HIGH; params = `Individual / Vietnam / Individual` (nguồn env); KHÔNG còn fuzzy "A" chặn |
+| `/execute {command_id, proposal}` | `{ok:true, replay:false}` → Customer THẬT **"Khách Test App M1"**, verify đọc lại PASS |
+| `/ask "công nợ Khách Test App M1"` | "Khách Test App M1 không còn nợ gì." — resolve được ngay sau tạo |
+| Đếm REST `limit=0` | **123 → 124**; newest: `Khách Test App M1 \| Individual \| Vietnam \| Individual \| disabled=0` |
+
+**Customer thật đã tạo (user cho phép sau confirm): "Khách Test App M1"** (name == customer_name
+vì `Selling Settings.cust_master_name = "Customer Name"`).
+
+## M2. Suite trong phiên M1-site
+
+```
+cd mcp-erpnext && COPILOT_MOCK_OK=1 node --test test/m1-customer-create.test.mjs
+# → 30/30 pass (+1 test fuzzy "A")
+
+cd mcp-erpnext && COPILOT_MOCK_OK=1 node --test
+# → 755 test / 753 pass / 2 fail (dshGatewayHealth + verifyDshRuntime — môi trường DSH từ B0)
+
+cd mcp-erpnext && node scripts/falsify/m1-customer-create.mjs
+# → 16/16 RED (A–P, thêm O + P), restore byte-identical — "ALL GUARDS ALIVE"
+
+cd apps/mobile && flutter analyze && flutter test
+# → 0 issue · 281/281 pass
+
+PYTHONPATH=src python3 -m unittest discover -s tests -q
+# → 63 OK
+```
+
+## M3. Nhật ký lệnh vòng thật (mẫu)
+
+```
+( set -a; . ./.env; set +a; unset COPILOT_MOCK_OK ASK_USER ASK_PASSWORD; \
+  export NLP_SERVICE_PORT=8797 ASK_PORT=8798; \
+  python3 -m nlp_service.server --port 8797 & NLP=$!; \
+  node mcp-erpnext/src/http-ask.mjs & ASK=$!; \
+  trap 'kill $NLP $ASK' EXIT; \
+  # đợi /health cả 2 → POST /ask → lưu /tmp/m1-ask.json → POST /execute với {command_id, proposal}
+)
+# /ask  → proposal.params có customer_group=Individual territory=Vietnam customer_type=Individual
+# /execute → {"ok":true,"replay":false,"result":{"erpnext_doc":"Khách Test App M1", ...}}
+```
+
+## M4. Còn lại
+
+- ❌ **KHÔNG commit** — master data + ghi record thật: chờ user duyệt (AI không tự ký duyệt).
+- ❌ Checklist máy thật 28 case (`.plan/next3/M1-real-device-checklist.md`) — cần APK.
+- Env defaults trong `.env` (chỉ tên biến): `COPILOT_DEFAULT_CUSTOMER_GROUP` ·
+  `COPILOT_DEFAULT_CUSTOMER_TYPE` · `COPILOT_DEFAULT_TERRITORY` — đổi được bất cứ lúc nào,
+  giá trị phải tồn tại trên site.

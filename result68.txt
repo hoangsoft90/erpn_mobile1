@@ -1,0 +1,130 @@
+# result68.txt — Workstream B: chống trùng theo TỜ HĐĐT (`business_doc_key`), 2026-09-25
+
+Task: `.plan/next3/implementation.md` §2 Workstream B ("cùng một tờ HĐ gửi 2 lần ⇒ không tạo 2 nháp").
+Deliverable: `.plan/next4/B-dedupe-result.md`.
+Quyết định user (giữa phiên): lưu khóa ở **field riêng trên site + migration** (lựa chọn A).
+Trạng thái: **CODE + TEST + FALSIFY XONG — CHỜ USER**: (1) chạy migration trên site, (2) duyệt commit
+(vùng ghi tài liệu ⇒ AI không tự ký duyệt).
+
+## 0. Đọc TRƯỚC khi code (không đoán)
+
+- `src/business-dedup.mjs` (đã có §10.5): vân tay = `party|intent|capability|bucket 15m`, hành động
+  `warn_extra_confirm` — **cảnh báo, KHÔNG chặn**, không thấy được gửi lại sau 15 phút ⇒ không che được ca này.
+- `custom_ai_action_id` (đã migrate, unique=1): chống **cùng một LỆNH** xác nhận 2 lần. Hai lệnh khác nhau
+  ⇒ hai action id ⇒ **không thấy** cùng một tờ HĐ.
+- `src/http-ask.mjs`: `POST /input/einvoice` (A2) trả `result.source_document = {source, invoice_no,
+  invoice_form, invoice_series, invoice_date, seller_tax_id, seller_name, buyer_*, totals…}` — **có đủ định
+  danh**, và `extractSlots` (kênh ẢNH, `/ocr/slots`) **không** dựng block này (grep toàn `src/`: chỉ 1 chỗ tạo
+  `source_document`).
+- `.plan/next3/A-result.md`: số HĐ `00049` bị NLP đọc thành **số tiền 49** ⇒ định danh **không được** đi trong
+  câu nói ⇒ thiết kế: field riêng trên body `/ask`.
+- `scripts/add-correlation-field.mjs`: target suy ra TỪ contract (không hardcode) ⇒ mở rộng đúng chỗ.
+
+## 1. Đã làm
+
+### Server / skill (9 file)
+- **MỚI `src/business-doc-key.mjs`**: `businessDocKeyParts()` → `bdk_<sha256 32hex>` của
+  `kind|party|invoice_no|invoice_date`; `validateSourceDocument()` fail-closed (kind theo contract, số HĐ theo
+  allowlist **không bỏ ký tự**, ngày YYYY-MM-DD **có kiểm lịch thật**, MST bỏ separator rồi mới so,
+  control char bị cắt, **không mang field tiền nào**).
+- `capabilities.json`: `purchase_order.create.business_doc_key { field: custom_business_doc_key,
+  source: source_document, document_kind: purchase, composition[…], on_missing_field: refuse }`
+  + `errors += PO_DUPLICATE_DOC, PO_DOC_KEY_FIELD_MISSING, PO_DOC_KEY_UNRESOLVED`.
+- `src/capability-contract.mjs`: `businessDocKeyPolicy(id)` (1 nguồn cho /ask + executor + migration)
+  + `declaredDocumentKinds()` (hợp `ocr_policy` + `einvoice_policy`).
+- `src/skills/purchase-order-write.mjs`: builder validate + gắn `params.business_doc_key`/`source_document`
+  (validate TRƯỚC mọi đọc ERPNext); executor probe TRƯỚC correlation probe → `PO_DOC_KEY_FIELD_MISSING`
+  (500, chưa ghi gì) / `PO_DUPLICATE_DOC` (409 + `existing_doc`); payload **chỉ** mang khóa khi có khóa;
+  verify đọc lại NGHIÊM (khóa không lưu đúng ⇒ `PO_WRITE_UNVERIFIED`).
+- `src/safety-gateway.mjs`: `PO_DUPLICATE_DOC: 409` (ghi rõ vì sao `PO_DOC_KEY_FIELD_MISSING` **cố ý** ở 500 —
+  site thiếu cột = misconfig); `intentKey` = chính khóa tài liệu khi có.
+- `src/http-ask.mjs`: `/ask` nhận `source_document` (validated, 400 + `reason`), truyền vào pipeline.
+- `src/copilot-server.mjs`: `opts.sourceDocument` → builder PO (capability khác không đọc ⇒ inert).
+- `src/mock-server.mjs`: lưu/trả field; lọc theo cột đó **lỗi** khi cột vắng (parity ERPNext);
+  knob riêng `MOCK_ERP_PO_NO_DOC_KEY_FIELD`; **không** dedupe trong mock.
+- `scripts/add-correlation-field.mjs`: thêm họ target thứ hai từ `business_doc_key.field` (idempotent,
+  `--plan-only` không cần creds).
+
+### Flutter (5 file)
+- `ocr_models.dart`: **MỚI** `OcrSourceDocument.fromJson(raw, kind:)` — thiếu số HĐ / ngày / MST ⇒ **null**
+  (thà không gửi còn hơn gửi nửa vời để rồi 400); `toAskJson()` chỉ mang định danh.
+- `copilot_api_client.dart`: `ask(..., sourceDocument)` (`'source_document': ?sourceDocument` — null-aware).
+- `chat_controller.dart`: `send(..., sourceDocument)` → `/ask`; nhánh DSH không nhận.
+- `chat_screen.dart`: **cả 2 layout** truyền `slots.sourceDocument?.toAskJson()` (kênh ảnh hiện luôn null —
+  ghi rõ trong comment).
+- `test/chat_einvoice_xml_test.dart`: +5 test (định danh đi kèm câu, không nằm trong câu; nửa định danh ⇒
+  KHÔNG gửi; 3 test model).
+
+## 2. Bằng chứng (số ĐO trong phiên, không kế thừa)
+
+```
+$ cd mcp-erpnext && COPILOT_MOCK_OK=1 node --test test/b-dedupe.test.mjs
+ℹ tests 10 · pass 10 · fail 0
+
+$ COPILOT_MOCK_OK=1 node --test
+ℹ tests 765 · pass 763 · fail 2
+✖ dshGatewayHealth — local mode verifies the patch marker, not just file existence      (30s, env DSH từ B0)
+✖ verifyDshRuntime — the real runtime proves it runs; a failing command does not         (30s, env DSH từ B0)
+
+$ node scripts/add-correlation-field.mjs --plan-only
+[correlation-field]   doctype="Purchase Order" field="custom_ai_action_id"    capability="purchase_order.create"
+[correlation-field]   doctype="Purchase Order" field="custom_business_doc_key" capability="purchase_order.create"
+   (10 target tổng; test correlation-field-migration.test.mjs 2/2 pass sau khi cập nhật kỳ vọng 2 họ)
+
+$ node scripts/falsify/b-dedupe.mjs
+RED  A. the pre-check is gone — the same invoice through two commands writes TWO drafts
+RED  B. the missing-column guard is gone — a site that cannot store the key is written to anyway
+RED  C. the key never reaches the document payload — nothing is stored for the next send to find
+RED  D. the read-back stops checking the key — a dropped key reports success
+RED  E. invoice numbers get their separators stripped — two different numbers become one identity
+RED  F. the /ask boundary stops validating the identity — a half-identity is taken and then dropped
+RED  G. the app stops forwarding the file's identity — the server never sees a key
+RED  H. the app accepts a HALF identity — a 400 for the shop's own purchase question
+ALL GUARDS ALIVE — next3/B business_doc_key: every mutation turns the NAMED test red, restore byte-identical
+
+$ node scripts/falsify/m1-customer-create.mjs     # hồi quy: harness Dart vừa sửa
+ALL GUARDS ALIVE — M1 customer.create  (16/16 RED)
+
+$ cd apps/mobile && flutter analyze
+No issues found! (ran in 6.0s)
+$ flutter test
+01:09 +304: All tests passed!          (299 → 304; 0 regression)
+```
+
+## 3. Cái gì được chứng minh (ánh xạ yêu cầu → test)
+
+| Yêu cầu đề bài | Test ghim |
+|---|---|
+| 1) khóa ổn định (kind + party + số HĐ + ngày) | `B-dedupe key: built from the DOCUMENT …` (MST separator là định dạng; số HĐ **không** bỏ số 0; 5 biến thể; ngày không hợp lệ ⇒ null) |
+| 2) trùng ⇒ 409 + existing_doc | `B-dedupe: the SAME invoice through two commands ⇒ ONE draft, and the refusal names it` |
+| 3) vẫn giữ `command_id`/`custom_ai_action_id` | không sửa đường idempotency; ca A falsify chứng minh pre-check là lớp **thêm** — và `PO_DUPLICATE_ACTION` vẫn nguyên trong `SKILL_REFUSAL_STATUSES` |
+| 4) KHÔNG chặn mua nhiều lần với số HĐ khác | `B-dedupe: a DIFFERENT invoice is never blocked …` (3 tờ khác nhau ⇒ 3 nháp) + `the voice path is NOT deduped` |
+| 5) 2 execute cùng key ⇒ 1 doc; khác key ⇒ 2 doc | 2 test trên |
+| 6) falsify: bỏ check ⇒ 2 doc | ca A (node) |
+| CẤM: đổi hành vi thu tiền | `B-dedupe scope: only the purchase path declares a document identity` + full suite payment vẫn xanh |
+
+## 4. Review tự làm (OCR/AgentMemory/codebase-memory/Simplenote KHÔNG có trong phiên ⇒ review thủ công + falsify)
+
+Đã sửa 5 điểm:
+1. `invoiceLabel(proposal)` → `invoiceLabel(sourceDocument)`: bỏ lớp bọc giả `{params:{source_document:…}}`.
+2. Nhánh `if` RỖNG trong `verifyWrittenPurchaseOrder` → `stored !== String(businessDocKey)` (đọc dễ hơn, cùng ngữ nghĩa).
+3. `existing_docstatus` trong refusal: gateway chỉ chuyển tiếp `code`/`existing_doc`/`error` ⇒ payload chết ⇒ bỏ.
+4. Echo `source_document` trong kết quả `/execute`: không UI nào đọc (proposal đã mang) ⇒ bỏ; giữ `business_doc_key`
+   vì nó là bằng chứng cột thật sự giữ khóa.
+5. Dart: gộp 4 guard của `fromJson` + sửa doc comment nói sai ("MST **hoặc** party" trong khi code đòi MST —
+   và đòi MST là CỐ Ý, vì khóa của server ưu tiên MST trên tờ giấy); comment kênh ảnh ghi đúng sự thật
+   (hôm nay luôn null) thay vì nghe như đã có tác dụng.
+
+Không sửa, có lý do: (a) `allowedKinds` mặc định rỗng = "không ràng buộc" — cả 2 caller production đều truyền
+danh sách contract, có test; (b) kênh ảnh vẫn truyền tham số dù luôn null (1 tham số, tránh bẫy "sau này OCR
+phát định danh mà app âm thầm KHÔNG chống trùng"); (c) không xử lý text lỗi unique-index của ERPNext vì **chưa đo**
+được ⇒ không code theo hình dạng đoán (đã ghi ở giới hạn §6.5 của deliverable).
+
+## 5. Còn lại / chờ user
+
+1. **Migration** `Purchase Order` (lệnh ở deliverable §7.1) — chưa chạy; trước khi chạy, gửi file XML sẽ bị TỪ CHỐI
+   `PO_DOC_KEY_FIELD_MISSING` (fail-closed, cố ý).
+2. **Commit** — chờ duyệt (vùng ghi tài liệu).
+3. **Vòng XML THẬT 2 lần cùng file** — cần user cho phép vì **tạo nháp thật** (kịch bản + kỳ vọng ở deliverable §7).
+4. Giới hạn đã ghi rõ: đường BÁN chưa có lớp này; kênh ẢNH chưa phát định danh; đơn mua đã hủy vẫn giữ khóa
+   (hệ quả của `unique=1`); race thật chưa đo được.

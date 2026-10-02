@@ -1,0 +1,73 @@
+========================================================================
+RESULT 34 — ĐÓNG VÒNG: REPORT COMMIT + DOCS SYNC + RUNBOOK DEMO NGẮN
+Timestamp: 2026-09-16 (giờ shell)
+Chỉ đạo user: (1) commit chỉ khi đã duyệt trong chat — CHƯA duyệt ⇒ chỉ
+report; (2) dọn docs khớp HEAD + next.md ghi rõ MVP kỹ thuật xong;
+(3) tuỳ chọn: docs/demo-payment-draft.md 1 trang.
+KHÔNG: Phase 4/8/11 · saga code (chờ duyệt §7) · submit/cancel/delete
+ERPNext thật · tự thiết kế VPS/production.
+========================================================================
+
+== 1. SUITE ĐẦU PHIÊN (lệnh + output thật) ==
+  NODE     node --test (mcp-erpnext) → ℹ tests 119 · pass 119 · fail 0
+  FLUTTER  flutter test → 00:04 +34: All tests passed!
+           flutter analyze → No issues found!
+  PYTHON   PYTHONPATH=src python3 -m unittest discover -s tests (từ repo
+           root) → Ran 60 tests — OK
+  (Lần chạy đầu Python từ apps/mobile → TypeError dirname NoneType — sai
+  cwd của agent, KHÔNG phải test hỏng; chạy lại đúng từ repo root → OK.)
+
+== 2. MỤC 1 — COMMIT: KHÔNG COMMIT (đúng luật vùng tiền) ==
+git status: HEAD = bda54cf; 8 file modified (4 Dart + 4 docs root) +
+untracked: result32.txt · result33.txt · handoff_20260916-1105.md ·
+handoff_20260916-result33.md (+ rác .gemini/ · .opencode/ · initp — không
+stage). Rà lại chat: các câu "Đã duyệt…" trước đây đều ĐÃ thực hiện xong
+(8ebfc0e / eea0411 / 553d962 / 6054458 / a379a71 / 8d9f04c / be57052 /
+bda54cf); đợt UI STALE + F4 CHƯA có câu duyệt nào ⇒ chỉ report:
+  - 12 file chờ: 4 Dart (UI STALE + wire 409 + F4 params round-trip) +
+    4 docs root + result32/33.txt + 2 handoff.
+  - Secret scan 12 file: CLEAN (grep = 0 hit).
+  - Message đề xuất (user soạn trong prompt phiên này):
+      feat: phase 9 UI — stale/expired banner via real HTTP 409 (dio);
+      params round-trip so confirm works from the app
+
+== 3. MỤC 2 — DOCS SYNC (khớp HEAD + trạng thái chờ duyệt) ==
+- next.md "Bước kỹ thuật tiếp theo": ghi rõ **MVP kỹ thuật Phase 7 + Phase 9
+  an toàn ĐÃ XONG** (mọi nhánh hỏi nợ → thu tiền → xác nhận → ghi nháp →
+  banner từ chối đều có code + test; không còn khoảng trống kỹ thuật trong
+  scope hiện tại); KHÔNG mở Phase 4/8/11; việc tiếp = người thật (APK,
+  submit, audio, GitHub Settings, rotate key) hoặc saga khi duyệt §7;
+  trỏ tới docs/demo-payment-draft.md.
+- checklist.md: mục duyệt cập nhật 12 file + message mới do user soạn.
+- working.md: nhật ký phiên result34.
+
+== 4. MỤC 3 — RUNBOOK DEMO NGẮN (docs/demo-payment-draft.md — MỚI) ==
+1 trang, KHÔNG code server mới, KHÔNG đụng ERPNext thật. Nội dung:
+  - 3 terminal đúng LOCAL-TEST.md (NLP 8787 → http-ask 8788 → lt tunnel),
+    env chỉ tham chiếu TÊN biến (<key>/<secret> trong .env git-ignored).
+  - Luồng: hỏi nợ (đọc) → "thu tiền cho chị Lan 500 ngàn" → proposal
+    create_payment_entry/HIGH → POST /execute với command_id=uuidgen →
+    phiếu NHÁP (docstatus 0, KHÔNG submit).
+  - An toàn demo được: replay cùng command_id (không ghi 2 lần) ·
+    /execute/cancel cho ý định chưa ghi · STALE (đổi nợ rồi xác nhận →
+    409 + problems[]) · EXPIRED (TTL 10 phút) — không clamp im lặng.
+  - Kết thúc: phiếu nháp giữ làm bằng chứng hoặc xoá tay trên UI ERPNext
+    (agent không tự submit/cancel/delete).
+  - Secret scan file mới: CLEAN (grep = 0 hit).
+
+== 5. SUITE CUỐI PHIÊN (lệnh + output thật) ==
+  PYTHON   OK (60 tests)
+  NODE     ℹ tests 119 · pass 119 · fail 0
+  FLUTTER  00:04 +34: All tests passed! · analyze No issues found!
+  (Không đổi code trong phiên này — chỉ docs; 3 suite giữ nguyên xanh.)
+
+== 6. LIỆT KÊ CUỐI ==
+Commit đã/chưa: bda54cf là HEAD (đã push); đợt UI STALE + F4 (12 file)
+CHƯA commit — chờ user duyệt với message ở mục 2.
+Việc chỉ user làm được: DUYỆT commit 12 file · DUYỆT saga plan §7 (mới code
+REVERSING/REVERSED được) · SUBMIT phiếu thu (quyết riêng) · dán 3 giá trị
+GitHub Settings (COPILOT_BASE_URL/COPILOT_AUTH_USER/COPILOT_AUTH_PASSWORD) ·
+test APK thiết bị thật · thu audio 150 câu (docs/audio-collection-script.md) ·
+rotate key ERPNext · review .project/ai-rules.md.
+Ràng buộc giữ: không tự commit vùng tiền · verification-before-completion ·
+falsify khi sửa vùng tiền · không báo "xong" bằng lời.

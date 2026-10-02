@@ -1,0 +1,130 @@
+# M1-result.md — `customer.create` (WRITE #10, master data) — nút [Tạo khách mới]
+
+**Ngày:** 2026-09-24 · **Spec:** `.plan/next3/M1-customer-create-button.md` · **Checklist máy thật:** `.plan/next3/M1-real-device-checklist.md`
+**Trạng thái:** ✅ **KỸ THUẬT XONG — CHỜ DUYỆT COMMIT** (vùng MASTER DATA + ghi record thật: AI không tự ký duyệt).
+**Bằng chứng tại repo root:** `result65.txt` (bản sao file này — `.plan/` bị gitignore).
+
+---
+
+## 0. Số suite ĐO ĐƯỢC trong phiên (không kế thừa số phiên trước)
+
+| Suite | Lệnh | Kết quả | Baseline trước phiên |
+|---|---|---|---|
+| Node full | `cd mcp-erpnext && COPILOT_MOCK_OK=1 node --test` | **711 test / 709 pass / 2 fail** | 691 / 689 / 2 |
+| Node M1 (mới) | `node --test test/m1-customer-create.test.mjs` | **20/20 pass** | (không tồn tại) |
+| Falsify M1 (mới) | `node scripts/falsify/m1-customer-create.mjs` | **10/10 RED**, restore byte-identical | (không tồn tại) |
+| Flutter full | `cd apps/mobile && flutter test` | **281/281 pass** | 272/272 |
+| Flutter offer card (mới) | `flutter test test/customer_offer_card_test.dart` | **9/9 pass** | (không tồn tại) |
+| Flutter analyze | `flutter analyze` | **0 issue** | 0 |
+
+**2 fail còn lại = `dsh-gateway.test.mjs`** (`dshGatewayHealth` + `verifyDshRuntime`, timeout 30s) — lỗi **môi trường DSH** có từ B0, không liên quan M1, không sửa.
+⇒ **+20 test Node, +9 test Flutter, 0 regression.**
+
+---
+
+## 1. Đã ship trong phiên
+
+### Flutter (đây là phần còn thiếu của M1)
+
+| Deliverable (spec §4.4) | Trạng thái |
+|---|---|
+| Parse `offer_create_customer` | ✅ `CustomerCreateOffer` trong `chat_models.dart` (+ `AskResult`, + `ChatTurn` round-trip) |
+| Nút **[Tạo khách mới]** | ✅ `presentation/widgets/customer_offer_card.dart` (mới) |
+| Form **Tên \*** / SĐT / MST | ✅ 3 `TextField`; nút DISABLE khi tên rỗng |
+| User sửa → Xác nhận → POST confirm/execute **như proposal khác** | ✅ `/ask` (server dựng proposal + pre-check) → `/execute` với `params` từ form |
+| Thành công → hiện `customer_id` + gợi ý bước tiếp, **không** auto SO | ✅ dòng kết quả "Đã tạo khách hàng: … (CUST-…) — record THẬT … KHÔNG tự tạo đơn/phiếu thu" |
+| Song song "nói lại tên / quay lại chat" | ✅ ô nhập chat vẫn nguyên; offer không chặn câu tiếp theo |
+| Persist qua restart | ✅ `customer_create_offer` trong `ChatTurn.toJson/fromJson` (additive — turn cũ không đổi shape) |
+| Không mất offer khi trim history | ✅ `hasPendingProposal` nay tính cả offer (cùng luật với card treo) |
+
+**Quyết định thiết kế (ghi rõ vì sao):** card offer **chỉ hiện khi turn KHÔNG có proposal** (`awaitingCustomerCreate`).
+Đường lệnh tường minh `thêm khách X` server trả **cả** `offer_create_customer` **và** proposal ⇒ nếu vẽ cả hai sẽ có
+**hai nút tạo trên một tin nhắn** (mời tạo 2 record). Có widget test ghim đúng điều này.
+Form **không** tự dựng proposal ở client: nó gọi `/ask` trước để **server** chạy pre-check business key, rồi mới `/execute` —
+client không bao giờ tự viết proposal (giữ nguyên nguyên tắc "1 cửa ghi").
+
+### Node
+
+- `test/m1-customer-create.test.mjs` (mới, 20 test): contract + write gate (Customer **creatable, NEVER submittable**) ·
+  bảng pre-check (exact name / SĐT / MST / fuzzy / không trùng) · builder 0-write + `CC_NAME_MISSING` + warning SĐT/MST ·
+  payload correlation · routing (mệnh lệnh vào create, **câu hỏi công nợ không**) · execute thật (mock: 1 record, `docstatus 0`,
+  đọc lại verify) · không correlation ⇒ **0 ghi** · khách xuất hiện giữa card và confirm ⇒ **từ chối** ·
+  HTTP `/execute` (ghi 1 record, **replay không ghi thêm**, chưa bấm ⇒ 0 record, thiếu field ⇒ 500 + 0 ghi) ·
+  E2E `/ask` (card HIGH + offer; tên đã có ⇒ **không card**, nêu đúng khách cũ; NO_MATCH ⇒ `MISSING_ENTITY` + offer, **READ thì không**) ·
+  DSH read-only chặn; regression 10 action vẫn executable.
+- `scripts/falsify/m1-customer-create.mjs` (mới, 10 ca): routing keyword · tách tên khỏi câu lệnh · pre-check builder ·
+  fuzzy · re-read ở executor · **unwrap đọc-lại** · correlation field · đăng ký executor ở gateway · offer gắn cả đường READ ·
+  `allow_submit` Customer. Tất cả RED, restore `sha256sum`-tương đương byte-identical.
+
+---
+
+## 2. 🔴 BUG THẬT tìm được trong phiên (đây là lý do test suite riêng không thể bỏ qua)
+
+### Bug 1 — `verifyWrittenCustomer` đọc kết quả tool **thiếu một tầng** ⇒ MỌI lần tạo khách trên site THẬT đều báo thất bại
+
+- Đo được: test `M1 execute: a confirmed create writes ONE real record` đỏ với
+  `CC_WRITE_UNVERIFIED: đọc lại Customer CUST-M001 thấy sai lệch: customer_name=undefined, mobile_no=undefined`.
+- Nguyên nhân: client bọc kết quả tool **hai tầng** (`{__untrusted, source, data:{data:<payload>}}`).
+  `customer-create.mjs` tự viết `const doc = res?.data ?? res ?? {}` (một tầng) trong khi **mọi skill khác** dùng helper chung
+  `docOf(res)` / `rowsOf(res)` từ `sales-order-write.mjs`. Đây là skill **duy nhất trong repo không dùng helper đó**.
+- Hậu quả thật trên site: record **đã được tạo**, nhưng verify đọc ra `undefined` ⇒ gateway trả **503 `retry_same_command_id`**,
+  command **kẹt PENDING**, app báo "chưa xác minh được kết quả ghi". Người dùng bấm lại mới reconcile ra và hoàn tất —
+  nhưng lần đầu LUÔN đọc như thất bại. Không nhân bản (đã có idempotency), nhưng UX/độ tin cậy sai.
+- Sửa: dùng `docOf` / `rowsOf` ở cả 4 chỗ (verify + reconcile + builder + re-read executor).
+- Ghim lại: falsify **ca F** biến thiên ngược về bản lỗi ⇒ test đỏ. **Không thể tái phát mà không bị bắt.**
+
+### Bug 2 — nút xác nhận `/execute` **thiếu header xác thực** ⇒ trên máy chủ có mật khẩu, MỌI lệnh ghi từ app đều 401
+
+- `http-ask.mjs`: *"Non-loopback: every route (including /health) requires basic auth"* — chặn ở **tầng đầu**, trước mọi path.
+- `CopilotApiClient._applySettings()` (đặt base URL + `Authorization: Basic`) chỉ được gọi trên đường `/ask`.
+  `ProposalCard` POST `/execute` bằng dio thô **không** áp settings ⇒ trên deployment có `ASK_PASSWORD` (tức mọi deployment
+  bind non-loopback — đúng cách điện thoại kết nối tới), **xác nhận luôn 401**.
+- Phạm vi: **cả 10 đường ghi** (payment/SO/QT/PO/DN/PR/SI/SE/SR + Customer), có từ Phase 7.
+- Sửa: `applyCopilotSettings` lộ ra public (`CopilotApiClient.applySettings()`), gọi trước khi POST `/execute` ở
+  **cả** `ProposalCard` và card offer mới. Cập nhật 6 host test (thêm `sharedPreferencesProvider.overrideWithValue(null)`).
+- **Đây là bug vùng VẬN HÀNH (fail-closed, không mất tiền) nhưng chặn toàn bộ đường ghi trên môi trường thật.**
+
+---
+
+## 3. Review tự làm (OCR / AgentMemory / codebase-memory-mcp / Simplenote **KHÔNG khả dụng** trong env ⇒ review mặc định + falsify)
+
+Đã đọc lại diff, soi null/validate/injection/secret/race thủ công, và dùng **falsify 10/10 RED** làm bằng chứng guard sống.
+
+**Đã sửa trong review:**
+1. `attachRejection` (chat_controller) **bỏ rơi `readUi`** khi dựng lại turn — lỗi cùng lớp result33-F4 (field server đọc phải sống
+   qua mọi lần rebuild model). Nay mang theo cả `readUi` **và** `customerCreateOffer`.
+2. `ChatTurn.hasPendingProposal` không tính offer ⇒ offer chưa xử lý có thể bị trim mất. Nay tính.
+3. Card offer thiếu nhánh `on DioException` ⇒ thông báo lỗi mất chữ của server (test bắt được: "mạng chập chờn" không hiện).
+
+**Tìm thấy, BÁO CÁO, KHÔNG tự sửa (cần user quyết — vùng MASTER DATA):**
+- 🔴 **`customer_group: "Múa"` + `customer_type: "Individual"` hardcode trong payload tạo Customer.** Site THẬT không có
+  Customer Group tên "Múa" ⇒ ERPNext từ chối (`LinkValidationError`) ⇒ mọi lệnh tạo khách hỏng. Cần user chốt:
+  Customer Group / Territory / Type mặc định của tiệm (hoặc truyền từ setting). **Đây là chặn go-live thật của M1.**
+- 🟡 `CC_CONTACT_MISSING` khai trong `capabilities.json.errors[]` nhưng **không bao giờ được ném** (spec §5 chốt SĐT/MST là
+  *khuyến nghị*, skill chỉ cảnh báo) ⇒ drift contract ↔ code.
+- 🟡 `CC_PURPOSE_UNSUPPORTED` **có ném** (2 guard fail-closed đọc contract) nhưng **không khai** trong `errors[]` ⇒ drift chiều ngược lại.
+- 🟢 Offer card hiển thị `replay: true` bằng câu "Đã tạo khách hàng…" (ProposalCard dùng câu "Đã ghi nhận trước đó"). Chấp nhận được:
+  replay nghĩa là record đã tồn tại từ lần bấm trước, câu trả lời vẫn đúng.
+
+**Không đụng (ngoài phạm vi M1):** Supplier/Item create · sửa/xoá Customer · address/CRM · JE · submit bất kỳ.
+**Không có secret/credential trong diff** (grep `API_KEY|SECRET|PASSWORD|ghp_` = 0 khớp nội dung thật).
+
+---
+
+## 4. Còn lại trước go-live M1 (việc của user/phiên sau)
+
+1. **Chốt Customer Group/Territory/Type mặc định** (finding 🔴 §3) — không có thì tạo khách trên site thật sẽ hỏng.
+2. **Chạy migration `custom_ai_action_id` trên Customer trên site thật** (idempotent, script đã có) — thiếu field ⇒ executor
+   từ chối `CC_CORRELATION_FIELD_MISSING` (fail-closed đúng thiết kế, nhưng tính năng không chạy).
+3. **Chạy `.plan/next3/M1-real-device-checklist.md`** (28 case) trên APK chứa M1 — chưa chạy được trong env này
+   (không có máy thật + OCR/ảnh chụp không có).
+4. **Hỏi lại policy §5** nếu muốn khác default (buộc SĐT/MST; `CC_CONTACT_MISSING`).
+5. Sau M1 mới sang **Workstream A (HĐĐT XML)** theo `.plan/next3/implementation.md`.
+
+---
+
+## 5. Chốt phiên
+
+- M1 **từ 4 mốc thiếu → 0 mốc thiếu**: Flutter form/card ✅ · test suite riêng ✅ · falsify ✅ · `M1-result.md` ✅.
+- **2 bug thật** được tìm bằng test suite mới (verify đọc thiếu tầng; `/execute` thiếu auth) — cả hai đã sửa + ghim bằng falsify.
+- **CHƯA commit, CHƯA push** — vùng master data + ghi record thật, chờ user duyệt.

@@ -1,0 +1,75 @@
+========================================================================
+RESULT 8 — PHASE 3 COMMITTED + 2 PROJECT SKILLS (verify-first / MCP connect)
+Timestamp: 2026-09-14 04:46
+Env: Linux VPS, Flutter 3.47.2, Node v24, Python 3.12.
+Repo erpn_mobile1, branch change/flutter-chat-mvp.
+========================================================================
+
+== 1. GIT (lệnh thật) ==
+
+$ git log --oneline -4
+590b1b2 feat: phase 3 — Flutter chat MVP (apps/mobile + /ask wrapper + GH Actions APK)
+0ac8e61 feat: phase 2 — real ERPNext target switch + dsh smoke tooling (mock LLM, resolver guard)
+33f9dc0 feat: phase 1 — Vietnamese NLP pipeline (money/kinship/synonyms/quantity)
+
+- Commit Phase 3: **590b1b2** — 64 files, +3731/−33. UI-checkpoint đã qua
+  ask_user, user chọn "Duyệt UI, commit luôn".
+- Scope đã kiểm trước commit: staged 64 file, grep phủ định xác nhận
+  KHÔNG có .env / node_modules / build / .plan/ / .gemini/ / .opencode/ / initp.
+- Secret scan (2 giá trị key thật) trên toàn tree trừ .env: SẠCH.
+- Working tree sau commit: sạch; chỉ .gemini/, .opencode/, initp untracked
+  (cố ý, theo kế hoạch đã duyệt từ Phase 1).
+- Lưu ý: `.agents/` bị .gitignore của repo chặn sẵn → skills KHÔNG commit
+  (local-only); `skills-lock.json` (manifest) thì đã vào commit.
+
+== 2. STATE KỸ THUẬT TẠI COMMIT 590b1b2 (verify cuối phiên, output thật) ==
+
+Node:    node --test → tests 36 / pass 36 / fail 0
+Python:  PYTHONPATH=src python3 -m unittest discover -s tests → Ran 58 / OK
+Flutter: flutter analyze → No issues found! · flutter test → +13 All passed
+
+== 3. LÀM RÕ "AKI MCP" (điểm gây nhiễu của phiên) ==
+
+User yêu cầu "tạo skill từ kinh nghiệm connect/authorize aki mcp". Tra cứu
+TRƯỚC KHI viết (không đoán):
+- Repo + result*.txt + handoff + .env + scripts: không có "aki".
+- Config MCP ở home (~/.claude.json, cursor, env): không có "aki".
+- AgentMemory: DOWN (curl không phản hồi; retry đúng 1 lần theo rule).
+- Web search "aki mcp": chỉ ra thứ không liên quan session (Akiflow "Aki AI",
+  Aki Design Assistant akitectio, mcp-uuid của aki-kii).
+→ ask_user → user xác nhận: **"aki" = ERPNext MCP của project này**.
+Không viết skill từ thứ chưa từng connect — đúng nguyên tắc verify-first.
+
+== 4. 2 SKILL MỚI (.agents/skills/) ==
+
+1) erpnext-mcp-connect — quy trình connect/authorize MCP ERPNext đã verify
+   (result4/5/6): đọc source package lấy env contract (ERPNEXT_URL/
+   API_KEY/API_SECRET, lazy qua env6(), auth `token key:secret`), 125 tool
+   `erpnext_*`, shape tools/call, mock-first stdio JSON-RPC, probe thật
+   qua ngrok, dsh cordis patch (byte-exact + validate `!!js`), bảng triệu
+   chứng→nguyên nhân (unknown tool / namespace mcp__erpn_copilot / text 45k
+   system-reminder / YAML flatten).
+2) erpn-verify-first — chống vòng lặp "code xong đi sửa": bảng 5 lần đoán
+   sai và chi phí (result4→7); 3 câu hỏi nguồn sự thật trước khi code;
+   unit xanh ≠ chạy thật (bắt buộc 1 loop thật); debug = in trạng thái
+   (ChatBubble bug bắt được nhờ in toàn bộ Text trong tree); bẫy VPS
+   (ENOSPC→shader exception ảo → flutter clean, không sửa code); checklist
+   trước khi báo "xong".
+
+Validate (python script thật): frontmatter cả 2 file — name khớp thư mục
+True/True, desc 490/555 ký tự. `ls .agents/skills/` thấy cả 2 cạnh 13 skill
+có sẵn. Nạp bằng skill tool với đúng tên này ở phiên sau.
+
+== 5. DOCS ĐÃ ĐỒNG BỘ ==
+
+checklist.md (Phase 3 ✅ committed + cần hỏi lại GitHub repo) · features.md
+(Phase 3 sang "Hoàn thành") · next.md (Phase 3 section + sửa note stale
+"repo 0 commit") · README.md (chạy /ask + Flutter + quy trình APK GH
+Actions — đã commit trong 590b1b2) · handoff_20260914-0446.md.
+
+== 6. CHỜ USER (không đổi) ==
+
+1. URL GitHub repo để push → GH Actions build APK `erpn-chat-debug-apk`.
+2. Rotate ERPNext API key/secret (nhắc lần 3).
+3. Swap mock LLM → gateway OpenAI-compatible thật (chỉ sửa settings.yaml).
+4. `bạc` = mệnh giá nào (ch-003) + 4 câu Phase 15 (khi tới phase đó).

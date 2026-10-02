@@ -1,0 +1,98 @@
+{
+  "schema_version": "next8.route-corpus-snapshot/v1",
+  "source_git_sha": "cc2073b4720427a093b4ac5723727d8661b4dfa9",
+  "totals": {
+    "cases": 280,
+    "locked": 167,
+    "locked_pass": 167,
+    "locked_fail": 0,
+    "review": 113
+  },
+  "by_bucket": {
+    "C2": {
+      "total": 28,
+      "locked": 21,
+      "locked_fail": 0,
+      "review": 7
+    },
+    "C1": {
+      "total": 122,
+      "locked": 122,
+      "locked_fail": 0,
+      "review": 0
+    },
+    "C5": {
+      "total": 20,
+      "locked": 4,
+      "locked_fail": 0,
+      "review": 16
+    },
+    "C3": {
+      "total": 20,
+      "locked": 0,
+      "locked_fail": 0,
+      "review": 20
+    },
+    "C4": {
+      "total": 30,
+      "locked": 0,
+      "locked_fail": 0,
+      "review": 30
+    },
+    "C6": {
+      "total": 20,
+      "locked": 20,
+      "locked_fail": 0,
+      "review": 0
+    },
+    "C7": {
+      "total": 15,
+      "locked": 0,
+      "locked_fail": 0,
+      "review": 15
+    },
+    "C8": {
+      "total": 25,
+      "locked": 0,
+      "locked_fail": 0,
+      "review": 25
+    }
+  },
+  "by_cluster": {
+    "CL-1": {
+      "total": 67,
+      "locked": 31,
+      "locked_fail": 0
+    },
+    "CL-3": {
+      "total": 35,
+      "locked": 35,
+      "locked_fail": 0
+    },
+    "CL-2": {
+      "total": 30,
+      "locked": 30,
+      "locked_fail": 0
+    },
+    "CL-5": {
+      "total": 34,
+      "locked": 30,
+      "locked_fail": 0
+    },
+    "CL-4": {
+      "total": 21,
+      "locked": 21,
+      "locked_fail": 0
+    },
+    "other": {
+      "total": 3,
+      "locked": 0,
+      "locked_fail": 0
+    },
+    "CL-6": {
+      "total": 90,
+      "locked": 20,
+      "locked_fail": 0
+    }
+  }
+}

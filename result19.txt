@@ -1,0 +1,118 @@
+========================================================================
+RESULT 19 — E2E LẦN 2 (SAU REVIEW): PHÉP ĐẾM QUOTA CŨ BỊ BÁC BỎ BẰNG CHÍNH LẦN CHẠY
+Timestamp: 2026-09-15 15:08–15:12 giờ VN (08:08–08:12 UTC)
+Code: commit 8d9f04c (docs) + be57052 (code: thought_signature + harness)
+Harness: mcp-erpnext/dsh-e2e.patch.yml (E2E_TARGET=real) + scripts/llm-router.e2e.json
+Bối cảnh: user duyệt commit result18 và yêu cầu làm ĐÚNG §G.1 của chính tôi:
+  "đếm status:200 qua router tính từ mốc reset 07:00 UTC + cộng tay probe trực tiếp;
+   nếu tổng ≥20 thì ĐỪNG chạy; chỉ chạy đúng 1 session khi CHẮC còn quota".
+========================================================================
+
+== A) ĐIỀU KIỆN TIÊN QUYẾT — kiểm tra bằng 0 quota trước khi chạy
+  dsh binary                     : /tmp/dsh-run/node_modules/@deepseek-ai/dsh/lib/bin.js  ✓
+  ports 8787/8899/8900           : free  ✓
+  ERPNext THẬT (ngrok)           : /api/method/ping → HTTP:200 time:0.41s  ✓ (đã hết lỗi 500)
+  nlp_service                    : {"ok":true,"service":"vietnamese_nlp","version":"0.1.0"}  ✓
+  router (e2e config)            : {"ok":true,...,"healthy":true}  ✓  (health = models-list,
+                                    KHÔNG tốn generate quota)
+
+== B) ĐẾM THEO ĐÚNG LUẬT §G.1 ĐÃ ĐƯỢC USER CHỈ ĐỊNH
+  Mốc reset: doc chính thức xác nhận "Requests per day (RPD) quotas reset at midnight
+  Pacific time" = 07:00 UTC ⇒ mốc 07:00Z là ĐÚNG (không phải lỗi của luật này).
+    file: https://ai.google.dev/gemini-api/docs/rate-limits
+    (doc cũng nói: limit áp theo PROJECT, không theo key; có 3 chiều RPM/TPM/RPD;
+     "exceeding any of them will trigger a rate limit error")
+
+  Đếm status 200 qua router từ 07:00Z (script lọc `attempts` có gemini):
+    07:19:05 · 07:37:26 · 07:37:38 · 07:40:53 · 07:41:21 · 07:41:47 · 07:53:21  = 7
+  Cộng tay probe trực tiếp (không qua router) đã xác minh bằng file output:
+    /tmp/quota-out.txt  07:52:57Z → 200 (1 lần generate thật)                    = 1
+  ⇒ TỔNG = 8 < 20  ⇒ theo đúng luật user đưa ra: ĐƯỢC PHÉP CHẠY 1 SESSION.
+
+== C) CHẠY ĐÚNG 1 SESSION (không retry-loop, không probe thêm)
+  Giờ chạy: 08:11:08Z → 08:11:30Z (22 giây)
+  Lệnh: E2E_TARGET=real DSH_HOME=/tmp/dsh-home-e2e19 DSH_TELEMETRY_MODE=DISABLED \
+          node .../dsh/lib/bin.js --profile headless --patch mcp-erpnext/dsh-e2e.patch.yml \
+          "Khách làm tròn 2026-09-15-p1b-wf1-2 còn nợ bao nhiêu, và Khách smoke
+           2026-09-15-p1b-wf1-2 còn nợ bao nhiêu?"
+  Kết quả THẬT:
+    [copilot] ERPNext target: REAL -> prevail-pantyhose-overvalue.ngrok-free.dev
+    dsh: SERVER: 502: {"message":"llm-router: all upstreams failed (tried: gemini-openai)",
+                       "type":"llm_router_all_failed"}
+    === dsh exit: 1
+  audit (7 dòng, mọi dòng đều THỰC SỰ thử provider — không còn `attempts: []`):
+    08:11:11.136 502 · 08:11:11.794 502 · 08:11:12.502 502 · 08:11:14.149 502
+    08:11:16.782 502 · 08:11:21.705 502 · 08:11:30.291 502
+  Nguyên văn lỗi provider (7/7 lần):
+    "Quota exceeded for metric: generativelanguage.googleapis.com/
+     generate_content_free_tier_requests, limit: 20, model: gemini-3.6-flash
+     Please retry in 48.868478038s"   ·  status: RESOURCE_EXHAUSTED
+  ⇒ Vẫn là RPD của gemini-3.6-flash, KHÔNG phải RPM/TPM; router không lỗi (đã thử thật).
+
+== D) VÌ SAO VẪN 429 DÙ ĐẾM ĐƯỢC 8/20 — PHÉP ĐẾM CŨ BỊ BÁC BỎ
+  Sắp toàn bộ request THỰC SỰ gửi tới provider từ 07:00Z (bất kể kết quả), theo thời gian:
+    #1–#16  07:19:03 → 07:41:47   (3× 400/502 khác + 6× 200)   ← provider còn nhận
+    #17     07:53:17              429  ← BẮT ĐẦU 429
+    #18     07:53:21              200  ← 1 request lọt qua (eventual consistency)
+    #19–#31 07:53:30 → 07:55:00   429 (13 lần liên tiếp)
+    #32–#38 08:11:11 → 08:11:30   429 (7 lần — chính lần chạy này)
+    tổng: 38 request · trước #17 có 16 request qua router + probe trực tiếp
+          (07:52:57 = 1 lần 200 đã xác minh, ≥2 probe khác không lưu output)
+  HAI mô hình ứng viên, và cái nào đúng thì LUẬT HÀNH ĐỘNG vẫn giống nhau:
+    (i)  quota đếm MỌI request mà API NHẬN (kể cả request bị 429) → 429 đầu tiên ≈ lúc
+         chạm 20, và mọi request sau đó (kể cả probe "kiểm tra cho chắc") tiếp tục
+         giữ bộ đếm trên ngưỡng ⇒ không bao giờ hồi trong cùng ngày quota.
+    (ii) quota chỉ đếm request được nhận để generate, nhưng con số 20 bị tiêu bởi
+         nhiều nguồn tôi không thấy hết (mỗi turn dsh = 6–8 request; retry nội bộ dsh;
+         probe trực tiếp không qua audit) ⇒ bộ đếm thật cao hơn hẳn "số lần 200".
+  CẢ HAI đều giải thích được chuỗi quan sát: 429 dai dẳng sau im lặng >15 phút
+  (07:55 → 08:00:57 probe → 429), và 1 request 200 xen giữa các 429 (07:53:21).
+  Điều CHẮC CHẮN, không cần chọn mô hình: **phép đếm "status 200 < 20 ⇒ còn quota"
+  là SAI** — tôi đã chạy đúng theo phép đếm đó (8/20) và nhận 7×429. Phép đếm cũ
+  đếm thiếu nghiêm trọng; giữ nguyên nó sẽ tiếp tục đốt session.
+
+== E) LUẬT ĐẾM MỚI (thay §G.1 của result18)
+  1. Đếm request **GỬI TỚI PROVIDER** = dòng audit có `attempts` chứa tên upstream
+     THẬT (KHÔNG phải `status==200`; KHÔNG tính dòng của lần chạy test/mock).
+     Mỗi turn dsh thực tế ngốn 6–8 request ⇒ NGÂN SÁCH 20/ngày ≈ **1 session dsh
+     sạch, tối đa 2** — không phải "20 session".
+  2. Mốc reset = **07:00 UTC (nửa đêm Pacific)** — điều này doc xác nhận, giữ nguyên.
+  3. ❗ **Thấy 429 ĐẦU TIÊN trong một ngày quota thì COI NHƯ HẾT NGÀY** cho model đó:
+     dừng mọi request (kể cả probe "kiểm tra còn quota" — probe tự nó là 1 request),
+     chờ mốc reset kế tiếp. Không có cách đếm từ audit nào đáng tin để nói "đã hồi".
+  4. Muốn chắc chắn có quota cho lần verify quan trọng: chạy nó vào **request đầu
+     tiên của ngày quota** (ngay sau 07:00Z), đừng để nó là request thứ N sau khi đã
+     tiêu vào test/debug.
+
+== F) TRẠNG THÁI ĐÃ THAY ĐỔI SAU LẦN NÀY
+  - `thought_signature` VẪN CHƯA verify live: lần này session chết ở turn đầu (chưa
+    tới được turn replay tool), nên không thu thêm bằng chứng nào cho nó. Vẫn chỉ có
+    test hermetic (router 19/19, gồm 1 integration SSE→inject).
+  - Ngược lại, 2 thứ ĐƯỢC xác minh trong lần này:
+    · ERPNext THẬT sống lại (ping 200) — chặng "→ ERPNext thật" hết bị chặn.
+    · Router + patch + MCP boot đúng với E2E_TARGET=real (log in `REAL -> …`), tức
+      harness 2 nhánh vẫn hoạt động; lỗi duy nhất nằm ở tầng provider.
+  - Ground truth cho lần chạy kế tiếp vẫn nguyên (result18 §F):
+    "Khách làm tròn 2026-09-15-p1b-wf1-2" → **457.875đ** (1 hóa đơn chưa trả)
+    "Khách smoke 2026-09-15-p1b-wf1-2"    → **171.800đ** (4 hóa đơn chưa trả)
+
+== G) QUYẾT ĐỊNH (theo chỉ đạo "không giới hạn số ngày chờ, báo 'chưa chạy được'")
+  **CHƯA CHẠY ĐƯỢC — lý do: quota RPD của gemini-3.6-flash đã cạn trong ngày quota
+  hiện tại (429 dai dẳng, kể cả khi gần như không hoạt động).**
+  Không chạy lại, không probe thêm trong hôm nay.
+  Kế hoạch lần kế tiếp — đúng 1 session, vào ĐẦU ngày quota (sau 2026-09-16 07:00Z
+  = 14:00 giờ VN), dùng llm-router.e2e.json (1 upstream) + câu hỏi 2 tool-call ở §C
+  + ground truth §F; xác nhận bằng audit: phải thấy turn `messages:7` (replay tool)
+  nhận 200, và số tiền trong câu trả lời khớp §F.
+
+== H) VERIFY (output thật)
+  ERPNext ping (real)                    HTTP:200 time:0.41s
+  nlp_service /health                    ok:true
+  router /health                          healthy:true (gemini-openai)
+  session                                 dsh exit 1 · 7×429 nguyên văn (mục C)
+  ports sau cleanup                      8787/8899/8900 free
+  audit lần chạy này                      7 dòng, attempts=['gemini-openai'] (đã thử thật)
+
+== I) CHƯA COMMIT
+  result19.txt (mới) + checklist.md/working.md + 2 skill (.agents/ — gitignored, local-only)
+========================================================================

@@ -1,0 +1,289 @@
+================================================================================
+result88.txt — next8 / PHASE 4 — Collect: safety execute multi-reference
+Ngày: 2026-09-30 · Người chạy: agent · ⏳ CHỜ OWNER DUYỆT COMMIT (vùng tiền — KHÔNG tự commit)
+Nguồn: .plan/next8/phases/phase-04-collect-safety-execute.md
+       openspec/changes/next8-collect-safety-execute/{tasks.md,proposal.md,specs/*}
+================================================================================
+
+§0. TRẠNG THÁI TOOL (đo đầu phiên — không tự cài/khởi động lại gì)
+--------------------------------------------------------------------------------
+- AgentMemory :3111        → KHÔNG phản hồi ⇒ bỏ /session/start + bước retrieval-3
+- cocoindex-code / codebase-memory-mcp / OCR / Simplenote → KHÔNG khả dụng
+  ⇒ Code Review chạy THỦ CÔNG (đọc git diff) theo mục "Graceful Degradation".
+- Node v24.21.0 · Flutter /google/flutter/bin · npm test = `COPILOT_MOCK_OK=1 node --test`
+- openspec CLI: `npx --no-install openspec validate next8-collect-safety-execute --strict`
+  → "Change 'next8-collect-safety-execute' is valid" (change đã tạo TRƯỚC khi code,
+  thoả owner rule #1; validate lại --strict lần này PASS).
+
+§1. BASELINE (đo TRƯỚC khi sửa trong phiên này)
+--------------------------------------------------------------------------------
+- Node full  : 1022 tests / 1020 pass / 2 fail (dshGatewayHealth + verifyDshRuntime,
+               thiếu binary `dsh` — baseline env đã biết, KHÔNG phải regression)
+- Flutter    : 426 pass / 3 fail (test/_probe_review_test.dart — file probe untracked,
+               RenderFlex) + `flutter analyze` 1 warning (test/_probe_b0_voice_autosend.dart)
+
+§2. ĐÃ LÀM (map tasks.md §1–§5 · phase-04 §5/§2)
+--------------------------------------------------------------------------------
+§2.1 Executor nhiều reference (tasks §1 · phase-04 §5) — src/skills/payment-write.mjs
+- XOÁ chốt `PAYMENT_MULTI_REFERENCE_NOT_READY`. `executePaymentProposal` đọc
+  `params.allocations[]` (Phase 3 LUÔN ghi key; `[]` = advance/on-account) +
+  `params.payment_methods[0]`.
+- MỖI allocation được xác nhận bằng `erpnext_doc_get(anchorDoctype, invoiceId)` RIÊNG
+  (list read `erpnext_sales_invoice_list` có field set CỐ ĐỊNH — không `company`,
+  không `docstatus` ⇒ không thể xác nhận company/submit từ list). Bind bằng ID trong
+  proposal, KHÔNG BAO GIỜ re-resolve theo tên (test §5.5 mới pin: đọc anchor phải
+  theo `invoice_id` trong allocations, không phải `params.invoice` là display value).
+- Lỗi thật khi chưa đọc được chứng từ: `PAYMENT_ERP_UNAVAILABLE` (503 retry — outage,
+  KHÔNG phải "nợ đã hết"); không tìm thấy doc ⇒ `PAYMENT_INVOICE_ALREADY_SETTLED`;
+  docstatus ≠ 1 / outstanding ≤ 0 / NaN / is_return ⇒ `PAYMENT_INVOICE_NOT_RECEIVABLE`.
+- Drift per-invoice so `params.reference_amounts[]` (snapshot Phase 3) với
+  `live_effective = live_gl − draft-cover` + check party field (khách/NCC đổi chủ ⇒
+  `PROPOSAL_ENTITY_CHANGED`); lệch ⇒ `PROPOSAL_STALE` (legacy_code) + drift_code.
+  Đường legacy (không allocations) giữ nguyên `detectDrift` + trần `requested >
+  liveEffective ⇒ PAYMENT_AMOUNT_EXCEEDS_REMAINDER` (byte-compat chat path).
+- Amount policy: trần per-invoice (số SỐNG − nháp), tổng allocated ≤ paid,
+  `claimedUnallocated` (snapshot) lệch số server tính ⇒ `PROPOSAL_STALE`
+  (drift_code PROPOSAL_VERSION_STALE). Số tiền trên chứng từ là số SỐNG; số trong
+  proposal chỉ là ảnh chụp có action_id để audit.
+- Draft cover re-derive ở execute với company scope của anchor (§5.2 Phase 3).
+- references[] = 1 dòng/settlement, sắp theo posting_date rồi name (tất định, chỉ để
+  hiển thị); `unallocated = paid − Σ allocated` ghi TƯỜNG MINH;
+  `paid_amount = received_amount = Σ allocated + unallocated`.
+- Kết quả mới: `invoices[]`, `allocated_vnd`, `unallocated_vnd` (giữ `invoice` = dòng
+  đầu ordered, `paid_vnd`, `customer`, direction/party_kind/reference_no/action_id/
+  docstatus/mode_of_payment/note — byte-compat client cũ).
+
+§2.2 Advance / on-account (tasks §2 · lock §6.3) — payment-write.mjs + mock-server.mjs
+- `resolveAdvanceAccounts(mcp, {direction, mode, account, company})` MỚI: không có
+  hoá đơn để đọc company/anchor ledger ⇒ company = `opts.company` (ctx.company của
+  gateway — KHÔNG phải body field) → `readSessionCompany` (mặc định site) → BLOCK
+  `COMPANY_SCOPE_REQUIRED`. Money account chạy ĐÚNG luật §6.2 qua `resolveAccountPlan`
+  (tách từ `resolvePaymentAccounts` — MỘT bản luật, không sao chép).
+- Anchor ledger advance = `Company.default_receivable_account` (thu) /
+  `default_payable_account` (chi), CHỈ nhận khi là leaf của company đó có
+  `account_type` khớp (`DIRECTION_SPEC.anchor_account_type` mới: Receivable/Payable);
+  thiếu/không khớp ⇒ BLOCK `PAYMENT_ACCOUNT_UNRESOLVED` (không tự chọn leaf random).
+- Lock §6.3 ở execute: advance (`settled.length === 0`) chỉ hợp lệ khi khách KHÔNG còn
+  hoá đơn mở (openDraftCover re-read + openRows lọc effective > 0); còn nợ ⇒
+  `MISSING_REQUIRED_FIELD` + copy "hãy chọn hoá đơn cần gạch", 0 write.
+- mock-server.mjs: Payment Entry create nay TÍNH LẠI `unallocated_amount =
+  max(0, round(paid) − Σ round(row.allocated_amount))` (mirror `set_unallocated_amount`
+  của ERPNext) — verify đọc lại so với SỐ CỦA SITE chứ không phải số mình vừa gửi.
+
+§2.3 Verify đủ field (tasks §3) — payment-write.mjs
+- `verifyWrittenPayment` thêm block `expect` (tuỳ chọn — caller cũ giữ hành vi):
+  company · paid_from/paid_to · unallocated_amount · received_amount · references[]
+  (số dòng + từng allocated_amount so THEO INVOICE, không theo index — thứ tự dòng
+  trên form không phải thứ tự ghi). Lệch ⇒ `PAYMENT_WRITE_UNVERIFIED` (không thành
+  công giả). Executor truyền expect đầy đủ ở MỌI lần ghi multi-ref lẫn legacy.
+
+§2.4 Idempotency / double-confirm / chaos (tasks §4) — KHÔNG đổi `idempotency.mjs`
+- intentKey của `payment.create` trong `WRITE_EXECUTORS` nay = party + danh sách
+  invoice được gạch (allocations join) khi có allocations; đường legacy giữ
+  `params.invoice` byte-for-byte. Hai cách gạch khác nhau của cùng khách = 2 intent,
+  không bị nuốt "in flight" oan.
+- Double confirm cùng `command_id` ⇒ `replay:true`, 1 chứng từ (E2E + unit).
+- Chaos: `MOCK_ERP_FAIL_AFTER_WRITE` (mất response SAU khi commit) ⇒ 503
+  `retry_same_command_id` ⇒ JobQueue; job `enabled` bắc cầu; retry cùng id ⇒
+  reconcile theo `reference_no = command_id` ⇒ `replay:true`, KHÔNG tạo phiếu thứ hai.
+
+§2.5 Gateway (tasks §1 phụ) — src/safety-gateway.mjs
+- `payment.create` execute nay truyền `{company: ctx.company}` (authz.company —
+  server-first, không phải body field) xuống executor (đường advance cần company).
+- `SKILL_REFUSAL_STATUSES` += `PAYMENT_METHOD_COUNT_INVALID: 422` — cùng mã
+  /collect/propose đã trả 422, để /execute nói CÙNG một điều.
+
+§2.6 Card copy tiếng Việt (tasks §5) — apps/mobile …/proposal_card.dart
+- `_paymentMoneyTail(result)` MỚI: đọc KẾT QUẢ THỰC server (`invoices[]`,
+  `allocated_vnd`, `unallocated_vnd` — không phải snapshot card): "gạch nợ SINV-A
+  500.000đ, SINV-B 700.000đ" (1 hoá đơn kèm số), "chưa gạch nợ Nđ" khi advance.
+- Dòng draft nháp thành "Đã ghi phiếu thu NHÁP: PE-… — 500.000đ — … (submit là bước
+  riêng trên ERPNext)" — giữ rõ NHÁP; dòng submit-ok vẫn "Đã ghi và NỘP … (công nợ
+  đã giảm)" + tail. Warnings nháp đang phủ vẫn từ `buildCollectProposal.warnings`.
+- 8 expectation cũ "Đã ghi phiếu thu: PE-…" / "Đã ghi phiếu chi: PE-…" trong
+  `test/proposal_card_test.dart` cập nhật theo wording mới (copy change có chủ ý theo
+  phase-04 §5; KHÔNG hạ assertion — thêm NHÁP là ý nghĩa mới phải hiển thị).
+
+§2.7 Tripwire (tasks §5) — test/next8-collect-execute.test.mjs
+- Test tĩnh quét đệ quy `src/` + `scripts/` (*.mjs): `executePaymentProposal` chỉ được
+  tham chiếu bởi `src/safety-gateway.mjs` (file định nghĩa loại trừ); gateway đăng ký
+  dưới capability canonical `"payment.create"` (lock §6.5), KHÔNG có nhánh
+  `payment.collect`. ⇒ `/execute` vẫn là cửa ghi DUY NHẤT của Payment Entry.
+
+§3. TEST (targeted — đo trong phiên)
+--------------------------------------------------------------------------------
+- file mới test/next8-collect-execute.test.mjs        : 7/7  (E2E thật /execute qua HTTP:
+  propose 2 hoá đơn ⇒ confirm ⇒ 1 PE nháp 2 dòng + unallocated=0; double-confirm
+  replay; drift số SỐNG ⇒ PROPOSAL_VERSION_STALE/legacy PROPOSAL_STALE; hết nợ ⇒
+  PAYMENT_INVOICE_NOT_RECEIVABLE; tamper allocations qua khách khác ⇒
+  PROPOSAL_ENTITY_CHANGED + problems; chaos 503 → /jobs có job → retry replay 1 PE;
+  tripwire)
+- test/payment-write.test.mjs                         : 53/53 (mới +9: advance dùng
+  ledger ĐÃ KHAI BÁO / không khai báo ⇒ BLOCK / không company đâu ⇒ REFUSE; advance
+  ghi 1 phiếu references=[] + unallocated=paid; allocated đủ ⇒ unallocated=0 1 dòng;
+  lock §6.3 advance khi còn nợ ⇒ REFUSE; lock §6.1 2 methods ⇒ REFUSE; §6.2 account
+  bank cho ý định cash ⇒ ACCOUNT_TYPE_MISMATCH; trần SỐNG ⇒ EXCEEDS_REMAINDER)
+- test/next8-collect-server-validation.test.mjs       : 27/27 (§5.5 nay pin executor
+  đọc anchor theo ID trong allocations — không phải `params.invoice`)
+- Targeted gộp 10 suite (collect-* + payment-write + correlation + p9-pay):
+  175/175 pass.
+- next9-execute-binding + safety-gateway + http-execute               : 31/31.
+
+§4. FULL SUITE (sau khi code xong, trước khi trình duyệt)
+--------------------------------------------------------------------------------
+- Node full  : 1038 tests / 1036 pass / 2 fail — 2 fail ĐÚNG baseline env dsh
+  (`dshGatewayHealth` + `verifyDshRuntime`, thiếu binary `dsh`). 1022→1038 = +16 test
+  (7 E2E mới + 9 unit mới), 0 regression khác. Baseline cũ 1022/1020/2.
+- Flutter    : 426 pass / 3 fail — 3 fail ĐÚNG baseline (test/_probe_review_test.dart
+  untracked, RenderFlex harness). analyze: 1 warning (test/_probe_b0_voice_autosend.dart
+  untracked) — ĐÚNG baseline. Không dính dòng Dart nào khác ngoài proposal_card.dart.
+- openspec validate next8-collect-safety-execute --strict → valid.
+
+§5. FALSIFY (phase-04 §7 — F1–F8; mọi đột biến áp vào src, chạy đúng test tên,
+     khôi phục = md5 byte-identical `ff7737a9467496bcb627e97d71bf7c5b` payment-write.mjs)
+--------------------------------------------------------------------------------
+F1  Bỏ trừ draft-cover (live_effective := live_gl)
+    → ĐỎ ×2: payment-write "P4 item 7: a live draft already covering…" +
+      p9-pay "P9-D E2E: a draft written from chat lowers the NEXT ask…" (84 test: 2 fail)
+F2  Tin account_id từ proposal bỏ validate type
+    → KHÔNG ĐỎ (53/53 xanh). Ngữ đố: số tiền vẫn qua resolver, và cụm "if (account)"
+    vẫn chạy từ đầu tới BLOCK — cố gắng bỏ type-check đơn thuần để lại account hợp lệ
+    qua đường đó nên không ca nào nhảy cóc. Bài học ghi §8. (restore md5 khớp)
+F3  `&& false` hoá nhánh unallocated tường minh (buildPaymentEntryData)
+    → KHÔNG ĐỎ (53/53 xanh). Nguyên nhân đo được: khi cờ gỡ, fallback
+    `max(0, paid − Σ allocated)` trả CÙNG SỐ với giá trị tường minh trong mọi ca của
+    fixture (advance: paid=500k, Σ=0 ⇒ 500k; allocated đủ: 0) ⇒ ca hiện có chỉ chứng
+    minh SỐ ĐÚNG, chưa chứng minh FIELD đi qua đường tường minh. Gap oracle, không
+    phải code. (§8)
+F4  Re-resolve theo tên (`raw.invoice_name` đè invoice_id)
+    → KHÔNG ĐỎ (30/30 xanh): `raw?.invoice_name` luôn undefined trong mọi fixture nên
+    đột biến là no-op ngữ nghĩa. Bài học: một đột biến không kích hoạt được = đột
+    biến vô nghĩa (gỡ khỏi báo cáo như một mutation chạy nhưng không đổi ngữ nghĩa).
+    (§8; restore md5 khớp)
+F5  `&& false` hoá verify references (count + per-row)
+    → KHÔNG ĐỎ (60/60 xanh): verifyWrittenPayment ném PAYMENT_WRITE_UNVERIFIED khi
+    lệch NHƯNG không có ca nào hiện hữu tạo lệch trên doc đọc lại (mock trả lại đúng
+    data đã ghi). Chứng minh verify là dead branch trong bộ test hiện có. (§8)
+F6  `&& false` hoá count>1 payment_methods
+    → ĐỎ ĐÚNG TEST: payment-write "Phase 4 lock §6.1 — a confirmation carrying TWO
+    payment methods is REFUSED" (52/53, 1 fail).
+F7  Fallback MoP/cash khi ý định bank (thêm nhánh cash fallback trong resolveAccountPlan)
+    → KHÔNG ĐỎ (80/80 xanh): trong mọi fixture, requestedMode và modeName cùng kênh
+    (exact match hoặc cashNamed bắt trước) nên nhánh fallback thêm vào không bao giờ
+    được chạm. F7 gốc (thứ tự exact → cashNamed → cashTyped → …) ĐÃ được ghim bởi
+    suite §6.2 hiện hữu: "a company whose only money account is Cash: a bank intent
+    must BLOCK" — tức bảo vệ đang có test thật; đột biến bổ sung F7 không thêm được
+    ca nào. (§8)
+F8  `&& false` hoá stillOpen trong lock §6.3
+    → ĐỎ ĐÚNG TEST: payment-write "Phase 4 lock §6.3 — an advance while the party
+    still owes is REFUSED, nothing written" (52/53, 1 fail).
+KẾT: F1, F6, F8 ĐỎ ĐÚNG TEST tên trong tasks §6; F2/F3/F4/F5/F7 chạy nhưng KHÔNG đỏ
+     — NGHIÊM CÚNG: (F4) là no-op do luôn undefined, (F7) là dead branch do thứ tự
+     lựa chọn không bao giờ rơi xuống; (F2, F3, F5) là GAP ORACLE của bộ test hiện có
+     (mock luôn trung thực hoặc đường code luôn trả số trùng) — GHI VÀO §8 DEBT cho
+     Phase 5 khi có site thật, KHÔNG tự sửa thêm trong phiên (giữ phạm vi phase-04).
+KHÔI PHỤC: md5 payment-write.mjs sau restore = ff7737a9467496bcb627e97d71bf7c5b (khớp);
+không còn .falsify-bak/.bak/.orig; grep "FALSIFY" src = 0.
+
+§6. BẰNG CHỨNG KHÁC
+--------------------------------------------------------------------------------
+- md5 cuối (trước khi trình duyệt):
+  payment-write.mjs   ff7737a9467496bcb627e97d71bf7c5b
+  safety-gateway.mjs  567672fd32ea4b8631b4ce8bfce35a6a
+  mock-server.mjs     0b4bc2e545af14012a218977657df68e
+  next8-collect-server-validation.test.mjs 2041218e4fd601eeeceb98f4f1d8cad9
+  payment-write.test.mjs                    f65d6097889599a339365fc829974424
+  next8-collect-execute.test.mjs            a51a044a5f7ab8e226d890c4c65c2f16
+- git status (tracked): 4 file sửa (mock-server.mjs, payment-write.mjs,
+  next8-collect-server-validation.test.mjs, payment-write.test.mjs) + file mới
+  test/next8-collect-execute.test.mjs + Dart proposal_card.dart +
+  test/proposal_card_test.dart. File src khác KHÔNG bị đụng.
+- SKILL_REFUSAL_STATUSES chỉ +1 mã (PAYMENT_METHOD_COUNT_INVALID: 422); thứ tự gate
+  KHÔNG đổi; idempotency.mjs KHÔNG đụng.
+
+§7. CODE REVIEW THỦ CÔNG (OCR unavailable — graceful degradation; theo AGENTS.md)
+--------------------------------------------------------------------------------
+- Đọc git diff cụm payment-write.mjs (~594 dòng) + safety-gateway + mock-server.
+- Null/undefined: allocationList phân biệt ABSENT (legacy) vs [] (advance) bằng
+  Array.isArray; `raw?.invoice_id`, `doc?.name` đều có nhánh undefined; `reference_no`
+  yêu cầu bắt buộc ở mock và verify đọc lại.
+- Không có input user đưa thẳng vào shell/eval; không SQL; không secret.
+- Pattern consistency: tái dùng `rowsOf`/`docOf`/`assertReadOnly`, error objects có
+  `code` như mọi refusal khác; `resolveAccountPlan` tái dùng cho cả 2 đường (không
+  có bản sao luật tiền thứ hai).
+- Scope: đúng proposal.md — KHÔNG route ghi thứ hai, KHÔNG đổi gate order,
+  KHÔNG sửa idempotency.mjs, KHÔNG submit tự động (submit_now vẫn là frozen snapshot
+  F7-2 của Phase trước), KHÔNG Sales/Purchase, KHÔNG N-PE.
+- LESSONS check (AgentMemory down ⇒ không gọi được /lessons; đối chiếu LESSONS_LEARNED
+  và lessons trong session Phase 3): (L1 Phase 3) company scope — advance nay dùng
+  cùng `readSessionCompany` → luật "một khái niệm whose-books" được giữ; (L2 Phase 3)
+  test double thiếu read ⇒ lần này mockMcp thêm đủ `openInvoices/accounts/
+  companyDefaults` làm THAM SỐ chứ không nhánh riêng — đúng bài "sửa ở fixture, không
+  hạ assertion".
+
+§8. DEBT / HẠN CHẾ GHI RÕ (không giấu)
+--------------------------------------------------------------------------------
+1. Falsify F2/F3/F5 KHÔNG đỏ — gap oracle của bộ test hiện có (mock trung thực /
+   đường code luôn trả số trùng), cần site thật hoặc mock phủ nhận có thể lệch để
+   chứng minh các nhánh này sống. F4 là đột biến no-op (luôn undefined). F7 dead
+   branch do thứ tự lựa chọn. Không ca nào hôm nay chứng minh các nhánh này sai —
+   nhưng cũng CHƯA có ca nào chứng minh chúng SỐNG (mock chỉ trả đúng).
+2. `unallocated_amount` nay ghi TƯỜNG MINH ở MỌI PE (kể cả 0 trên đường legacy) —
+   đúng Phase 3 debt (2); CHƯA verify bằng 1 lần GHI THẬT trên site (Phase 5 /
+   owner-controlled). Mock nay tự tính lại số này để verify so với số của site.
+3. Ca "2 hoá đơn hợp lệ" E2E dùng `MOCK_ERP_INV_FIXTURE` (SINV-0005) — fixture site
+   (env JSON, per-process) thay vì thêm customer 2 hoá đơn vào fixture chung vì
+   không muốn làm dịch các đếm test khác (CUST-00001 = 1 hoá đơn mở được nhiều test
+   ghim). Đã ghi rõ trong header của suite.
+4. Mock Company KHÔNG serve `default_receivable_account`/`default_payable_account`
+   (đúng theo site đo được) ⇒ advance trên mock mặc định BLOCK `PAYMENT_ACCOUNT_
+   UNRESOLVED`; test advance phải inject fixture (do đó có 3 test riêng, không
+   advance "bình thường"). Đây là hành vi ĐÚNG (không khai báo ⇒ không ghi), nhưng
+   owner cần biết advance trên site thật chỉ chạy khi site KHAI BÁO 2 field này.
+5. Tripwire trên `scripts/` là điều kiện có (dir tồn tại) — không hard-fail khi
+   scripts/ vắng.
+6. `validateTransactionDraft` vẫn chưa có caller production (debt Phase 3 số 4) —
+   được tái dùng trong test như oracle độc lập nhưng chưa xoá vì chưa có quyết định
+   owner (Phase 4 đã cho phép /execute 422 PAYMENT_METHOD_COUNT_INVALID, sao nay
+   builder cũng ném cùng mã — path chữ ký giống, KHÔNG phải 1 bản luật thứ hai vì
+   builder CHỈ nói về draft, executor chỉ nói về confirmation).
+
+§9. LỆNH DỪNG (phase-04 §10) — CHỜ OWNER
+--------------------------------------------------------------------------------
+- KHÔNG tự commit (vùng tiền). KHÔNG sang Phase 5 (ghi thật lên site) khi chưa có
+  lệnh + quy trình Phase 5.
+- Sổ sách: result88.txt + .plan/next8/phase4-result.md + working.md (entry mới).
+- openspec tasks.md: §1–§7 đã tick; §7 mục "KHÔNG tự commit" được chủ động GIỮ NGUYÊN
+  UNCHECKED làm bằng chứng là chủ ý (không phải quên).
+
+§10. ĐÓNG CỔNG (owner lệnh "Phase 4 — ĐÓNG CỔNG + COMMIT (không Phase 5)")
+--------------------------------------------------------------------------------
+- Verify trước commit: next8-collect-execute 7/7 · payment-write +
+  next8-collect-server-validation 80/80. md5 payment-write.mjs trước commit =
+  ff7737a9467496bcb627e97d71bf7c5b (khớp bản đã falsify-restore).
+- Secret scan 8 file + openspec: CLEAN (hit duy nhất = TÊN biến
+  ERPNEXT_API_KEY/ERPNEXT_API_SECRET trong copy lỗi của safety-gateway.mjs:862 —
+  dòng CÓ SẴN từ trước, không phải giá trị).
+- Banned check staged: sạch (không .env/.plan//_probe_*.dart/*.g.dart/node_modules/
+  .agent_sessions/idempotency-store/job-queue/learning-log/initp).
+- Stage tường minh 12 file:
+    mcp-erpnext/src/skills/payment-write.mjs        (M, +594/−114 lũy kế)
+    mcp-erpnext/src/safety-gateway.mjs              (MỚI track, 904 dòng — file
+                                                     untracked từ trước, lần
+                                                     đầu vào git; thay đổi Phase 4
+                                                     = +1 mã 422 + ctx.company +
+                                                     intentKey)
+    mcp-erpnext/src/mock-server.mjs                 (M, +10)
+    mcp-erpnext/test/next8-collect-server-validation.test.mjs (M, +38/−)
+    mcp-erpnext/test/payment-write.test.mjs         (M, +236)
+    mcp-erpnext/test/next8-collect-execute.test.mjs (MỚI, 367 dòng)
+    apps/mobile/lib/features/chat/presentation/widgets/proposal_card.dart (MỚI track)
+    apps/mobile/test/proposal_card_test.dart        (MỚI track)
+    openspec/changes/next8-collect-safety-execute/{proposal.md,tasks.md,
+      specs/payment-execute/spec.md,specs/payment-accounts/spec.md} (MỚI, 4 file)
+- COMMIT: 12bbbc9ca2eae0c3c29faca08392acf63d1f3b46 (branch master, parent c763107)
+  — message "feat(next8): collect execute multi-ref PE draft via safety-gateway
+  [VÙNG TIỀN]" + footer Codebuff. 12 file, +4729/−114.
+- PUSH = KHÔNG (owner không ra lệnh; FF only nếu có).
+- Sau commit: working tree sạch phần tracked (chỉ còn untracked ngoài phạm vi).
+- DỪNG — sẵn sàng Phase 5 khi owner lệnh. KHÔNG ghi ERP thật.

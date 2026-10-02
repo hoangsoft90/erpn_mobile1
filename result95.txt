@@ -1,0 +1,207 @@
+================================================================================
+result95.txt — next8 / PHASE 9 — SUBMIT POLICY + WRITE SURFACE TRÊN SITE THẬT
+Ngày: 2026-10-01 · Site: `frontend` (ERPNEXT_URL trong .env) · Kết quả: XONG KỸ
+THUẬT — **DỪNG CHỜ OWNER COMMIT** (vùng chính sách bất khả hoàn tác + tiền).
+================================================================================
+
+Môi trường phiên này: KHÔNG có AgentMemory / cocoindex-code / codebase-memory-
+mcp / OCR (open-code-review) / Simplenote. `code_search` hỏng
+(`ENOTFOUND posix_spawn .../rg`) ⇒ dùng `grep -rn` qua terminal. Code Review chạy
+THỦ CÔNG (đọc `git diff`, pattern, scope, lessons) — không tự cài/khởi động lại
+service nào. KHÔNG push (repo không có remote).
+
+**OWNER GO 2026-10-01 (sau khi trình): giữ DRAFT toàn bộ bản phát hành đầu ·
+allowSubmitPayment mặc định OFF · KHÔNG bật SUBMIT-có-điều-kiện capability nào ở
+phase này. Owner lệnh COMMIT docs Phase 9 (policy + result).**
+
+--------------------------------------------------------------------------------
+§0 — ĐỌC CODE TRƯỚC (bảng WRITE inventory)
+--------------------------------------------------------------------------------
+Bề mặt ghi = **13 entry WRITE** trong `mcp-erpnext/capabilities.json`:
+
+ id                    | doctype                    | draft_only | cổng submit?      | evidence
+ ----------------------+----------------------------+------------+-------------------+--------------------
+ sales_order.create    | Sales Order                | true       | KHÔNG (hằng false)| allow_submit:false
+ purchase_order.create | Purchase Order             | true       | KHÔNG             | allow_submit:false
+ purchase_receipt.create| Purchase Receipt          | true       | KHÔNG             | allow_submit:false
+ delivery.create       | Delivery Note              | true       | KHÔNG             | allow_submit:false
+ quotation.create      | Quotation                  | true       | KHÔNG             | allow_submit:false
+ sales_invoice.create  | Sales Invoice              | true       | KHÔNG             | allow_submit:false
+ sales.create          | Sales Invoice (bán tự do)  | true       | KHÔNG             | allow_submit:false
+ purchase_invoice.create| Purchase Invoice          | true       | KHÔNG             | allow_submit:false
+ sales_return.create   | Sales Invoice (is_return=1)| true       | KHÔNG             | allow_submit:false
+ stock.adjustment      | Stock Entry                | true       | KHÔNG             | allow_submit:false
+ customer.create       | Customer                   | false      | N/A (master data) | allow_submit:false
+ payment.create        | Payment Entry              | false      | **CÓ** (DUY NHẤT) | execution.allow_submit:true
+ document.delete       | —                          | —          | OFF by policy     | forbidden_in_ai_path:true · risk CRITICAL
+
+Cơ chế submit (đo từ code):
+- Cờ per-capability: `execution.allow_submit` — chỉ `payment.create` = true.
+- Cờ per-lệnh: `proposal.params.submit_now` — 10 skill ghi cứng `submit_now:false`;
+  `src/skills/payment-write.mjs:1237` đọc `opts.submit_now`.
+- Nguồn bật: `apps/mobile` `AppSettingsService.allowSubmitPayment` (key
+  `settings_allow_submit_payment_v1`, `app_constants.dart:86`) — **mặc định OFF**.
+- Truyền: `chat_controller.dart:181` → `client.ask(submitNow:...)` → body `/ask`
+  `submit_now` → freeze vào snapshot (`copilot-server.mjs:2736`).
+- Thi hành: `safety-gateway.mjs` `submit_ok = docstatus===1` chỉ khi `submit_now===true`.
+- Write-gate MCP: `src/client.mjs:145` honour `execution.allow_submit`.
+
+--------------------------------------------------------------------------------
+§1 — DELIVERABLE: `.plan/next8/submit-policy.md`
+--------------------------------------------------------------------------------
+Bảng quyết định 13 dòng, phủ 100% WRITE. Kết luận bản phát hành đầu: **KHÔNG
+capability nào tự submit**. PE (#12) là cổng duy nhất và cổng đó **OFF mặc định**.
+Mục §3 ghi rõ 3 câu PHẢI trả lời trước khi bật submit có điều kiện (chính sách
+cancel→amend · ai được cancel · điều kiện bật + log ai bật). §4 còn nợ P4/P5/log.
+
+--------------------------------------------------------------------------------
+§2 — CHỨNG MINH TRÊN SITE THẬT (owner cho phép chỉ NHÁP, số nhỏ, cleanup bắt buộc)
+Harness: `.plan/next8/_probe_09_submit_policy.mjs` (throwaway, .plan gitignored)
+         + `.plan/next8/_run_probe09.sh` (bật Python NLP bridge rồi chạy probe).
+--------------------------------------------------------------------------------
+
+2.0 — Đọc-only: auth + inventory + baseline
+```
+[read] auth → 200 user="Administrator"
+[read] custom_ai_action_id inventory (Custom Field):
+       Customer/Delivery Note/Payment Entry/Purchase Invoice/Purchase Order/
+       Purchase Receipt/Quotation/Sales Invoice/Sales Order/Stock Entry
+       → search_index=1 · unique=1 · type=Data  (10/10 đã deploy)
+[read] custom_business_doc_key → [{"dt":"Purchase Order", search_index:1, unique:1}]
+[read] baselines (all/draft):
+       Customer 134/134 · Payment Entry 316/17 · Sales Order 61/8 ·
+       Purchase Order 9/4 · Purchase Receipt 12/0 · Sales Invoice 534/5 ·
+       Stock Entry 20/2 · Delivery Note 23/2 · Purchase Invoice 65/0 · Quotation 0/0
+```
+
+2.1 — `/ask` (chỉ in shape; câu owner-chọn, số nhỏ)
+```
+text = "đặt hàng Đại lý Cám Bình Dương 1 bao cám heo tăng trọng 25kg"
+→ 200 result.action=create_purchase_order · proposal_id=prp_f9db970a…
+  params.submit_now = false            ← cờ submit ĐÓNG trong snapshot
+  params.business_doc_key = bdk_64ddc678e0fe70a00bbf844373d7029a
+  entity = {kind:"supplier", id:"Đại lý Cám Bình Dương"}
+  estimated_total = 295.000đ (giá MUA ERPNext)
+```
+
+2.2 — IDEMPOTENCY (cùng command_id ⇒ replay + 1 chứng từ) + DUPLICATE KEY
+```
+[2] /execute C1            → 200 ok=true replay=false doc=PUR-ORD-2026-00010
+                             action_id=act_82f2576d-473f-4fd3-a4f1-c694651808f6
+[3] /execute SAME command  → 200 ok=true replay=true  doc=PUR-ORD-2026-00010
+                             ⇒ ĐÚNG 1 chứng từ (once-only)
+[4] /execute NEW command_id, cùng action
+                           → 409 code=PO_DUPLICATE_DOC existing_doc=PUR-ORD-2026-00010
+[5] read-back PO PUR-ORD-2026-00010
+        custom_ai_action_id = "act_82f2576d-…"  (KHỚP action_id  ✔)
+        docstatus = 0 (NHÁP)
+```
+Ghi chú kỹ thuật (`reference_no`): trên Purchase Order, `reference_no = command_id`
+KHÔNG phải field trên doctype (PO không có custom field đó) mà là **trường của
+RESULT `/execute`** (`src/skills/purchase-order-write.mjs:765 result.reference_no =
+commandId`) và là **khoá của idempotency store** (`src/idempotency.mjs` — reconcile
+tìm theo `reference_no`). Vì vậy read-back PO thấy `reference_no=null` là ĐÚNG; bằng
+chứng `reference_no=command_id` nằm ở result + store (đã pin bởi
+`test/correlation-field.test.mjs`, xem §4 F1).
+
+2.3 — DUPLICATE theo SỐ CHỨNG TỪ NGUỒN (business key) — vòng riêng
+```
+[1] /ask (CÙNG source_document, action MỚI) → 200 create_purchase_order
+[2] /execute → 409 code=PO_DUPLICATE_DOC existing_doc=PUR-ORD-2026-00010
+    error="hóa đơn P9PROBE-0001 ngày 2026-10-01 đã được nhập vào đơn mua
+           PUR-ORD-2026-00010 trên ERPNext — KHÔNG ghi thêm đơn thứ hai"
+[3] Purchase Order count before=10 after=10  ⇒ KHÔNG có bản thứ hai
+```
+(409 map ở `safety-gateway.mjs` SKILL_REFUSAL_STATUSES: `CC_DUPLICATE_ACTION`,
+`PO_DUPLICATE_ACTION`, `PO_DUPLICATE_DOC` … đều 409; `PO_DOC_KEY_FIELD_MISSING`
+cố ý KHÔNG nằm trong bảng = site cấu hình sai ⇒ 500.)
+
+2.4 — CORRELATION `action_id → doc` (READ-ONLY, không bịa field)
+```
+[corr] custom_ai_action_id → doc, per doctype:
+       Purchase Order   set_rows(sample)=3 · e.g. PUR-ORD-2026-00009 ← act_430c3bcb…
+       Payment Entry    set_rows(sample)=1 · e.g. ACC-PAY-2026-00749 ← act_317a820c… (docstatus=1)
+       Customer         set_rows(sample)=1 · e.g. Khách Test App M1 ← act_e9b48be2…
+       Sales Order / Purchase Receipt / Delivery Note / Sales Invoice / Quotation /
+       Stock Entry / Purchase Invoice → field ĐÃ deploy (query chạy), chưa có dòng nào
+```
+⇒ Cột correlation SỐNG và TRUY VẤN ĐƯỢC trên cả 10 doctype (Custom Field
+inventory §2.0); chứng minh round-trip THẬT trên 3 doctype đã có chứng từ
+(PO/PE/Customer). Không tạo thêm chứng từ nào cho phần này.
+
+2.5 — `document.delete` BỊ CHẶN trên đường AI (0 xoá)
+```
+"xóa đơn đặt hàng vừa tạo"          → 200 error_code=FORBIDDEN_IN_AI_PATH proposal=null
+"huỷ hoá đơn bán hàng gần nhất"     → 200 error_code=FORBIDDEN_IN_AI_PATH proposal=null
+PO drafts before=5 after=5          ⇒ KHÔNG xoá gì
+```
+
+2.6 — CLEANUP (xoá ĐÚNG chứng từ của vòng test) + baseline khôi phục
+```
+[cleanup] DELETE PO PUR-ORD-2026-00010 → 202 {"data":"ok"}
+[cleanup] read-back → 404 (gone)
+[cleanup] leftover Audit Issue by action_id → 0 rows
+[cleanup] leftover Payment Ledger Entry by action_id → 0 rows
+[cleanup] draft counts after → Customer=134, Payment Entry=17, Sales Order=8,
+          Purchase Order=4, Purchase Receipt=0, Sales Invoice=5, Stock Entry=2,
+          Delivery Note=2, Purchase Invoice=0, Quotation=0
+```
+⇒ KHỚP baseline §2.0 (PO draft 4). KHÔNG còn rác của phiên. (Chứng từ lịch sử
+không thuộc phiên: PE `ACC-PAY-2026-00749` docstatus=1 — của phase trước, giữ nguyên.)
+
+2.7 — Setting PE submit: xác nhận **OFF mặc định**
+- Code: `AppSettingsService.allowSubmitPayment` → `?? false` (absent/null/corrupt ⇒ OFF).
+- Test: `apps/mobile/test/settings_test.dart:141` "allowSubmitPayment defaults OFF".
+- UI: bật phải qua dialog cảnh báo "Bật nộp phiếu thật" (`settings_screen.dart`).
+- ⚠️ **Không có log server-side "ai bật"** (chỉ setting client + dialog) — ghi nợ §3.
+
+--------------------------------------------------------------------------------
+§3 — NỢ PHASE-09 (P4/P5/log)
+--------------------------------------------------------------------------------
+- **P4 — live test note injection trên khách probe**: CẦN quyền ghi master data
+  ngoài phạm vi "1 vòng nháp PO" owner đã duyệt ⇒ **GHI NỢ, chờ owner duyệt write**.
+- **P5 — "3 dòng cần LLM thật" (entity resolver)**: `.env` CÓ key (`GEMINI_API_KEY`,
+  `MAC_LLM_API_KEY`, `ZEN_API_KEY`) NHƯNG chạy được còn cần dựng dsh headless +
+  router (setup, quota) — **DỪNG HỎI OWNER**, không tự cài/cấu hình (đúng §9 phase).
+- **Log khi bật `allowSubmitPayment`**: hiện KHÔNG có ⇒ nợ, cần nếu owner muốn audit.
+
+--------------------------------------------------------------------------------
+§4 — TEST + FALSIFY + SỔ SÁCH
+--------------------------------------------------------------------------------
+Falsify (`/plan/next8/_falsify_phase9.mjs`, throwaway):
+```
+✔ F1: witness RED · restore byte-identical · drop reference_no=command_id (PE result)
+✔ F2: witness RED · restore byte-identical · let a COMPLETED command_id execute again
+✔ F3: witness RED · restore byte-identical · let document.delete pass isForbidden()
+✔ F4: witness RED · restore byte-identical · default allowSubmitPayment ON
+FALSIFY OK — RED 4/4 · restore byte-identical 4/4
+```
+  F1 → `test/correlation-field.test.mjs` · F2 → `test/http-execute.test.mjs` ·
+  F3 → `test/capability-contract.test.mjs` · F4 → `test/settings_test.dart`.
+
+Full Node (pkill nlp trước): `cd mcp-erpnext && npm test`
+```
+tests 1106 · suites 0 · pass 1103 · fail 2
+```
+  ⇒ 2 fail ĐÚNG baseline env `dsh` (`dshGatewayHealth`, `verifyDshRuntime`).
+
+Flutter: `cd apps/mobile && flutter test` → **+450 -3** (3 fail đều là
+`test/_probe_review_test.dart` untracked, ĐÚNG baseline).
+`flutter analyze` → **1 issue** (`test/_probe_b0_voice_autosend.dart:50 _onStatus`,
+ĐÚNG baseline).
+
+OpenSpec: KHÔNG có change `next8-*phase9*` ⇒ KHÔNG tick gì (đúng điều kiện "nếu có change").
+
+Sổ sách: `result95.txt` (file này) + `.plan/next8/submit-policy.md` +
+`.plan/next8/phase9-result.md` + `working.md`.
+
+--------------------------------------------------------------------------------
+§5 — ĐIỂM DỪNG / CHỜ OWNER
+--------------------------------------------------------------------------------
+1. **Go/No-Go submit**: đề xuất **giữ NHÁP toàn bộ** cho bản phát hành đầu (đúng
+   mặc định owner đã văn bản). Lệch mặc định ⇒ cần owner Go/No-Go + trả lời 3 câu §3.
+2. **Commit**: chạm chính sách bất khả hoàn tác + vùng tiền ⇒ **DỪNG, KHÔNG tự commit**.
+3. **P4** cần duyệt quyền ghi master data; **P5** cần owner quyết có chạy LLM thật không.
+KHÔNG tự bật submit · KHÔNG test submit "cho biết" · KHÔNG xoá CT ngoài cleanup ·
+KHÔNG sửa Safety Gateway để pass submit · KHÔNG push · KHÔNG stage .env/secrets.
+================================================================================

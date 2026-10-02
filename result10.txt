@@ -1,0 +1,78 @@
+========================================================================
+RESULT 10 — COMMIT FIX RESULT9 + DOCS · CI RUN #2 SUCCESS · APK ARTIFACT
+Timestamp: 2026-09-14 09:25
+Env: Linux VPS, Node v24, Python 3.12, Flutter build trên GH Actions (không build VPS).
+Repo erpn_mobile1, branch change/flutter-chat-mvp.
+========================================================================
+
+== 1. COMMITS (user đã duyệt đợt fix vùng tiền) ==
+
+$ git log --oneline -3
+  4c5bd26 docs: rewrite progress docs for consistency + memory files + sign-off prep pointer
+  119edd4 fix: phase 2 — real-server accuracy 27.8%→100% (router priority, name
+          resolution, kinship, payment 417/party_type, inventory filter) + CI codegen step
+  590b1b2 feat: phase 3 — Flutter chat MVP
+
+- 119edd4: 15 files +624/−66 — đúng message đề xuất trong handoff_20260914-0841.md
+- 4c5bd26: 20 files +1122/−209 — checklist.md + next.md viết lại 1 lần cho nhất quán
+  (không vá từng đoạn), .project/ + memory files commit lần đầu
+- Secret scan TRƯỚC commit: phát hiện result9.txt chứa nguyên văn key/secret cũ
+  → REDACT thành <OLD-KEY-VALUE>/<OLD-SECRET-VALUE> trước khi commit. Verify sau redact:
+  $ grep -rl "<OLD-KEY-VALUE>\|<OLD-SECRET-VALUE>" (trừ .env) → CLEAN
+  [REDACT 2026-09-17] Hai giá trị key/secret cũ từng được dán NGUYÊN VĂN vào chính
+  dòng này (không phải placeholder) ⇒ đã thay bằng <OLD-KEY-VALUE>/<OLD-SECRET-VALUE>.
+  Lưu ý: giá trị thật vẫn còn trong lịch sử git (commit 2946206) — key đã được
+  rotate nhiều lần nên rủi ro thấp; muốn xoá khỏi lịch sử phải viết lại lịch sử
+  (thao tác phá huỷ, cần user quyết định riêng).
+- .env KHÔNG được commit (0 file staged khớp .env)
+- ngrok URL: CLEAN trong toàn bộ docs đã commit
+
+== 2. PUSH + GH ACTIONS RUN #2 ==
+
+$ git push origin change/flutter-chat-mvp → 590b1b2..4c5bd26
+$ curl .../actions/runs?per_page=2
+  34826575147 completed success 4c5bd26   ← RUN #2
+  34823212314 completed failure 590b1b2   ← RUN #1 (lỗi *.g.dart gitignore, đã fix)
+
+Run #2: https://github.com/hoangsoft90/erpn_mobile1/actions/runs/34826575147
+Steps từng bước (jobs API):
+  Set up job ✅ · Checkout ✅ · Java 21 ✅ · Flutter stable ✅ · Pub get ✅
+  · Generate code (build_runner) ✅ ← điểm chết của run 1 đã hết
+  · Analyze ✅ · Test ✅ · Build debug APK ✅ · Upload APK artifact ✅
+Commit docs 4c5bd26 KHÔNG trigger run mới — đúng theo paths filter của workflow
+(chỉ apps/mobile/** và workflow file mới trigger).
+
+== 3. ARTIFACT APK ==
+
+$ curl .../runs/34826575147/artifacts
+  artifact: erpn-chat-debug-apk | size: 80.0 MB (zip) | id: 10340093253 | expired: False
+
+Đã tải về VPS (lần 1 timeout 120s, lần 2 OK với -m 420 — retry đúng 1 lần):
+  /home/kythuat_hoangweb/erpn-chat-debug-apk.zip (81M)
+  /home/kythuat_hoangweb/erpn-apk/app-debug.apk  (158M, sha256 đầu: c1a0e886bc861c2e)
+
+Cách tải khác: trang run → Artifacts → erpn-chat-debug-apk (cần đăng nhập GitHub).
+
+⚠️ QUAN TRỌNG cho bước cài máy thật (verify từ source, không đoán):
+  - APK CI build KHÔNG có --dart-define → default COPILOT_BASE_URL = http://127.0.0.1:8788
+    (apps/mobile/lib/core/constants/app_constants.dart:9) → trên phone sẽ KHÔNG nối được VPS.
+  - http-ask.mjs bind 127.0.0.1 mặc định; hiện chỉ nlp_service :8787 đang listen.
+  → Muốn test thật: chạy service bind 0.0.0.0 + build lại APK với --dart-define
+    trỏ IP VPS, HOẶC (nhanh hơn cho lần test đầu) dùng `flutter run --dart-define=...`
+    từ máy có Flutter. Chi tiết xem mục 4 trong report chat.
+
+== 4. MANDATORY SIGN-OFF PHASE 5 (CHỈ tài liệu — gate KHÔNG mở) ==
+
+File: SIGNOFF-phase5-pii.md (root — có thể commit lưu vết, khác .plan/ bị gitignore)
+- Trạng thái: CHỜ KÝ DUYỆT. Bảng quyết định 0/4 dòng. Gate: ĐÓNG.
+- Đã khảo sát 4 phương án scrubbing (A placeholder / B route-PII / C A+B / D self-host)
+  để người ký chọn; ràng buộc chốt sẵn từ Phase 0 giữ nguyên không renegotiate.
+- KHÔNG code LLM Router/PII scrubbing — đúng giới hạn user đặt (gate pháp lý cố ý).
+
+== 5. TRẠNG THÁI SAU PHIÊN ==
+
+- Branch đã push: 33f9dc0 → 0ac8e61 → 590b1b2 → 119edd4 → 4c5bd26 (+ result10/sign-off doc
+  nếu user duyệt commit nhẹ kế tiếp)
+- CI: XANH (run #2). APK sẵn sàng trên VPS + GitHub artifacts.
+- Chờ người thật: rotate key ERPNext (Hoàng, trên server) · thu audio 3 miền ·
+  cài/test APK tại điểm bán · ký SIGNOFF-phase5-pii.md mở gate Phase 5.

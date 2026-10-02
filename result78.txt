@@ -1,0 +1,180 @@
+# result78 — Issue 6: COMPANY_SCOPE_REQUIRED trên quotation_write (debug theo .plan/issue6-debug.md)
+
+Ngày: **2026-09-28** · Project: `erpn_mobile1` · Đầu vào: `.plan/issue6.md` + `.plan/issue6-review1.md` (đọc nguyên văn, đủ 2 file) + skill `erpn-verify-first` (đọc từ disk; tool `skill` không có skill này trong session).
+
+## 1. Executive conclusion
+
+```text
+ROOT CAUSE: Process gateway :8788 (review1: PID 51050, `node src/http-ask.mjs
+--port 8788 --host 0.0.0.0`, parent = shell ttys008) đang chạy ở chế độ
+multi_user (COPILOT_USERS PRESENT trong process env) nhưng cả COPILOT_USERS
+entry CỦA user đó LẪN COPILOT_COMPANY đều không resolve được company.
+resolveCompanyScope("quotation.create") → fail-closed COMPANY_SCOPE_REQUIRED.
+CONFIDENCE: HIGH (cơ chế) / MEDIUM (đọc trực tiếp environ của PID 51050) —
+PID đó nằm trên máy user; đây là container debug repo (không có listener
+8788, xem §3-A), nên bằng chứng cuối phải là 1 lệnh probe trên máy user, đã
+ghi sẵn ở §7.3.
+```
+
+**Phát hiện chỉnh lại cả issue6.md lẫn review1:** theo code hiện tại
+(`authorization.mjs` L263–270), `COMPANY_SCOPE_REQUIRED` **KHÔNG BAO GIỜ**
+xuất hiện ở single_tenant — mode đó thiếu company chỉ đi đường
+`unset_single_tenant` (WARN ở boot, KHÔNG chặn, để không vỡ cài đặt cũ —
+đúng comment P8 "measured: gỡ miễn trừ ⇒ 33 test đỏ"). Vậy nếu user chỉ
+"cài gateway kiểu single-tenant không load `.env`" thì quotation_write
+**không thể** ra mã này. Lỗi chỉ xảy ra khi **process đang có
+`COPILOT_USERS`** — nghĩa là issue6.md đang giải sai biến (bảo thêm
+`COPILOT_COMPANY` vào `.env` nhưng **không bảo restart bằng đúng cơ chế
+load**), và review1 đúng nửa: `.env`-không-load là điều kiện cần, nhưng
+**chưa đủ** — phải CỘNG thêm `COPILOT_USERS` trong env process.
+
+**Điều kiện cần&đủ chặn (chứng minh bằng probe T1–T5, §3-D):**
+
+```text
+COPILOT_USERS present trong process.env
+  ∧ (principal entry của user không có company)     ← server-first: ưu tiên 1
+  ∧ COPILOT_COMPANY không có trong process.env      ← fallback: ưu tiên 2
+  ∧ capability khai scope.company="required"        ← quotation.create L1930
+    ⇒ resolveCompanyScope() → COMPANY_SCOPE_REQUIRED
+```
+
+## 2. Request flow (thực tế, theo code)
+
+```text
+Flutter POST /ask (8788)
+  ↓ http-ask.mjs L448: resolvePrincipal({user: bindPolicy.user, env}) — 1 LẦN/process
+  ↓ (bindPolicy từ resolveBindPolicy: ASK_USER/ASK_PASSWORD — basic auth; KHÔNG X-Device-ID)
+  ↓ copilot-server.mjs L669: authorize(route.capability, {principal, env})
+  ↓   ├─ checkPermissions: "Sales User" (quotation.create)
+  ↓   └─ resolveCompanyScope: principal.company → COPILOT_COMPANY → request
+  ↓       mode=multi_user, không company nào ⇒ COMPANY_SCOPE_REQUIRED
+  ↓ copilot-server.mjs L678-686: return trước route.factory() ⇒ 0 ERPNext read
+Flutter nhận: error_code COMPANY_SCOPE_REQUIRED
+```
+
+- **X-Device-ID:** grep `X-Device-ID|device_id|deviceId` trong
+  `mcp-erpnext/src` + `apps/mobile/lib` = **0 match** — §11 của debug doc
+  trả lời bằng bằng chứng phủ định: device identity không tồn tại trong
+  request path, không thể là nguồn mất company.
+- **DSH (§11):** `buildDshChildEnv` (`dsh-gateway.mjs` L414–418) chỉ strip
+  `DSH_SECRET_ENV_KEYS` (ASK_PASSWORD/GH_TOKEN/GEMINI_API_KEY/
+  MAC_LLM_API_KEY/ZEN_API_KEY) — **giữ** COPILOT_*; child DSH spawn
+  copilot-server.mjs với `COPILOT_DSH_CONTEXT=1`; ở `/dsh/ask`, WRITE còn bị
+  chặn TRƯỚC authorize bởi `blockedInDshContext()` (`DSH_WRITE_BLOCKED`,
+  `copilot-server.mjs` L656) ⇒ **WRITE không bao giờ đi đường DSH**;
+  `resolvePrincipal` đọc `env` truyền qua (opts.env), không đọc lại
+  process.env riêng. Nếu user từng thấy mã này ở câu READ trong AI mode,
+  nghĩa là **process http-ask :8788 và process DSH đang dùng chung cùng một
+  env gốc không pin company** — vẫn cùng root cause, không có nhánh thứ hai.
+- **Thứ tự ưu tiên company là server-first** (L253–256): principal entry →
+  `COPILOT_COMPANY` env → company trong request (chỉ được CHECK, không được
+  widen). Request từ app KHÔNG cứu được lỗi này — và đó là chủ ý (result72
+  §3: app không gửi `company`, card chỉ gửi `command_id`/`proposal`/…).
+
+## 3. Evidence
+
+| # | File:Line | Observation | Kết luận |
+|---|-----------|-------------|----------|
+| A | runtime | `ps -eo … \| grep [h]ttp-ask` + `ss -ltnp \| grep 8788` trên máy debug: **0 process, 0 listener** | incident chạy trên máy user (macOS, review1 PID 51050) — máy này chỉ chứng minh CƠ CHẾ |
+| B | `package.json` (`start:ask`) | `node src/http-ask.mjs --port 8788` — **không** `--env-file`/dotenv; grep `dotenv\|loadEnvFile\|env-file` toàn `src/` + 2 package.json = **0**; `bin/*.sh` không source .env | `.env` KHÔNG được nạp tự động (xác nhận review1) |
+| C | `.env` (máy debug) | keys: `COPILOT_COMPANY`, `ASK_*`, `ERPNEXT_*`… — **KHÔNG có `COPILOT_USERS`**, không `COPILOT_DEFAULT_PERMISSIONS` | nếu dùng nguyên `.env` này ⇒ single_tenant + company pin ⇒ KHÔNG ra mã lỗi này (T2) ⇒ env của PID 51050 ≠ `.env` file |
+| D | probe T1–T5 (chạy thật, verbatim) | T1 `single_tenant` không company ⇒ `OK unset_single_tenant`; T2 single+COMPANY ⇒ `OK principal`; **T3 multi_user không company ⇒ `BLOCK COMPANY_SCOPE_REQUIRED`**; T4 multi+COMPANY ⇒ `OK env`; T5 entry có company ⇒ `OK principal` | điều kiện chặn như §1; message: `«quotation.create» bắt buộc phải xác định company — đặt COPILOT_COMPANY (hoặc company trong COPILOT_USERS)…` |
+| E | `authorization.mjs` L263–270 | `if (principal?.mode !== MULTI_USER) return unset_single_tenant` | single-tenant chỉ WARN (describeAuthorization), không chặn |
+| F | `capabilities.json` L1909–1930 | `quotation.create`: `authorization {permissions:["Sales User"], scope:{company:"required"}}` | hợp lệ, đúng contract — không phải bug contract |
+| G | test p8 L288–300 | test "multi-user … REFUSED; single-tenant only warned" pin sẵn cả 2 hành vi | hành vi là chủ ý, đã có regression test |
+| H | `http-ask.mjs` L448 + L75–78 | principal resolve 1 lần từ `env` (test seam), `env = process.env` mặc định | Bug Case B/C bị LOẠI vì không có propagation riêng — env của process là nguồn duy nhất |
+| I | review1 + issue6.md | review1: shell history có credentials plaintext; issue6.md dạy dán secrets | đã expose — cần rotate (đã nêu trong review1; nhắc lại ở §7.4) |
+
+## 4. Root cause vs symptom vs contributing factor
+
+| Type | Finding |
+|------|---------|
+| Root cause | Startup env của gateway :8788 KHÔNG nạp được company cho multi_user: `COPILOT_USERS` present (không khai `company` cho entry đang dùng) + `COPILOT_COMPANY` absent — Node chạy trực tiếp không đọc `.env` |
+| Contributing factor | (1) `npm run start:ask` không có `--env-file` ⇒ `.env` chỉ hiệu lực nếu shell/service export; (2) issue6.md hướng dẫn sửa `.env` + restart nhưng không chỉ rõ cơ chế nạp ⇒ dễ sửa file rồi restart bằng lệnh không load file đó; (3) app không gửi company (by-design, server-first) nên không có đường cứu nào từ client |
+| Symptom | App: "route: quotation_write ra lỗi chưa pin company — COMPANY_SCOPE_REQUIRED"; gateway boot còn in `[authz]` warning thiếu pin |
+
+## 5. Hypothesis matrix — phán từng giả thuyết
+
+```text
+H1 (Case A — .env có, process không có): CONFIRMED (một phần) — đây là điều
+   kiện cần; xác nhận review1. NHƯNG KHÔNG ĐỦ: single_tenant thiếu company
+   vẫn KHÔNG bị chặn (probe T1) ⇒ H1 một mình không sinh ra mã lỗi này.
+H2 (Case B — process có COMPANY, principal vẫn không có): REJECTED —
+   resolvePrincipal đọc TRỰC TIẾP cùng env object truyền vào authorize
+   (authorization.mjs L150/L219/L253-256: principal.company ?? envCompany);
+   không có lớp propagation nào giữa hai bước; test seam p8 pin cả nhánh.
+H3 (Case C — principal có company mà resolveCompanyScope vẫn reject):
+   REJECTED — reject chỉ khi: khác pinned (DENIED), ngoài allow-list
+   (DENIED), hoặc KHÔNG resolve được company (COMPANY_SCOPE_REQUIRED); không
+   có đường reject khi company đã có (probe T2/T4/T5 đều OK).
+H4 (phát hiện MỚI từ probe): CONFIRMED — COPILOT_USERS present trong
+   process.env + entry không company + COMPANY absent ⇒ đúng và đủ để ra
+   COMPANY_SCOPE_REQUIRED (probe T3). Đây là nhánh issue6.md/review1 chưa
+   gọi tên.
+```
+
+## 6. Smallest viable fix (không sửa code)
+
+**0 dòng code thay đổi.**authorization.mjs đang đúng chủ ý fail-closed và
+đã có 17/17 test pin. Fix là **cấu hình + startup**:
+
+1. Chọn MỘT trong hai cấu hình đích (không dùng cả hai lộn xộn):
+   - **A — single-tenant (khớp `.env` hiện có của repo, KHÔNG có
+     COPILOT_USERS):** đảm bảo `COPILOT_COMPANY="Minh Phát Cám & VLXD"`
+     vào đúng env của process (A.2/A.3 bên dưới).
+   - **B — multi-user (nếu muốn giữ COPILOT_USERS):** khai company vào
+     entry: `"local": {"permissions": ["Sales User","Accounts User", …],
+     "company": "Minh Phát Cám & VLXD"}` (ưu tiên cao nhất — server-first).
+2. Chọn startup command DUY NHẤT và luôn nạp `.env`:
+   - A.2 `node --env-file=../.env src/http-ask.mjs --port 8788 --host 0.0.0.0`
+     (đứng từ `mcp-erpnext/`; Node ≥20.6, máy debug đang v24.18.1), hoặc
+   - A.3 shell/service: `( set -a; source ../.env; set +a; exec node
+     src/http-ask.mjs --port 8788 --host 0.0.0.0 )` (subshell — tránh leak
+     `ASK_*`/`ERPNEXT_*` vào shell session, bài học result17).
+3. **Không** thêm dotenv/dependency, **không** sửa `authorization.mjs`,
+   **không** hard-code company, **không** nới exemption single-tenant.
+
+## 7. Tests đã chạy
+
+```text
+7.1 node --test test/p8-authorization.test.mjs  → 17/17 pass (hermetic env strip)
+7.2 Probe T1–T5 (§3-D verbatim) — chốt điều kiện chặn
+7.3 PENDING — chạy trên MÁY USER (dán vào đây):
+    # 1) env THẬT của process 8788 (safe subset, không secret):
+    ps -eo pid,args | grep '[h]ttp-ask'
+    tr '\0' '\n' < /proc/<PID>/environ 2>/dev/null | grep -E '^(COPILOT_USERS|COPILOT_COMPANY)=' \
+      | sed -E 's/^(COPILOT_USERS=).*/\1PRESENT/'     # (macOS: ps eww <PID> — chỉ nhìn key, không in value secret)
+    # 2) boot summary của gateway khi start (không secret):
+    node --env-file=../.env src/http-ask.mjs --port 8788 2>&1 | grep '\[authz\]'
+    # 3) NO-GO khi: COPILOT_USERS PRESENT nhưng KHÔNG có COPILOT_COMPANY
+7.4 NOT RUN (ngoài scope debug, có bằng chứng gián tiếp): ERPNext thật chưa
+    chạm — 0 WRITE, 0 dữ liệu thật bị tạo/sửa; validation WRITE thật để
+    sau khi user restart đúng env (probe QUOTation dry-run/validation path
+    nếu cần, §12 của debug doc).
+7.5 Security: credentials đã nằm plaintext trong shell history + issue6.md
+    dạy dán secret vào file — KHÔNG in lại giá trị nào; khuyến nghị
+    ROTATE/REVOKE ngay sau khi deployment hết lỗi (đúng review1).
+```
+
+## 8. Security check
+
+- No credentials exposed in logs/report — chỉ PRESENT/ABSENT + tên biến; giá trị duy nhất được in là `COPILOT_COMPANY` (không phải secret, đúng luật §3 của debug doc).
+- No mock fallback — máy debug chỉ chạy probe + unit hermetic; **không** chạy suite với env REAL; production vẫn REAL ERPNext.
+- No authorization bypass — 0 dòng production code thay đổi; company scope vẫn fail-closed (17/17 p8 xanh).
+
+## 9. Final recommendation
+
+```text
+DO NOT FIX YET (code) — chạy 7.3 trên máy user để chốt bằng chứng process-env
+(AC1 cần 1 đọc trực tiếp, hiện đang suy từ T3 + review1).
+FIX NOW (deployment, sau 7.3): chọn cấu hình A hoặc B (§6) + startup command
+duy nhất có --env-file (hoặc source .env trong subshell) → restart → probe
+lại câu "báo giá …" trên app. Sau đó: rotate ERPNext credentials đã expose.
+```
+
+## 10. Ghi chú cho docs sau này (không sửa trong result này)
+
+- `faq.md` §6.13 cần bổ sung đúng 1 ý: "Node không tự đọc `.env`; nếu start bằng `npm run start:ask` thì phải thêm `--env-file` hoặc export từ shell/service."
+- `issue6.md` đã được review1 bác bỏ 1 phần; với phát hiện H4, câu sửa đúng là: *`COMPANY_SCOPE_REQUIRED` chỉ xảy ra ở multi-user; nếu chạy single-tenant thì thiếu `COPILOT_COMPANY` chỉ WARN — nên sửa là "đảm bảo process nhận được `COPILOT_COMPANY` (hoặc company trong `COPILOT_USERS`) qua đúng cơ chế nạp env của lệnh khởi động".*
+
+— Hết result78 —

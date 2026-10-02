@@ -1,0 +1,131 @@
+result93.txt — next8 / PHASE 7 PURCHASE VERTICAL — TIẾP TỤC (regression → falsify → VÒNG THẬT → sổ sách)
+Ngày: 2026-10-01 · Lệnh owner: tiếp tục Phase 7 — chỉ implement phần THIẾU; test + falsify F1–F6 +
+1 vòng nháp thật; sổ sách; DỪNG — KHÔNG tự commit (vùng TIỀN + KHO).
+
+════════════════════════════════════════════════════════════════════════════
+§1. REGRESSION ĐỦ SUỐT — 2 fix pin
+════════════════════════════════════════════════════════════════════════════
+
+- `test/safety-gateway.test.mjs` invariant "write path referenced from exactly one module — the
+  gateway": actual có `skills/purchase-invoice-write.mjs`, expected (hardcode) chưa có ⇒ THÊM vào
+  EXPECTED set + comment Phase 7 (đúng quy trình Phase 6 thêm `sales-write.mjs`) ⇒ 10/10.
+- `test/correlation-field-migration.test.mjs`: doctypeset pin thiếu `Purchase Invoice` (WRITE thứ 11
+  trong contract) ⇒ THÊM + comment (M1 là thứ 10) ⇒ 2/2.
+- Node FULL sau 2 fix: **1095 tests / 1093 pass / 2 fail** — 2 fail ĐÚNG baseline env dsh
+  (`dshGatewayHealth` + `verifyDshRuntime`).
+- Flutter FULL: **449 pass / 3 fail** (3 fail ĐÚNG baseline `_probe_review_test.dart` untracked) ·
+  `flutter analyze` **1 warning** ĐÚNG baseline (`_probe_b0_voice_autosend.dart:50 _onStatus`).
+
+════════════════════════════════════════════════════════════════════════════
+§2. FALSIFY F1–F6 — harness mới `.plan/next8/_falsify_phase7.mjs`
+════════════════════════════════════════════════════════════════════════════
+
+Mô hình harness Phase 6 (mutate bytes → chạy `--test-name-pattern` chỉ test pin → RED → restore từ
+backup → sha256 trước/sau). 7 mutation (F5 tách thành F5 ngân quỹ + F5b company scope):
+
+| # | Mutation | Test broke |
+|---|---|---|
+| F1 | THÊM export `allocateAdvanceAcrossSupplierInvoices()` — partial-allocate path plan §14 cấm | "falsify pin F1: there is NO partial-allocation-by-supplier-invoice path" |
+| F2 | `DIRECTION_SPEC.pay.party_type` suy từ TÊN (label pattern-match ⇒ "Customer") | "falsify pin F3" (party_type ≠ Supplier) |
+| F3 | `DIRECTION_SPEC.pay.payment_type` = "Receive" | "falsify pin F3" |
+| F4 | credit thành kênh `payment_methods` thứ 2 (money-IN) | "§31 payable remainder: credit = purchase_total − paid, a NUMBER (falsify F4)" |
+| F5 | §6.2 sai loại tài khoản ⇒ fallback `want[0]` thay vì BLOCK | "§31 account-type mismatch: a cash account offered for a BANK intent is refused (§6.2)" |
+| F5b | company scope: đoán dòng Company ĐẦU TIÊN khi không pin + site không default | "company scope (F5): several companies … ⇒ REFUSE, never guess" |
+| F6 | `MAX_METHODS_PER_TRANSACTION = 2` + boundary purchase `> 3` (CẢ HAI gate cùng nới) | "§31 cash+bank: TWO methods in one command are REFUSED (falsify F6, §6.1)" |
+
+KẾT QUẢ: **RED 7/7 · restore byte-identical 7/7**. Re-run sau fix §3 ⇒ vẫn 7/7 (anchors giữ nguyên).
+
+════════════════════════════════════════════════════════════════════════════
+§3. VÒNG NHÁP THẬT (site `frontend`) — 2 lần ĐỎ LỘ 2 GAP THẬT, lần 3 XANH
+════════════════════════════════════════════════════════════════════════════
+
+Harness mới `.plan/next8/_probe_purchase_real_round.mjs` (mode read/run/delete/peek/show) +
+`.plan/next8/_run_probe_with_nlp.sh` (NLP bridge phải sống CÙNG tiến trình gọi probe — tool reaps
+children giữa các lần gọi terminal; setsid trong script). Recon READ-ONLY đo được: Company MP
+`default_payable_account=2110 - Phải trả người bán - MP` · `default_inventory_account=1410 - Hàng
+tồn kho - MP` · `Buying Settings` SINGLE `buying_price_list="Standard Buying"` · CAM-HEO-25KG
+`Standard Buying 295.000/Bao` (vs Selling 320.000) · 48 supplier (không ai có default_price_list) ·
+baseline **PI 65/0 · PE 316/17**.
+
+**GAP 1 (schema site) — lần 1 ĐỎ, 0 chứng từ:** `/ask "nhập hàng từ …"` ⇒ ticket `screen=purchase`
+THẬT (routing owner decision A xanh trên site) ⇒ `/purchase/propose` 200 (giá mua 295.000, cash
+1110, credit 195.000) ⇒ `/execute` **500**: once-only probe `doc_list Purchase Invoice` field
+`custom_ai_action_id` ⇒ **HTTP 417 "Trường không được phép trong truy vấn"** — executor fail-closed
+ĐÚNG thiết kế (suite correlation-field-migration tồn tại cho đúng việc này). Migration
+`scripts/add-correlation-field.mjs` (operator step, idempotent, derivation từ contract — PI tự vào
+scope khi capability khai báo): `--plan-only` phủ PI · `--dry-run` xác nhận THIẾU ⇒ **HỎI OWNER
+(quyết schema site) ⇒ owner OK** ⇒ chạy thật: tạo `Purchase Invoice-custom_ai_action_id`
+Data/unique=1/search_index=1 + dry-run lại "ĐÃ CÓ".
+
+**GAP 2 (bug code + mock nói dối) — lần 2 ĐỎ, PI ghi / PE từ chối:** `/execute` 503
+`PAYMENT_ACCOUNT_UNRESOLVED` "chưa xác định được tài khoản Payable … cho phiếu trả trước" ·
+`retry_same_command_id=true`. ĐO site (`/tmp/probe_acc.mjs`): `2110` = **root_type Liability /
+account_type Payable** · `1310` = **Asset / Receivable**. Nguyên nhân gốc:
+`listCompanyAssetLeaves` hardcode `root_type: "Asset"` ⇒ anchor hướng Pay (Liability) VÔ HÌNH.
+Mock NÓI DỐI: `erpnext_account_list` accept + ignore `root_type` (comment cũ "every fixture account
+IS an asset") ⇒ suite xanh trong khi site đỏ. **Sửa 3 lớp:**
+  (a) `payment-write.mjs` — `DIRECTION_SPEC` += `anchor_root_type` ("Asset"/"Liability") ·
+      `listCompanyAssetLeaves(mcp, company, rootType="Asset")` tham số hoá ·
+      `resolveAdvanceAccounts` truyền `spec.anchor_root_type` (money-side vẫn Asset — đúng, tiền
+      mặt/ngân hàng là Asset cả 2 hướng).
+  (b) `mock-server.mjs` — fixture `ACCOUNTS` có `root_type` khớp site; `erpnext_account_list`
+      HONOR `root_type` (bỏ comment "ignored").
+  (c) Suite lại: purchase 20/20 · sales-vertical 20/20 · collect-05b 12/12 · capability-gate 5/5 ·
+      FULL **1095/1093/2** · falsify re-run **7/7**.
+  Orphan lần 2: PI `ACC-PINV-2026-00075` (đúng shape executor) — plain DELETE dính `LinkExistsError`
+  (automation site gắn Audit Issue/PLE/GL) ⇒ `_probe_cascade_delete.mjs` peel **9 rows** (2 AI +
+  2 PLE + 5 GL) rồi DELETE ⇒ 404.
+
+**Lần 3 — XANH end-to-end qua chuỗi chat thật:**
+- `/ask "nhập hàng từ Đại lý Cám Bình Dương"` ⇒ ticket `screen=purchase` ·
+- `/purchase/propose` 200: 1 Bao CAM-HEO-25KG — **giá MUA 295.000/Bao từ `Standard Buying`**
+  (không đụng giá bán 320.000) · cash `1110 - Tiền mặt - MP` (§6.2) · total 295.000 · paid 100.000 ·
+  **credit 195.000** · summary `outstanding_after_vnd=195.000`;
+- `/execute` **200 ok=true replay=false**:
+  **PI nháp `ACC-PINV-2026-00075`** — docstatus 0 · supplier `Đại lý Cám Bình Dương` ·
+  `update_stock=1` · `credit_to=2110` (từ Company default) · dòng `price_list_rate = rate =
+  295.000` · warehouse `Kho Cám - MP` · `expense_account=1410` · cost_center `Main - MP` ·
+  `grand_total=295.000` · `custom_ai_action_id=act_d3ca0c71…` ·
+  **PE nháp `ACC-PAY-2026-00777`** (chế độ b trả trước) — `payment_type=Pay` ·
+  `party_type=Supplier` · `paid_from=1110` (tiền RA khỏi ngân quỹ) · `paid_to=2110` ·
+  `paid_amount=unallocated_amount=100.000` · **`references=[]`** (0 dòng gạch nợ) ·
+  `mode_of_payment=Cash` · `reference_no=<command_id>:advance` · docstatus 0;
+- Verify REST (§5 checklist) ĐỦ FIELD trên cả hai;
+- Cleanup: PE DELETE attempt 1, PI DELETE attempt 1 (cascade harness) ⇒ 404 cả hai ⇒
+  **baseline khớp tuyệt đối PI 65/0 · PE 316/17**.
+
+════════════════════════════════════════════════════════════════════════════
+§4. RANH GIỚI + CÒN MỞ
+════════════════════════════════════════════════════════════════════════════
+
+- Ranh giới giữ nguyên: KHÔNG submit · KHÔNG partial allocate · KHÔNG capability payment mới (dùng
+  lại `payment.create` nhánh Pay) · `/execute` cửa ghi DUY NHẤT · số tiền COPY từ ERPNext ·
+  chỉ xoá chứng từ CỦA MÌNH (action id — tên chứng từ bị site TÁI DỤNG: PI/PE mới mang đúng tên
+  vòng cũ, F-P5-4 tái hiện lần 3).
+- Vòng thật chỉ chạy cash advance (owner cho ĐÚNG 1 vòng); bank advance cover mock-side (§31 bank).
+- **CHỜ OWNER COMMIT**: Phase 7 toàn bộ + 2 file test pin + fix root_type (vùng TIỀN + KHO).
+  Nhóm collect-05b follow-up cũ VẪN chờ commit riêng, không trộn.
+- Sổ sách: `.plan/next8/phase7-result.md` + tick `openspec/changes/next8-purchase-vertical/tasks.md`
+  + `working.md` (2026-10-01). Python KHÔNG đổi.
+
+════════════════════════════════════════════════════════════════════════════
+§5. COMMIT (lệnh owner cuối phiên: "COMMIT Phase 6 + Phase 7 (+ 05b còn unstaged)
+    vùng tiền/kho · stage tường minh · message tách hoặc 1 commit rõ
+    feat(next8): sales+purchase vertical · không force-push · không Phase 8 · báo hash")
+════════════════════════════════════════════════════════════════════════════
+
+- **1 commit**: `bab7387` — `feat(next8): purchase vertical — draft Purchase Invoice + advance Pay,
+  purchase screen/routing, 05b follow-up fixes [VÙNG TIỀN]` — **46 file, 11.955 insertions / 55 deletions**.
+  Full SHA: `bab738775768d4ed1eb79331ae97a5fd6ca22b94`. KHÔNG push (repo không có remote — xem
+  result90 §"git remote -v"), KHÔNG force-push, KHÔNG submit, KHÔNG Phase 8.
+- Vì sao GỘP 1 commit thay vì tách 05b/Phase 7: `mcp-erpnext/src/skills/payment-write.mjs` chứa
+  ĐỒNG THỜI cả 05b FINDING 2 (cảnh báo lệch nhãn/loại) và fix Phase 7 (`anchor_root_type`) ⇒ không
+  tách được theo file; message nêu rõ cả hai phần.
+- Stage TƯỜNG MINH (không `git add -A`): 22 file tracked-modified + 24 file mới
+  (purchase skill/test/feature, 8 test pin cập nhật, golden-dataset, 2 openspec change dirs).
+  Kiểm trước khi commit: **`.env` KHÔNG bị stage (grep = 0)** · không `.g.dart`/`node_modules`/`build/`
+  (đều gitignored) · không `.plan/`/`.agents/`/sổ sách (`result*.txt`, `working.md` — untracked cố ý) ·
+  secret scan trên `git diff --cached` = **sạch**.
+- Sổ sách (untracked, KHÔNG vào commit): `working.md` + `result93.txt` + `.plan/next8/phase7-result.md`
+  đã ghi hash `bab7387`. Skill `.agents/skills/erpn-verify-first/SKILL.md` cập nhật bài học root_type
+  Asset/Liability + bẫy mock bỏ qua `root_type` (`.agents/` gitignored — không vào commit).

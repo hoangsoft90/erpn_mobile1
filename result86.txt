@@ -1,0 +1,94 @@
+================================================================================
+result86.txt — next8 / PHASE 2 — COMMIT (owner cho phép) · KHÔNG push
+Ngày: 2026-09-30 · Người chạy: agent
+Owner chốt: D5 = chấp nhận unit test (bỏ qua ảnh) · COMMIT = CÓ · PUSH = KHÔNG
+Phạm vi owner chọn: "Phase 1 + Phase 2 liên quan" (repo chưa có commit nào ⇒ không full snapshot)
+================================================================================
+
+§0. GIT STATE TRƯỚC COMMIT
+--------------------------------------------------------------------------------
+- git rev-parse --is-inside-work-tree → true
+- git rev-list --all --count → 0  (CHƯA có commit gốc) · git remote -v → trống
+- git status --porcelain → 182 mục untracked
+⇒ Không có baseline để stage incremental; owner đã chốt phạm vi file.
+
+§1. STAGE TƯỜNG MINH — 40 FILE
+--------------------------------------------------------------------------------
+Server (Phase 2 + Phase 1 liên quan):
+  mcp-erpnext/src/skills/sales.mjs
+  mcp-erpnext/src/skills/customer.mjs
+  mcp-erpnext/src/skills/accounts.mjs
+  mcp-erpnext/src/skills/payment-write.mjs
+  mcp-erpnext/src/read-views.mjs
+  mcp-erpnext/src/router.mjs
+  mcp-erpnext/src/mock-server.mjs
+  mcp-erpnext/src/http-ask.mjs
+  mcp-erpnext/src/copilot-server.mjs
+  mcp-erpnext/src/capability-contract.mjs
+  mcp-erpnext/src/business-handoff.mjs          (Phase 1 dep)
+  mcp-erpnext/src/transaction-draft.mjs         (Phase 1 dep)
+  mcp-erpnext/capabilities.json
+  mcp-erpnext/test/next8-collect-reads.test.mjs
+  mcp-erpnext/test/next8-collect-accounts.test.mjs
+  mcp-erpnext/test/next8-collect-propose.test.mjs
+  mcp-erpnext/test/next8-collect-handoff.test.mjs
+  mcp-erpnext/test/next8-collect-draft.test.mjs
+  mcp-erpnext/test/a1-read-drilldown.test.mjs
+Flutter:
+  apps/mobile/lib/features/collect/application/collect_controller.dart
+  apps/mobile/lib/features/collect/data/collect_models.dart
+  apps/mobile/lib/features/collect/data/collect_repository.dart
+  apps/mobile/lib/features/collect/presentation/screens/collect_screen.dart
+  apps/mobile/lib/features/collect/presentation/widgets/account_picker.dart
+  apps/mobile/lib/features/collect/presentation/widgets/collect_summary.dart
+  apps/mobile/lib/features/collect/presentation/widgets/invoice_allocation_tile.dart
+  apps/mobile/lib/features/collect/presentation/widgets/payment_method_section.dart
+  apps/mobile/lib/app/router/app_router.dart
+  apps/mobile/lib/features/chat/data/chat_models.dart
+  apps/mobile/lib/features/chat/data/copilot_api_client.dart
+  apps/mobile/lib/features/chat/presentation/screens/chat_screen.dart
+  apps/mobile/test/collect_screen_test.dart
+  apps/mobile/test/next8_collect_data_test.dart
+OpenSpec:
+  openspec/changes/next8-collect-contract/{proposal.md,tasks.md,specs/transaction-contract/spec.md}
+  openspec/changes/next8-collect-screen/{proposal.md,tasks.md,specs/collect-screen/spec.md,specs/invoice-reads/spec.md}
+
+BANNED CHECK (bắt buộc RỖNG) → CLEAN:
+  không `.plan/`, `.env`, `_probe_*.dart`, `*.g.dart` (gitignored, CI tự build_runner),
+  `node_modules`, `.agent_sessions/`, build artifacts.
+
+SECRET SCAN → không có giá trị bí mật (chỉ khớp tên biến/comment: `ERPNEXT_API_KEY`,
+`token` nghĩa NLP, `authPassword`...).
+
+§2. COMMIT
+--------------------------------------------------------------------------------
+$ git commit -m "feat(next8): collect screen — ... [VÙNG TIỀN] ..."
+→ [master (root-commit) 16c17fa] feat(next8): collect screen — màn thu tiền với dữ liệu
+  đọc company-scoped, form 1 phương thức [VÙNG TIỀN]
+  40 files changed, 21838 insertions(+)
+
+HASH:
+  full  = 16c17fa2f6d67029d21f624c874db18b32d5a332
+  short = 16c17fa
+
+Message bám `.plan/next8/commit-message-phase2.txt` (ghi rõ VÙNG TIỀN + không nới lock
++ danh sách cố ý KHÔNG làm: §6.2, gỡ 422, references[] đa dòng, split N PE).
+
+§3. PUSH = KHÔNG
+--------------------------------------------------------------------------------
+- KHÔNG chạy `git push` (owner chốt PUSH = KHÔNG). Không force-push.
+
+§4. D5 (UI-checkpoint)
+--------------------------------------------------------------------------------
+- Owner chốt: chấp nhận **unit test T1–T20 + T6**, **bỏ qua ảnh** ⇒ D5 PASS (b).
+- Không có ảnh trong hồ sơ; bằng chứng thay thế = result84/85 (22/22 + 16/16 + 50/50).
+
+§5. FILE ĐỤNG PHIÊN NÀY
+--------------------------------------------------------------------------------
+- result86.txt (mới) · .plan/next8/phase2-result.md (§9.5 + bảng DoD §2) · working.md (mục 30).
+- Commit 16c17fa (40 file ở §1). KHÔNG push.
+
+================================================================================
+Phase 2 ĐÓNG FORMAL: verify xanh · D5 PASS (b) · commit 16c17fa · KHÔNG push.
+KHÔNG mở Phase 3.
+================================================================================

@@ -1,0 +1,494 @@
+================================================================================
+result89.txt — next8 / PHASE 5: COLLECT ACCEPTANCE + 1 VÒNG THẬT (NHÁP)
+================================================================================
+Ngày: 2026-09-30 · Agent (Buffy) · Kế hoạch: .plan/next8/phases/phase-05-collect-acceptance.md
+Owner đã cho phép TRONG PHIÊN (văn bản): "CÓ — khách/HĐ/số tiền ≤100k" cho ĐÚNG 1
+vòng ghi NHÁP trên site thật. CẤM submit · CẤM sửa code để test xanh · CẤM tự commit.
+Trạng thái cuối: ĐÃ CHẠY XONG vòng thật + ma trận + regression; CLEANUP BỊ CHẶN
+⇒ DỪNG, chờ owner (mục §4/§8).
+
+--------------------------------------------------------------------------------
+§0. PHẠM VI ĐÃ LÀM (đối chiếu §2/§3 của phase-05)
+--------------------------------------------------------------------------------
+[ĐÃ LÀM]
+  (1) Ma trận acceptance §29 A–D (+E) — mỗi ca có PASS/FAIL + bằng chứng       → §2
+  (2) ĐÚNG 1 vòng REAL có kiểm soát (nháp): handoff → propose → confirm →
+      /execute ⇒ PE docstatus=0, đọc lại đủ field mapping, kiểm GL/AR        → §3
+  (3) Regression Node full / Flutter full+analyze / Python / cụm next6-9     → §5
+  (4) resultNN + phase5-result.md + working.md                               → §7
+[KHÔNG LÀM — ĐÚNG YÊU CẦU]
+  · KHÔNG submit chứng từ thật (Phase 9 Go/No-Go).
+  · KHÔNG sửa 1 dòng code sản phẩm nào (0 file trong src/, lib/, test/ bị đổi).
+  · KHÔNG commit.
+  · KHÔNG tạo khách/hóa đơn test mới trên site.
+[CHƯA XONG — BỊ CHẶN NGOÀI TẦM TAY]
+  · Cleanup chứng từ nháp: Frappe TỪ CHỐI xoá (LinkExistsError) — xem §4.
+    ⇒ mục DoD "vòng thật + cleanup sạch" CHƯA đóng được. CẦN quyết định owner.
+
+"""
+
+================================================================================
+§1. MÔI TRƯỜNG ĐO
+================================================================================
+· Node v24.21.0 · Python 3.12.3 · Flutter 3.47.x (tại /google/flutter/bin).
+· Site thật: host prevail-pantyhose-overvalue.ngrok-free.dev (ngrok → frappe_docker).
+  frappe 16.17.2 · erpnext 16.16.0 · app: camvlxd 0.1.0, custom_app 1.0.0-beta,
+  erp_workflow 0.0.1, feed_dealer 0.0.1.
+· Xác thực: token từ `.env` (ERPNEXT_URL/ERPNEXT_API_KEY/ERPNEXT_API_SECRET) — chỉ
+  TÊN biến được in, KHÔNG in giá trị. `frappe.auth.get_logged_user` → Administrator.
+· COPILOT_COMPANY = "Minh Phát Cám & VLXD" (khớp company có hoá đơn mở).
+· AgentMemory (:3111) / cocoindex / codebase-memory-mcp / OCR / Simplenote: KHÔNG
+  khả dụng trong phiên ⇒ Bước 3 retrieval + các tool đó bị bỏ qua; Code Review chạy
+  thủ công. KHÔNG tự cài/khởi động lại service nào.
+· Test wrapper: `cd mcp-erpnext && npm test` = `COPILOT_MOCK_OK=1 node --test`
+  (chạy `node --test` trần sẽ ra ERPNEXT_NOT_CONFIGURED 500 ở mọi chỗ).
+
+================================================================================
+§2. MA TRẬN ACCEPTANCE §29 (plan1_final_v2 §29 A–D + E)
+================================================================================
+Ký hiệu: PASS = có ca test pin đúng hành vi · PASS-EQ = ca tương đương (cùng
+nhánh code) nhưng KHÔNG có test riêng tên đó (lý do ghi rõ) · N/A-with-reason.
+Bằng chứng chạy trong phiên (mục §5): cụm collect 214/214 · cụm next6-9 178/178 ·
+Flutter cụm collect 84/84.
+
+--- A. HANDOFF (8 ca) ---
+A1 đủ slot → PASS · `next8-collect-propose.test.mjs`: "the ticket opens the form:
+   propose returns the ordinary proposal object" + vòng THẬT propose 200 (§3.3).
+A2 thiếu số tiền → PASS · `next8-collect-propose`: "a routed collect sentence missing
+   its amount yields a ticket, not a dead end" · Flutter `collect_screen_test` T2
+   ("amount slot RESOLVED but no figure travels — the amount field starts EMPTY").
+A3 thiếu khách → PASS · Flutter `collect_screen_test` T3 ("MISSING customer — no read
+   issued, confirm blocked").
+A4 khách mơ hồ → PASS · `collect_screen_test` T4 ("AMBIGUOUS customer — the ticket
+   candidates are SHOWN, none auto-picked") · `next8-d4-acceptance` T13.
+A5 không tìm thấy → PASS · `collect_screen_test` T5 ("NO_MATCH customer — refusal
+   copy, no invoice list, confirm blocked") · `next8-d4-acceptance` T5.
+A6 sai principal/session → PASS · `next8-collect-handoff.test.mjs` (c)+(d) "ownership
+   is principal AND conversation bound" · `next8-collect-propose`: "a fabricated,
+   foreign-principal or foreign-conversation ticket is refused the same way".
+A7 handoff cũ → PASS · `next8-collect-handoff` (b) "a fabricated handoff id is refused
+   like an expired one" + (d2) TTL expiry · `collect_screen_test` T16 (STALE_HANDOFF,
+   server copy shown verbatim, no resubmit).
+A8 user sửa prefill → PASS · `next8-collect-propose`: "the form's values are
+   re-validated server-side: the lock holds even if the client ignores it" ·
+   `collect_screen_test` T15b ("re-resolving clears every allocation").
+
+--- B. INVOICE ALLOCATION (15 ca) ---
+B1 0 hoá đơn ⇒ on-account hợp lệ (lock §6.3) → PASS · `next8-collect-draft.test.mjs`:
+   "the on-account draft (0 open invoices) is legal and reads as unallocated money" ·
+   Flutter T6 ("ZERO open invoices — on-account allowed with its copy (lock 6.3)").
+B2 1 hoá đơn đủ → PASS · Flutter T7 ("one invoice, paid in full — allocated equals
+   outstanding").
+B3 1 hoá đơn một phần → PASS · Flutter T8 ("one invoice, part payment — remaining
+   shown") + VÒNG THẬT: dòng `ACC-SINV-2026-01288` allocated 50.000 / outstanding
+   320.000 (§3.4).
+B4 2 hoá đơn một phần → PASS · `next8-collect-execute.test.mjs` "propose two invoices
+   ⇒ confirm writes ONE draft with a row per invoice" · VÒNG THẬT: 2 dòng references
+   (30.000 + 50.000) (§3.4) · Flutter T9.
+B5 3 hoá đơn (1 không đụng) → PASS-EQ · không có test riêng "chọn 2 của 3"; cùng
+   nhánh code với B4 (allocations là danh sách user chọn, KHÔNG có helper tự chọn —
+   tripwire `next8-collect-draft`: "no auto-allocation helper exists anywhere in the
+   module"). Bằng chứng dữ liệu thật: site có khách 3 hoá đơn mở
+   (`Khách smoke 2026-09-13-p1done`: 89k+90k+90k) và đường đọc trả đủ cả 3
+   (`next8-collect-server-validation` §5.1(c)/(d)). GAP ghi nhận: chưa có E2E 2-của-3.
+B6 vượt outstanding → PASS · `next8-collect-server-validation` "§5.4 #4 an allocation
+   over the live remainder is refused" · `payment-write` "an allocation above the LIVE
+   remainder is REFUSED (the proposal's number is only a snapshot)" · Flutter T10.
+B7 0 đồng → PASS · `next8-collect-draft`: "primitives refuse malformed money (integer
+   VND only)" · Flutter T11 ("zero amount — inline error and blocked submit").
+B8 âm → PASS · cùng primitives (integer VND) · `payment-write` "an invalid amount is
+   refused and NEVER promoted to the full debt".
+B9 hoá đơn hết nợ → PASS · `next8-collect-server-validation` "§5.4 #3 an invoice fully
+   covered by an open draft is INVOICE_ALREADY_PAID" · `next8-collect-execute` "an
+   allocated invoice that stopped being receivable is REFUSED" · Flutter T13.
+B10 hoá đơn của khách khác → PASS · `next8-collect-server-validation` "§5.4 #2 an
+   invoice of another customer is NO_MATCH" · `next8-collect-execute` "an allocation
+   tampered to ANOTHER customer's invoice is refused, nothing written".
+B11 trùng hoá đơn → PASS · `next8-collect-server-validation` "§5.4 #4 the same invoice
+   twice is a DUPLICATE_ALLOCATION".
+B12 >10 hoá đơn vẫn thấy total thật → PASS (cũng là 1 trong 4 lock của owner) ·
+   `next8-collect-server-validation` "§5.1(c) a customer with more invoices than the
+   screen shows reports the REAL total" + "§5.1(d) 179 invoices are read whole and an
+   offset selects a later slice" · Flutter T14 ("12 invoices — 10 shown, honest "còn
+   N", search narrows via q").
+B13 "Thu anh Ba 3 triệu" KHÔNG tự phân bổ → PASS · `next8-collect-draft` TRIPWIRE
+   "no auto-allocation helper exists anywhere in the module (plan §2.1(11)/§8.2/§9)"
+   (quét source sau khi strip comment) · Flutter T9 ("two invoices stay UNTICKED until
+   the user ticks").
+B14 thứ tự hiển thị KHÔNG tạo phân bổ ngầm → PASS · cùng tripwire + Flutter T9/T19.
+B15 ≥1 hoá đơn mà không gạch cái nào ⇒ từ chối (lock §6.3) → PASS ·
+   `next8-collect-server-validation` "§5.4 #5 open invoices with an empty allocation
+   list is MISSING_REQUIRED_FIELD" · Flutter T19.
+
+--- C. PAYMENT METHODS (13 ca) ---
+C1 chỉ cash → PASS · `next8-collect-server-validation` "§6.2 a cash method with no
+   explicit account uses the company's CASH default" · site thật khai
+   `default_cash_account = 1110 - Tiền mặt - MP`.
+C2 chỉ bank → PASS · "§6.2 a bank method resolves to the BANK default, never the cash
+   ledger" · VÒNG THẬT: `paid_to = 1210 - ACB 110296868 - MP` (§3.4).
+C3 cash+bank ⇒ UI không cho gộp (lock §6.1) → PASS · Flutter T20 ("the UI cannot
+   combine cash AND transfer — one segmented value + the lock copy") ·
+   `next8-collect-draft`: "lock §6.1 — exactly ONE payment method per collect,
+   enforced server-side" · `payment-write`: "Phase 4 lock §6.1 — a confirmation
+   carrying TWO payment methods is REFUSED, nothing written".
+C4 2 dòng cash ⇒ chặn → PASS-EQ · không có ca "2 dòng CÙNG cash" riêng; luật
+   `MAX_METHODS_PER_TRANSACTION = 1` chặn MỌI trường hợp ≥2 dòng bất kể mode, đã pin
+   ở 3 nơi (draft · payment-write §6.1 · Flutter T20).
+C5 2 dòng bank ⇒ chặn → PASS-EQ · cùng lý do như C4 (luật đếm, không phân biệt mode).
+C6 thiếu tài khoản → PASS · `next8-collect-server-validation` "§6.2 with no explicit
+   account and no matching default the answer is BLOCK".
+C7 cash với tài khoản bank ⇒ chặn → PASS · "§5.4 #7 a wrong-typed account is
+   ACCOUNT_TYPE_MISMATCH, never substituted" · Flutter T17.
+C8 bank với tài khoản cash ⇒ chặn, KHÔNG fallback 1110 (lock §6.2) → PASS ·
+   "§6.2 a bank intent cannot be satisfied by a Cash-type account (the removed
+   fallback)" + "a company with no CASH-type account is REFUSED, never silently
+   posted to a BANK account" · + VÒNG THẬT: ý định bank ra 1210, KHÔNG ra 1110 (§3.4).
+C9 tài khoản company khác ⇒ chặn → PASS · "§5.4 #7 an account of another company
+   cannot be used" · `next8-collect-accounts` "wrong company reads nothing of the
+   pinned one".
+C10 0 đồng → PASS · `safety-gateway.test.mjs` "amount policy comes from the contract
+   (zero/negative/full-balance are declared)" + "amount policy: an OMITTED amount is
+   refused at the boundary".
+C11 âm → PASS · cùng 2 test C10 + `next8-collect-draft` primitives.
+C12 tổng phương thức ≠ tổng gạch nợ → PASS · `next8-collect-draft`: "the whole draft:
+   totals must match, and a client's total is only ever a claim" ·
+   `next8-collect-server-validation` "§5.5(c) a mismatch between allocations and the
+   payment total is refused" · Flutter T12.
+C13 tài khoản mặc định sửa được & server kiểm lại → PASS · Flutter `account_picker.dart`
+   + T17 ("method without a correctly-typed account — blocked with its own copy, never
+   a cash fallback") · server: tài khoản user chọn phải tồn tại + đúng company + đúng
+   `account_type`, sai ⇒ ACCOUNT_TYPE_MISMATCH/PAYMENT_ACCOUNT_UNRESOLVED
+   (`payment-write` "an account named in the proposal is CHECKED, never obeyed").
+
+--- D. PROPOSAL / EXECUTE (8 ca) ---
+D1 user đổi số sau prefill → PASS · `next9-execute-binding.test.mjs` "prompt-2 §1 —
+   context changes AFTER the proposal: the execute still binds X" ·
+   `proposal-freshness.test.mjs` "drift: the debt changed after the proposal".
+D2 user đổi hoá đơn → PASS · `next8-collect-server-validation` "§5.5 the executor
+   reads its anchors by allocation ID, never by `params.invoice`" (ca dụ: `params.invoice`
+   là chuỗi hiển thị giả, executor vẫn đọc `SINV-A`).
+D3 context đổi sau proposal → PASS · `next9-execute-binding` §1 + "context RESET
+   between ask and execute changes nothing".
+D4 execute vẫn dùng id của proposal → PASS · như D2 + `next8-collect-execute` (mọi
+   `erpnext_doc_get` theo `allocations[].invoice_id`).
+D5 double confirm → PASS · `next8-collect-execute`: "confirming the SAME command_id
+   twice REPLAYS: still one document" · `http-execute.test.mjs`: "happy path +
+   duplicate command_id replays with ONE mock write" · Flutter T18 (in-flight guard,
+   1 request).
+D6 retry mạng → PASS · `next8-collect-execute` CHAOS: "a LOST response after the
+   commit ⇒ 503, queued, and the retry reconciles to ONE document" (đọc `/jobs`) ·
+   `p9-pay` "P9-C E2E /execute CHAOS: a LOST RESPONSE after a pay-out reconciles
+   instead of paying twice".
+D7 replay cùng action → PASS · `http-execute`: "a second command_id for the SAME
+   (customer, invoice) is refused while one is in flight" · `payment-write`: "P4
+   idempotency intent is NOT customer+amount — the same customer/amount on a
+   DIFFERENT invoice is a different action".
+D8 outstanding đổi giữa form và execute → PASS · `next8-collect-execute`: "the debt
+   MOVED between propose and confirm ⇒ PROPOSAL_STALE, nothing written" ·
+   + VÒNG THẬT: propose trừ nháp đang phủ (84.000 → 54.000) rồi executor đọc lại
+   từng hoá đơn (§3.3/§3.4).
+
+--- E. REAL ERPNext (6 ca) ---
+E1 tạo → PASS · VÒNG THẬT: PE `ACC-PAY-2026-00775`, docstatus 0 (§3.3/§3.4).
+E2 submit theo policy → N/A CÓ LÝ DO · phase-05 §3 CẤM submit (submit = Phase 9
+   Go/No-Go). Không thực hiện đúng như plan.
+E3 verify → PASS · VÒNG THẬT đọc lại bằng API thật và đối chiếu đủ bảng mapping
+   (§3.4) + đường verify trong sản phẩm (`payment-write` "the write is verified by
+   reading the document BACK") đã chạy thật trong vòng này.
+E4 ERP unavailable → PASS-EQ · không thể chủ động làm site thật chết (và không nên);
+   cùng nhánh code được pin bằng fault-injection: `next8-collect-propose` "§5.4 #8 an
+   unreadable ERPNext is fail-closed: ERP_UNAVAILABLE + no proposal (never a 0)" ·
+   `p9-pay` "P9-D builder: a failed draft read refuses (PAYMENT_ERP_UNAVAILABLE)" ·
+   `mock-optin` "boot: http-ask refuses to START when the config is missing".
+E5 lỗi validation từ ERP → PASS-EQ · không cố tình gửi payload sai lên site thật;
+   pin bằng `payment-write` "P5-2 §4.2 classifySubmitError names the refusal" +
+   "a submit that REPORTS success but leaves docstatus 0 is unverified" +
+   mock fault knobs `MOCK_ERP_FAIL_*`.  Dải thật đã đo được trong vòng này: ERPNext
+   CHẤP NHẬN payload (không có lỗi validation nào để test) — ghi nhận là giới hạn.
+E6 không fallback mock → PASS · `mock-optin.test.mjs`: "structure: the fixture
+   constant is reachable only from the three known files" · "decision: a configured
+   host is NEVER answered from fixtures, reachable or not" · "decision: the fixture
+   requires BOTH absent config AND the exact opt-in" · + VÒNG THẬT: script in
+   `erp_target = REAL` và chứng từ ĐỌC LẠI ĐƯỢC TỪ ERPNext THẬT (§3.4) — mock không
+   thể tạo ra nó.
+
+--- 4 ĐIỂM LOCK CỦA OWNER (phase-05 §8) ---
+L1 (6.1) TM+CK không gộp được → PASS · Flutter T20 + `next8-collect-draft` §6.1 +
+   `payment-write` §6.1 REFUSED.
+L2 (6.2) bank KHÔNG rơi về 1110 → PASS · VÒNG THẬT `paid_to = 1210 - ACB 110296868 - MP`
+   (§3.4) + `§6.2 a bank intent cannot be satisfied by a Cash-type account`.
+L3 (6.3) on-account CHỈ khi 0 hoá đơn mở → PASS · `next8-collect-draft` on-account
+   legal / `§5.4 #5` từ chối khi còn nợ / `payment-write` "§6.3 an advance while the
+   party still owes is REFUSED".
+L4 >10 hoá đơn vẫn thấy total thật → PASS · `§5.1(c)` REAL total + `§5.1(d)` 179
+   hoá đơn đọc hết + Flutter T14.
+
+TỔNG: 44 ca §29(A–D) + 6 ca E = 44 PASS / 4 PASS-EQ / 1 N/A-có-lý-do / 0 FAIL.
+KHÔNG có ca nào ĐỎ. GAP duy nhất: B5 (2-của-3) không có E2E riêng.
+
+================================================================================
+§3. VÒNG THẬT CÓ KIỂM SOÁT (1 vòng, NHÁP) — phase-05 §5
+================================================================================
+§3.1 CÔNG CỤ
+  Harness tạm `mcp-erpnext/scripts/_probe_phase5_real_round.mjs` (untracked, tiền tố
+  `_probe_` ⇒ không bao giờ được stage). Nó chạy CHUỖI THẬT:
+    handoff (ticket server) → POST /collect/propose → POST /execute (ĐÚNG 1 lần)
+  · KHÔNG có đường submit trong file (không gọi tool submit nào; server đóng băng
+    `submitNow=false` cho proposal do màn hình dựng).
+  · Nạp `.env` chỉ 4 key cần (in TÊN, không in giá trị) · xoá `COPILOT_MOCK_OK`,
+    `ASK_USER/PASSWORD/ALLOW_PUBLIC` (bind loopback ⇒ principal "local") · tự khẳng
+    định `erp_target === "REAL"` trước khi chạy.
+  · IdempotencyStore + JobQueue thật trong thư mục tạm.
+
+§3.2 CHỌN MỤC TIÊU (đo LIVE trước khi ghi)
+  · Loại trừ đúng plan §5: KHÔNG dùng khách test-artifact `P1A-ACCEPT` / `P1G-INTEGRITY`.
+  · Lần thử 1: khách "Anh Ba — xây nhà" (2 hoá đơn mở 320k+320k, sạch nháp) ⇒
+    propose trả **404 NO_MATCH** vì khách này KHÔNG nằm trong 100 dòng đầu của
+    `erpnext_customer_list` (tìm ra **F-P5-1**, §6). ⇒ 0 byte được ghi.
+  · Lần thử 2 (bản CHỐT): khách **`lan`** — có trong 100 dòng đầu; 2 hoá đơn mở:
+      ACC-SINV-2026-01285  outstanding 84.000 (Partly Paid)
+      ACC-SINV-2026-01288  outstanding 320.000 (Unpaid)
+    Trong đó 01285 đang bị 3 phiếu NHÁP cũ phủ 30.000 (ACC-PAY-2026-00761/762/765)
+    ⇒ chọn luôn ca này để chứng minh luật trừ nháp trên DỮ LIỆU THẬT.
+  · Số tiền ≤ 100.000đ như owner cho phép: 50.000 + 30.000 = **80.000đ**.
+  · Phương thức: `bank_transfer` để chứng minh lock §6.2 trên site thật.
+
+§3.3 KẾT QUẢ 2 BƯỚC (nguyên văn, đã lược các log mcp-erpnext)
+  /collect/propose → 200
+    · params.allocations[0] = { invoice_id: ACC-SINV-2026-01288, allocated_amount: 50.000 }
+    · params.allocations[1] = { invoice_id: ACC-SINV-2026-01285, allocated_amount: 30.000,
+                                invoiceTotal: 320.000, invoiceOutstanding: 54.000 }
+      ⇒ 84.000 − 30.000 (nháp phủ) = **54.000**: luật P9-D chạy ĐÚNG trên dữ liệu thật.
+    · params.outstanding_vnd = 320.000 · draft_cover_docs = [ACC-PAY-2026-00765,
+      ACC-PAY-2026-00762, ACC-PAY-2026-00761] · mode = "bank_transfer" · submit_now = false
+      · posting_date = "2026-09-30"
+    · summary = "Thu 80000đ từ lan cho ACC-SINV-2026-01288, ACC-SINV-2026-01285"
+    · warnings = ["đã có phiếu thu NHÁP chưa submit (…00765, …00762, …00761) phủ
+      ACC-SINV-2026-01285 30000đ — số còn lại đã trừ phần này"]
+    · summary.allocated_total_vnd = 80.000 · unallocated_vnd = 0 · payment_total_vnd = 80.000
+  /execute → 200 (command_id b9a8e9eb-93cf-47d4-858b-ad73bfcf519f)
+    · result.erpnext_doc = ACC-PAY-2026-00775 · docstatus = 0 · replay = false
+    · paid_vnd = 80.000 · allocated_vnd = 80.000 · unallocated_vnd = 0
+    · invoices = [ACC-SINV-2026-01285, ACC-SINV-2026-01288] · invoice = ACC-SINV-2026-01285
+    · reference_no = b9a8e9eb-93cf-47d4-858b-ad73bfcf519f
+    · action_id = act_eff48ef3-76cf-4c13-8110-97e1100dd68b
+    · mode_of_payment = "Cash"  ← **F-P5-2** (§6): ý định bank nhưng MoP ghi "Cash"
+    · mode_substituted_from = "bank_transfer"
+    · note = "phiếu thu tạo ở trạng thái NHÁP (docstatus 0) — submit là bước riêng"
+
+§3.4 ĐỌC LẠI BẰNG TOOL THẬT + BẢNG MAPPING (phase-05 §5 bước 3)
+  Nguồn: `frappe.client.get` trên Payment Entry ACC-PAY-2026-00775 (lưu /tmp/p5-doc.json).
+  ┌────────────────────────┬──────────────────────────────────────────┬────────┐
+  │ field                  │ giá trị thật                             │ kết quả│
+  ├────────────────────────┼──────────────────────────────────────────┼────────┤
+  │ name                   │ ACC-PAY-2026-00775                       │ ✔      │
+  │ docstatus              │ 0  (NHÁP — KHÔNG submit)                 │ ✔      │
+  │ payment_type           │ Receive                                  │ ✔      │
+  │ party_type             │ Customer                                 │ ✔      │
+  │ party                  │ lan                                      │ ✔      │
+  │ company                │ Minh Phát Cám & VLXD                     │ ✔      │
+  │ paid_from              │ 1310 - Phải thu khách hàng - MP          │ ✔      │
+  │ paid_to                │ 1210 - ACB 110296868 - MP  (BANK)        │ ✔ §6.2 │
+  │ mode_of_payment        │ "Cash"  ← ý định bank_transfer            │ ✘ F-P5-2│
+  │ paid_amount            │ 80.000                                   │ ✔      │
+  │ received_amount        │ 80.000                                   │ ✔      │
+  │ unallocated_amount     │ 0  (= paid − Σ allocated)                │ ✔      │
+  │ difference_amount      │ 0                                        │ ✔      │
+  │ references[]           │ 2 dòng:                                  │ ✔      │
+  │   [0]                  │  Sales Invoice ACC-SINV-2026-01285       │        │
+  │                        │  total 320.000 · outstanding 84.000 ·    │        │
+  │                        │  allocated 30.000                        │        │
+  │   [1]                  │  Sales Invoice ACC-SINV-2026-01288       │        │
+  │                        │  total 320.000 · outstanding 320.000 ·   │        │
+  │                        │  allocated 50.000                        │        │
+  │ custom_ai_action_id    │ act_eff48ef3-76cf-4c13-8110-97e1100dd68b │ ✔      │
+  │ reference_no           │ b9a8e9eb-93cf-47d4-858b-ad73bfcf519f     │ ✔      │
+  │ reference_date         │ 2026-09-30                               │ ✔      │
+  │ posting_date           │ 2026-09-30 (ngày shop)                   │ ✔      │
+  │ source/target_ex_rate  │ 1.0 / 1.0                                │ ✔      │
+  │ owner / creation       │ Administrator / 2026-09-30 12:33:57      │ ✔      │
+  └────────────────────────┴──────────────────────────────────────────┴────────┘
+  ⇒ 22/23 field KHỚP mapping; 1 field LỆCH (mode_of_payment) = F-P5-2.
+  ⇒ DỰ ANH GIÁ TRƯỚC PHASE 5 ĐÃ ĐÓNG: `unallocated_amount` ghi TƯỜNG MINH đã được
+     chứng minh bằng 1 lần ghi thật (Phase 3 debt (2) / Phase 4 debt (3)); và F3
+     ("bỏ unallocated tường minh") nay có mốc thật: trên PE thật, unallocated = 0 =
+     paid − Σ allocated, references 2 dòng đúng từng hoá đơn ⇒ F2/F5 (verify đọc
+     ngược + per-row theo invoice) đã chạy THẬT ở nhánh happy-path (vẫn chưa có ca
+     "site nói dối" để đóng hoàn toàn oracle gap).
+
+§3.5 KHÔNG SUBMIT + GL/AR KHÔNG ĐỔI (phase-05 §5 bước 4)
+  Trước (2026-09-30T05:33:38, /tmp/p5-before.json):
+    · ACC-SINV-2026-01285 outstanding 84.000 · ACC-SINV-2026-01288 outstanding 320.000
+    · GL Entry (party "lan", account 1310 - Phải thu khách hàng - MP): 8 dòng, net AR 404.000
+  Sau (2026-09-30T05:34:34):
+    · ACC-SINV-2026-01285 outstanding **84.000** (KHÔNG đổi) · status Partly Paid
+    · ACC-SINV-2026-01288 outstanding **320.000** (KHÔNG đổi) · status Unpaid
+    · GL Entry: **8 dòng, net AR 404.000** (KHÔNG đổi)
+    · GL Entry mới cho ACC-PAY-2026-00775 với `is_cancelled = 0`: **0 dòng**
+      ⇒ nháp KHÔNG sinh bút toán (đúng luật P9-D "nháp không giảm GL").
+  ⚠ Bẫy dữ liệu gặp phải (đã xử lý): lọc GL theo `voucher_no` trả **6 dòng** — nhưng
+    đó là 6 dòng `is_cancelled = 1` của một PE CŨ cùng tên (2026-09-17, party
+    "P1G-PERF C10") vì site TÁI DÙNG số chứng từ của bản đã xoá ⇒ phải lọc thêm
+    `is_cancelled = 0` mới đúng (**F-P5-4**, §6).
+
+§3.6 PHÁT HIỆN PHỤ: BẢN GHI NHÁP CÓ ẢNH HƯỞNG ĐỌC CỦA APP
+  Bản nháp của mình ĐƯỢC tính vào `openDraftCover` ⇒ các lần propose sau cho khách
+  `lan` trên ACC-SINV-2026-01285 sẽ thấy thêm 30.000 "nháp phủ". Đây chính là lý do
+  cleanup là phần của DoD (không phải việc phụ) — và vì sao §4 là BLOCKER.
+
+================================================================================
+§4. CLEANUP — **BỊ CHẶN** (Frappe LinkExistsError) — CẦN OWNER QUYẾT
+================================================================================
+§4.1 ĐÃ THỬ (tất cả đều 417 LinkExistsError)
+  a) `DELETE /api/resource/Payment Entry/ACC-PAY-2026-00775` → 417
+  b) `POST /api/method/frappe.client.delete` (+ignore_links/force/ignore_permissions
+     trong body) → 417
+  c) `DELETE ...?ignore_links=1&force=1` → 417
+  d) `POST /api/method/frappe.desk.reportview.delete_items` → 500 (TypeError khi
+     build message báo lỗi; hành vi xoá vẫn không thành công)
+  Nguyên văn: "LinkExistsError: Không thể xóa hoặc hủy vì Bút toán thanh toán
+  ACC-PAY-2026-00775 được liên kết với Payment Allocation ALLOC-2026-11662".
+
+§4.2 NGUYÊN NHÂN GỐC (đã verify bằng source Frappe v16, không đoán)
+  · 5 dòng `Payment Allocation` (ALLOC-2026-11662 … 11666) ĐÃ HUỶ (`docstatus = 2`,
+    tạo 2026-09-17 bởi một PE P1G-PERF đã bị xoá) vẫn giữ nguyên giá trị
+    `payment_entry = "ACC-PAY-2026-00775"`.
+  · `frappe/model/delete_doc.py#get_linked_docs` (nhánh link TĨNH) khi
+    `method == "Delete"` **KHÔNG lọc docstatus** ⇒ link từ chứng từ ĐÃ HUỶ vẫn chặn
+    xoá (khác nhánh link ĐỘNG có lọc `is_cancelled()`).
+  · `frappe.delete_doc(..., force=1)` mới bỏ qua kiểm tra link, và **KHÔNG endpoint
+    HTTP nào** chuyển tiếp `force` (`frappe.client.delete` → `delete_doc(doctype,name)`;
+    `frappe.desk.reportview.delete_items` → `delete_bulk` → `frappe.delete_doc(dt,d)`;
+    `frappe/api/v1` → `delete_doc(doctype,name,ignore_missing=False)`).
+  ⇒ Trên site này, chứng từ nháp CÓ TÊN TRÙNG một bản đã xoá + còn link "rác" từ
+    chứng từ đã huỷ ⇒ KHÔNG THỂ xoá qua API chỉ với quyền Administrator.
+  · ĐÃ XÁC NHẬN KHÔNG LÀM HƯ DỮ LIỆU: 5 dòng ALLOC vẫn nguyên (`modified`
+    2026-09-17 22:40:25 — không bị chạm); bản nháp của mình vẫn nguyên.
+
+§4.3 TRẠNG THÁI HIỆN TẠI CỦA SITE (rác còn lại 1 chứng từ, ĐÚNG 1, của mình)
+  · `ACC-PAY-2026-00775` — Payment Entry NHÁP, docstatus 0, party `lan`,
+    80.000đ, 2 dòng references, reference_no = b9a8e9eb-…, tạo 2026-09-30 12:33.
+  · KHÔNG có GL Entry sống · KHÔNG đổi outstanding hoá đơn · KHÔNG có Payment
+    Allocation nào của bản nháp này.
+  · Tác động duy nhất: `openDraftCover` cho khách `lan` / ACC-SINV-2026-01285 (+30.000).
+
+§4.4 CÁC ĐƯỜNG CLEANUP — XIN OWNER CHỌN (tôi KHÔNG tự làm vì "chỉ chứng từ của mình")
+  (5) **TỐT NHẤT — không chạm dữ liệu nào của người khác**: owner chạy trên máy
+      ERPNext (bench):
+        bench execute frappe.model.delete_doc.delete_doc --kwargs \
+          "{'doctype':'Payment Entry','name':'ACC-PAY-2026-00775','force':1}"
+      ⇒ xoá đúng 1 chứng từ của mình, `force=1` bỏ qua link rác.
+  (1) Cho phép tôi làm TẠM-THỜI-VÀ-HOÀN-TÁC: set `payment_entry = ""` trên 5 dòng
+      ALLOC-2026-11662…11666 ⇒ xoá ACC-PAY-2026-00775 ⇒ set LẠI 5 giá trị cũ
+      (net-zero với dữ liệu người khác, nhưng có ghi vào 5 dòng không phải của mình).
+  (2) Cho phép XOÁ LUÔN 5 dòng ALLOC-2026-11662…11666 (rác treo của PE đã xoá) —
+      đơn giản nhất nhưng là xoá dữ liệu không phải của mình.
+  (3) Owner tự xoá bằng UI ERPNext (desk cũng dùng cùng luật link ⇒ nhiều khả năng
+      cũng bị chặn; cần Developer Mode/thao tác DB).
+  (4) Chấp nhận để lại nháp + ghi chú (KHÔNG khuyến nghị: ảnh hưởng openDraftCover
+      của khách `lan`).
+  ⇒ Đây cũng là lý do phase-05 §9 nói phải DỪNG khi "chứng từ nháp không xoá được".
+
+================================================================================
+§5. REGRESSION (phase-05 §6) — CHỈ CÒN FAIL BASELINE ĐÃ BIẾT
+================================================================================
+| Suite                                        | Kết quả                                  | Baseline? |
+|----------------------------------------------|------------------------------------------|-----------|
+| Node FULL `cd mcp-erpnext && npm test`       | **1038 tests / 1036 pass / 2 fail**       | ĐÚNG      |
+|  2 fail                                       | `dshGatewayHealth` + `verifyDshRuntime`   | env (thiếu binary dsh) |
+| Flutter FULL `flutter test`                  | **426 pass / 3 fail**                     | ĐÚNG      |
+|  3 fail                                       | `test/_probe_review_test.dart` (untracked)| ĐÚNG      |
+| `flutter analyze`                            | **1 warning** (`_probe_b0_voice_autosend.dart`, untracked) | ĐÚNG |
+| Python `PYTHONPATH=src python3 -m unittest discover -s tests` | **Ran 63 tests — OK** | XANH |
+| Cụm regression next6 + next7×3 + next8×15 + next9×3 | **178 / 178 pass**                 | 100%      |
+| Cụm collect (7 file next8-collect-* + payment-write + http-execute + next9-binding + safety-gateway + p9-pay + proposal-freshness) | **214 / 214 pass** | 100% |
+| Flutter cụm collect (collect_screen + proposal_card + next8_collect_data + next8_picker_safety) | **84 / 84 pass** | 100% |
+
+⇒ 0 regression. Số Node/Flutter trùng KHÍT baseline sau Phase 4 (1038/1036/2 và
+426/3 + 1 warning). Python 63 OK (plan ghi "money corpus 259/259" là con số corpus
+của phase trước; trong phiên này `unittest discover` chạy 63 test OK, gồm
+`test_money.py` + `test_dialect_set.py` (corpus 3 miền) — không có fail).
+
+================================================================================
+§6. PHÁT HIỆN MỚI (KHÔNG sửa code — owner quyết; đây là vùng tiền/nhãn tiền)
+================================================================================
+F-P5-1 (MEDIUM) — `/collect/propose` chỉ "thấy" 100 khách đầu tiên.
+  `proposeCollectFromHandoff` dò khách bằng `findCustomer("")`, mà skill đọc
+  `erpnext_customer_list` với `limit: 100` ⇒ khách nằm ngoài 100 dòng đầu LUÔN trả
+  404 `NO_MATCH`. ĐO THẬT: "Anh Ba — xây nhà" (2 hoá đơn mở, sạch) bị từ chối;
+  "lan" (nằm trong 100 dòng) chạy được. Trên shop >100 khách ⇒ không thu tiền được
+  cho phần lớn khách. (Cùng lớp lỗi đã gặp ở M1 với Customer create: `limit:100` vs
+  `limit:0`.)
+
+F-P5-2 (MEDIUM — nhãn tiền sai) — ý định BANK ghi `mode_of_payment = "Cash"`.
+  ĐO THẬT trên PE ACC-PAY-2026-00775: request `mode: "bank_transfer"` (đã đúng kênh
+  ⇒ paid_to = 1210 Bank) nhưng field Link `mode_of_payment` = **"Cash"**, kèm
+  `mode_substituted_from: "bank_transfer"` trong câu trả lời. Gốc: `resolveAccountPlan`
+  (`payment-write.mjs`) chọn TÊN Mode of Payment theo thứ tự `exact → /cash/i → type cash`
+  — KHÔNG có nhánh "bank"-named/bank-typed ⇒ mọi yêu cầu bank rơi vào MoP tên "Cash".
+  Hệ quả: báo cáo theo Mode of Payment sẽ xếp một phiếu THU QUA NGÂN HÀNG vào nhóm
+  tiền mặt. (Tài khoản tiền thì ĐÚNG — chỉ nhãn MoP sai.) KHÔNG sửa trong phase này.
+
+F-P5-3 (INFO — dữ liệu site) — MoP "Chuyển khoản" của shop được khai `type = Cash`
+  (default_account "Tiền mặt - DPC" cho DEMO POC CO). App định kênh theo NHÃN
+  (`chuyển khoản` ⇒ bank) chứ không theo `type` của MoP ⇒ hai nguồn sự thật có thể
+  xung đột: nếu user chọn đúng nhãn MoP "Chuyển khoản" (không phải token bank),
+  app đòi tài khoản loại Bank trong khi ERPNext nói MoP đó là tiền mặt. Cần owner
+  xác nhận đâu là ý định thật của shop.
+
+F-P5-4 (INFO) — site TÁI DÙNG số chứng từ của bản đã xoá (`ACC-PAY-2026-00775` từng
+  tồn tại 2026-09-17, đã xoá, hôm nay cấp lại cùng tên) ⇒ lịch sử GL theo `voucher_no`
+  bị nhiễu bởi các dòng `is_cancelled = 1`. Xác nhận quyết định Phase 4 là ĐÚNG:
+  reconcile theo `reference_no` + `custom_ai_action_id`, KHÔNG theo tên/khách+số tiền.
+
+================================================================================
+§7. SỔ SÁCH
+================================================================================
+· `result89.txt` (file này) · `.plan/next8/phase5-result.md` · `working.md` mục 33.
+· Chứng từ bằng chứng trên site: Payment Entry `ACC-PAY-2026-00775` (nháp, CÒN LẠI —
+  xem §4). Không tạo dữ liệu test nào khác; không xoá/sửa dữ liệu nào không phải của mình.
+· Harness: `mcp-erpnext/scripts/_probe_phase5_real_round.mjs` (untracked, `_probe_*`).
+
+================================================================================
+§8. DỪNG — CHỜ OWNER (CẤM tự commit)
+================================================================================
+Đã xong: ma trận §29 (§2), 1 vòng THẬT đọc lại khớp 22/23 field (§3), regression
+sạch (§5), sổ sách (§7).
+CHƯA xong: **cleanup chứng từ nháp bị Frappe chặn** (§4) ⇒ DoD "vòng thật + cleanup
+sạch" chưa đóng; cột trạng thái `release-roadmap.md` + tick `openspec tasks` chưa
+làm (chờ owner chốt cách cleanup + cho commit).
+CẦN OWNER: (a) chọn 1 trong 5 đường cleanup §4.4 (khuyến nghị (5) bench force=1,
+hoặc (1) tạm-hoàn-tác); (b) quyết F-P5-1/F-P5-2/F-P5-3 (mở phase sửa hay chấp nhận);
+(c) lệnh commit (vùng tiền ⇒ AI KHÔNG tự commit).
+KHÔNG push, KHÔNG submit, KHÔNG sửa code.
+================================================================================
+
+================================================================================
+§9. QUYẾT ĐỊNH CỦA OWNER (2026-09-30, trong phiên) — ĐÃ GHI NHẬN
+================================================================================
+Q1 CLEANUP → owner chọn **(5) tự chạy `bench` với `force=1`**:
+
+    bench execute frappe.model.delete_doc.delete_doc --kwargs \
+      "{'doctype':'Payment Entry','name':'ACC-PAY-2026-00775','force':1}"
+
+  (không chạm dữ liệu nào khác; RIÊNG owner chạy vì cần shell trên máy ERPNext).
+  ⇒ Chứng từ nháp `ACC-PAY-2026-00775` SẼ do owner xoá. Sau khi xoá, kết quả cần đạt:
+     · `GET /api/resource/Payment Entry/ACC-PAY-2026-00775` ⇒ 404
+     · outstanding ACC-SINV-2026-01285/01288 vẫn 84.000/320.000 (không đổi)
+     · GL 1310 theo party `lan` vẫn 8 dòng / net 404.000
+     · 5 dòng `Payment Allocation` ALLOC-2026-11662…11666 vẫn nguyên (KHÔNG bị đụng)
+  ⚠ Từ 2026-09-30 → lúc owner xoá, khách `lan` trên ACC-SINV-2026-01285 còn +30.000
+    "nháp phủ" từ chứng từ này (ảnh hưởng `openDraftCover`).
+
+Q2 2 PHÁT HIỆN → owner chọn **MỞ PHASE MỚI sửa F-P5-1 + F-P5-2**.
+  ⇒ Đã tạo kế hoạch: `.plan/next8/phases/phase-05b-collect-propose-fixes.md`
+     (nguyên nhân gốc có file/line · phạm vi 2 fix · test/falsify/DoD · DỪNG hỏi owner).
+  ⇒ CÂU HỎI CHẶN SỐ 1 của phase mới: F-P5-2 phải chọn NGUỒN KÊNH — (A) nhãn câu/UI,
+     (B) `type` của Mode of Payment, (C) A + cảnh báo khi MoP khớp nhãn lệch `type`
+     (agent đề xuất C). Lý do: site khai MoP **"Chuyển khoản" có `type = Cash`**
+     (F-P5-3) ⇒ 2 nguồn sự thật xung đột, chọn sai = ghi tiền vào sai loại tài khoản.
+  ⇒ CHƯA code gì; OpenSpec change sẽ tạo TRƯỚC khi code sau khi owner chốt §4.2.
+
+CHƯA LÀM (chờ cleanup của owner + lệnh commit): tick `openspec tasks` · cột trạng thái
+`release-roadmap.md` · commit Phase 5.
+================================================================================

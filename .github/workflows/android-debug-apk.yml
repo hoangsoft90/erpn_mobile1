@@ -1,0 +1,87 @@
+name: android-debug-apk
+
+# Phase 3 (user decision 2026-09-14): APK builds run on GitHub Actions,
+# NEVER on the dev VPS (no Android UI there anyway). Push/PR triggers; the
+# debug APK is uploaded as an artifact for direct install on a phone.
+
+on:
+  push:
+    branches: ["**"]
+    paths:
+      - "apps/mobile/**"
+      - ".github/workflows/android-debug-apk.yml"
+  pull_request:
+    paths:
+      - "apps/mobile/**"
+      - ".github/workflows/android-debug-apk.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build debug APK
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/mobile
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Flutter (stable)
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Pub get
+        run: flutter pub get
+
+      # *.g.dart is gitignored, so CI must generate it before analyze/test
+      # (run 1 failed at Analyze: undefined chatControllerProvider — result9).
+      - name: Generate code (build_runner)
+        run: dart run build_runner build --delete-conflicting-outputs
+
+      - name: Analyze
+        run: flutter analyze --fatal-infos
+
+      - name: Test
+        run: flutter test
+
+      # The artifact must be installable on a phone: COPILOT_BASE_URL is
+      # compiled in via dart-define (default 127.0.0.1 only works on the
+      # dev box — result10). Values come from repo Variables/Secrets so no
+      # endpoint or credential is hardcoded in the repository:
+      #   vars:   COPILOT_BASE_URL       e.g. http://100.x.y.z:8788 (Tailscale)
+      #   vars:   COPILOT_AUTH_USER      basic-auth user for /ask
+      #   secret: COPILOT_AUTH_PASSWORD  basic-auth password (>=8 chars)
+      # Empty vars fall back to the in-app defaults (loopback build).
+      # NOTE (review 2026-09-14): values are passed via env + quoted "${VAR}"
+      # interpolation, NOT direct ${{ }} into the command text — a value
+      # containing spaces/quotes/$ would otherwise break or inject into the
+      # flutter command line.
+      - name: Build debug APK (dart-define endpoint + auth)
+        env:
+          COPILOT_BASE_URL: ${{ vars.COPILOT_BASE_URL }}
+          COPILOT_AUTH_USER: ${{ vars.COPILOT_AUTH_USER }}
+          COPILOT_AUTH_PASSWORD: ${{ secrets.COPILOT_AUTH_PASSWORD }}
+        run: |
+          flutter build apk --debug \
+            --dart-define=COPILOT_BASE_URL="${COPILOT_BASE_URL}" \
+            --dart-define=COPILOT_AUTH_USER="${COPILOT_AUTH_USER}" \
+            --dart-define=COPILOT_AUTH_PASSWORD="${COPILOT_AUTH_PASSWORD}"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: erpn-chat-debug-apk
+          path: apps/mobile/build/app/outputs/flutter-apk/app-debug.apk
+          if-no-files-found: error

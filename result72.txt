@@ -1,0 +1,123 @@
+================================================================================
+result72.txt — VÒNG XML THẬT 2 LẦN CÙNG FILE trên ERPNext (chống trùng theo TỜ HĐĐT)
+Ngày: 2026-09-25 · Project: erpn_mobile1 · Branch: change/flutter-chat-mvp
+User cho phép GHI (tạo 1 nháp thật). KHÔNG submit · KHÔNG push · KHÔNG clone từ GitHub.
+================================================================================
+
+## 0. ĐÃ LÀM GÌ
+
+Script mới `.plan/next4/loop-xml-dedupe-real.mjs` — 1 lệnh: NLP service + gateway http-ask
+(trong tiến trình, real ERPNext) + đếm Purchase Order **qua REST độc lập** (không qua copilot).
+File gửi: `mcp-erpnext/test/fixtures/einvoice/tt78-basic.xml` — C26TYY / số 0000123, **đúng file
+của vòng A2 thật trước đây**. Site: host `prevail-…ngrok-free.dev` (chỉ host, không secret).
+
+## 1. KẾT QUẢ (nguyên văn, đã lược log MCP)
+
+```
+LẦN 1  /input/einvoice → 200 (1270ms)  party=Đại lý Cám Bình Dương (matched_by=tax_id)
+                                     lines=["10 Bao CAM-GA-25KG","5 Bao CAM-HEO-25KG"]  warnings=[]
+       /ask            → 200 (2432ms)  action=create_purchase_order
+                                     business_doc_key=bdk_ca5eaafe80309d8704ca1014e4bb6a71
+       /execute        → 200 (2536ms)  ok=true  erpnext_doc=PUR-ORD-2026-00007
+LẦN 2  (ĐÚNG file đó)  /ask → 200, business_doc_key = bdk_ca5eaafe80309d8704ca1014e4bb6a71 (Y HỆT lần 1)
+       /execute        → 409  code=PO_DUPLICATE_DOC  existing_doc=PUR-ORD-2026-00007
+       error="hóa đơn C26TYY-0000123 ngày 2026-09-20 đã được nhập vào đơn mua
+              PUR-ORD-2026-00007 trên ERPNext — KHÔNG ghi thêm đơn thứ hai
+              (mở đơn cũ nếu cần sửa)"
+ĐẾM PO độc lập (REST): TRƯỚC 6  →  SAU 7   ⇒ TĂNG ĐÚNG 1
+```
+
+⇒ **Chống trùng chạy THẬT**: gửi cùng 1 tờ 2 lần ⇒ **1 nháp**, lần 2 bị từ chối và **nêu đúng tên
+đơn cũ** để người dùng mở ra sửa. Không có nhánh nào ghi ở lần 2.
+
+## 2. KIỂM CHỨNG ĐỘC LẬP bản ghi đã tạo (REST, không tin response ghi)
+
+`GET /api/resource/Purchase Order/PUR-ORD-2026-00007`:
+
+| Trường | Giá trị |
+|---|---|
+| name | **PUR-ORD-2026-00007** |
+| company / supplier | `Minh Phát Cám & VLXD` / `Đại lý Cám Bình Dương` |
+| docstatus | **0 — NHÁP (KHÔNG submit)** |
+| transaction_date | 2026-09-25 |
+| `custom_business_doc_key` | `bdk_ca5eaafe80309d8704ca1014e4bb6a71` |
+| `custom_ai_action_id` | `act_f73bb163-…` (có ghi vết hành động AI) |
+| items | `CAM-GA-25KG` ×10 Bao @270.000 · `CAM-HEO-25KG` ×5 Bao @295.000 |
+| grand_total | **4.175.000 VND** — rate lấy từ **ERPNext**, KHÔNG lấy từ file (đúng `rate_source: erpnext`) |
+
+Số đơn mang ĐÚNG khoá `bdk_ca5eaafe…` trên toàn site = **1**.
+
+## 3. HAI PHÁT HIỆN MỚI (do vòng THẬT bắt được — không phải review giấy)
+
+### 3.1 ⚠️ DEPLOYMENT THIẾU `COPILOT_COMPANY` ⇒ bấm [Xác nhận] trên app sẽ HỎNG
+
+Lần chạy đầu tiên `/execute` trả **500 `PO_COMPANY_UNRESOLVED`**:
+
+> "có 3 company (DEMO POC CO, Minh Phát Cám & VLXD, SANLOAN) và chưa pin company
+>  — đặt COPILOT_COMPANY trước khi tạo đơn mua"
+
+- Nguyên nhân: scope company là **server-first** (`authorization.mjs`: principal → `COPILOT_COMPANY`
+  → request), và **app KHÔNG gửi `company`** (card chỉ gửi `command_id`/`proposal`/`dedup_ack`/`submit_now`).
+- Vòng A2 trước đây tạo được `PUR-ORD-2026-00006` vì **khi đó site chỉ có 1 company**; site nay có 3.
+- **Fail-closed** ⇒ KHÔNG ghi sai (PO vẫn 6), nhưng **chặn MỌI lần xác nhận đơn mua** từ app.
+- **Việc cần user làm (không phải code)**: đặt `COPILOT_COMPANY="Minh Phát Cám & VLXD"` vào `.env`
+  của deployment (company đúng = company của mọi đơn trên site, kể cả 00006) rồi restart server.
+- Ghi chú: `.env` hiện **không có** biến `COPILOT_COMPANY`.
+
+### 3.2 `source_document` của `/input/einvoice` KHÔNG dùng trực tiếp cho `/ask`
+
+Object route trả về **thiếu `kind`** và có thêm `source`/buyer/totals ⇒ `/ask` trả **400
+`SOURCE_DOCUMENT_INVALID`** ("kind không hợp lệ") ⇒ **không có pipeline nào chạy**. Client phải
+**thu hẹp** (`OcrSlotSourceDocument.toAskJson`: kind + invoice_no + invoice_date + series/MST).
+Không phải bug (biên validate làm đúng việc của nó) — nhưng là bẫy cho ai gọi API trực tiếp.
+
+### 3.3 `slots.text` KHÔNG phải câu để hỏi
+
+`slots.text` là **mô tả cho form** ("hóa đơn C26TYY-0000123 · ngày … · người bán … · …") và
+**không route tới đường ghi** (đúng như comment `ocr_compose.dart`: hoá đơn không có động từ mệnh lệnh).
+Câu gửi `/ask` do client ghép theo template `'đặt mua {goods} từ {party}'`. Script mirror đúng template.
+
+## 4. GIỚI HẠN ĐO ĐƯỢC (không tô hồng)
+
+- **`PUR-ORD-2026-00006`** (CÙNG tờ hoá đơn, tạo 2026-09-24 **TRƯỚC** migration) có
+  `custom_business_doc_key = (null)` ⇒ **không** được dedupe. Lớp này chỉ phủ tờ nhập **sau** migration.
+- 6 đơn cũ đều `null` ⇒ unique index **không** vướng.
+- Chỉ chống trùng theo **TỜ**: hoá đơn KHÁC số vẫn tạo nháp mới (đúng luật).
+- Race hai phiên cùng bấm: **vẫn chưa đo** (đã ghi từ trước tới nay).
+
+## 5. TRẠNG THÁI COMMIT
+
+**KHÔNG commit gì cho vòng thật** (script nằm trong `.plan/` — gitignore). Nháp `PUR-ORD-2026-00007`
+**còn nguyên trên site** (docstatus 0) — muốn huỷ thì huỷ tay trong ERPNext; tôi KHÔNG tự huỷ.
+
+Bằng chứng đầy đủ: `.plan/next4/B-dedupe-result.md` **§10** (mục mới, gồm cả 3 phát hiện trên).
+
+## 6. VERIFY SAU KHI PIN `COPILOT_COMPANY` (2026-09-25, CHỈ ĐỌC — không tạo nháp mới)
+
+`COPILOT_COMPANY` **trước đó KHÔNG có** trong `.env` (đã kiểm: 16 biến, không có biến này) ⇒ đã thêm
+`COPILOT_COMPANY="Minh Phát Cám & VLXD"` vào `.env` (mode 600 giữ nguyên, vẫn bị gitignore).
+
+**Vì sao KHÔNG thể verify bằng cách gửi lại cùng file**: executor kiểm **TRÙNG TỜ** trước
+(`probeBusinessDocKey`, `purchase-order-write.mjs:606`) rồi mới resolve company (`:707`) ⇒ gửi lại
+giấy đó luôn trả `409 PO_DUPLICATE_DOC` **dù có pin company hay không** — lần chạy đó không phân biệt được.
+Nên đã verify 2 mắt xích mà app phụ thuộc, bằng probe chỉ-đọc `.plan/next4/probe-company-pin.mjs`:
+
+```
+A. resolveCompanyScope("purchase_order.create", env=process.env)
+   => {"ok":true,"company":"Minh Phát Cám & VLXD","enforced":true,"source":"principal"}
+      (giá trị vào principal qua authorization.mjs:176-177, tức chính COPILOT_COMPANY)
+B. resolveSalesCompany(mcp THẬT, {authzCompany: COPILOT_COMPANY})   [chỉ LIỆT KÊ company]
+   => "Minh Phát Cám & VLXD"   (đúng 1 company trên site — không mơ hồ)
+```
+
+**C. Đường [Xác nhận] chạy lại y như app** (lấy env từ `.env`, KHÔNG export tay): `/execute` ⇒
+**409 `PO_DUPLICATE_DOC`** + `existing_doc=PUR-ORD-2026-00007` (KHÔNG còn `500 PO_COMPANY_UNRESOLVED`),
+và **đếm PO 7 → 7 = TĂNG 0** (không ghi gì). Lưu ý: C chứng minh đường xác nhận trả về **từ chối nghiệp vụ
+thay vì 500**, chứ một mình C không chứng minh cổng company (trùng tờ chặn trước) — A+B mới chứng minh
+cổng company, còn chuỗi đầy đủ env→gateway→executor→ERPNext đã được chứng minh bằng lần **200** ở §1
+(cùng đúng giá trị company đó).
+
+> ⚠️ **CÒN 1 BƯỚC VẬN HÀNH**: tiến trình copilot đang phục vụ app **không** chạy trong máy này
+> (không có gì listen 8788; `curl /health` = 000) — APK trỏ `https://erpn8788.loca.lt`. **Phải thêm
+> `COPILOT_COMPANY` vào môi trường của CHÍNH server đó và restart** (process đang chạy không đọc lại
+> `.env`), nếu không app vẫn 500 dù `.env` ở repo này đã đúng.

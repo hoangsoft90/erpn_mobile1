@@ -1,0 +1,131 @@
+# result62.txt — C2 camera → proposal + review vòng 2 (2026-09-20)
+
+**Phạm vi phiên:** hoàn tất C2 (`.plan/phases3/C2-camera-to-proposal.md`) — deliverable
+`.plan/phases3/C2-result.md` — rồi **review vòng 2** theo yêu cầu user ("review code
+một lần nữa, để tìm lỗ hổng"), vá lỗ tìm thấy, falsify lại, cập nhật docs.
+
+---
+
+## 1. §0 đo trước khi code — dữ kiện quyết định thiết kế (đường thật Phase 1 + routeIntent)
+
+| # | Đo được | Hệ quả |
+|---|---------|--------|
+| 1 | `HÓA ĐƠN …` → `invoice.lookup` (READ) · `PHIẾU THU …` → `payment.history` · `PHIẾU GIAO HÀNG …` → `delivery.create` (stub từ chối) · output mock C1 → `invoice.lookup` | **Ảnh không có động từ mệnh lệnh** ⇒ mọi ảnh chụp rơi vào đường ĐỌC. An toàn nhưng vô dụng cho mục tiêu "camera → proposal" ⇒ cần tín hiệu Ý ĐỊNH từ USER (không phải từ OCR) |
+| 2 | Câu do app TỔNG HỢP từ slots (`đặt hàng cho <party> <qty> <uom> <item>`, `đặt mua … từ <supplier>`) route ĐÚNG `sales_order.create`/`purchase_order.create` (6 biến thể) | **Không cần đường ghi thứ hai** — câu đã sửa đi qua ĐÚNG `/ask` → classifier → contract → proposal → confirm → Safety Gateway |
+
+Quyết định user (ask_user trước khi code): **(a)** user chọn loại chứng từ trên sheet;
+**(b)** form điền sẵn sửa trước, card confirm sau (plan3 §6.4).
+
+## 2. Deliverable C2 — tóm tắt (chi tiết đầy đủ trong `.plan/phases3/C2-result.md`)
+
+- **Contract**: `ocr_policy.document_kinds` = nơi DUY NHẤT map kind → capability
+  (`sales` → `sales_order.create` party customer; `purchase` → `purchase_order.create`
+  party supplier); validate fail-closed (kind trỏ stub / submit-capable / không tồn tại
+  ⇒ contract invalid, không chỉ cảnh báo). Client gửi WORD, không bao giờ gửi capability id.
+- **Server** `src/ocr/ocr-slots.mjs` + route `POST /ocr/slots`
+  (thứ tự: throttle → kind → provenance → authz → đọc master data):
+  - `assertSlotsProvenance` fail-closed 4 lớp — status lạ ⇒ `OCR_READ_UNVERIFIED`;
+    `LOW_CONFIDENCE`/`NO_TEXT` ⇒ `OCR_READ_UNUSABLE`; **mock ⇒ `OCR_READ_IS_MOCK`**
+    (mock là provider MẶC ĐỊNH ⇒ đây là ca thường, không phải biên);
+    confidence thiếu/dưới sàn 0.6 ⇒ `OCR_READ_LOW_CONFIDENCE`.
+  - Slots tái dùng ĐÚNG bước parse của builder (`src/line-parse.mjs` — nhà chung PURE của
+    `orderItemsInText` + `pairLinesPure`; SO re-export giữ tên cũ ⇒ QT/PO/khách không đổi)
+    ⇒ form hiện đúng cái builder sẽ dựng, drift không thể xảy ra chứ không chỉ bị cấm.
+  - `resolvePartyFromPhoto` CHẶT hơn đường chat: tên cắt cụt ("Lan") ⇒ **candidates để
+    user chọn**, không auto-pick; khớp tên dùng **word boundary** chống "Hà Tiên 20 Bao"
+    nhặt nhầm "Hà Tiên 2" (đều tái hiện từ mock data trước khi sửa).
+  - Trả slots KHÔNG có `proposal/action/command_id/params/risk/price/rate` (test chặn từng key);
+    `money_vnd` trên ảnh chỉ HIỂN THỊ, không bao giờ vào câu gửi (`rate_source: erpnext`).
+  - Outcome log mới `slots_served` (phase `ocr_slots`) tách khỏi `answered`/`read_served`.
+- **Flutter**: sheet hiện nút `[Đơn bán]`/`[Đơn mua]` CHỈ khi `usable && confidence != null && !mock`;
+  `OcrSlotsForm` mọi field sửa được (kèm raw_quantity để user thấy số đến từ đâu);
+  câu đã sửa gửi `ChatController.send()` = user's own turn (visible, correctable) → card
+  confirm CŨ → nháp. Không auto-send, không `/execute` (chỉ `['/ocr/slots']` rồi `['/ask']`).
+- **false-write 4 lớp**: gate provenance (route) · kindSpec chỉ nhận kind trong contract ·
+  validate contract fail-closed · sheet không hiện nút kind khi mock/thiếu confidence.
+
+## 3. Review vòng 2 — lỗ hổng tìm thấy (theo yêu cầu "tìm lỗ hổng")
+
+### F1 — `/ocr/slots` nhận text độ dài KHÔNG BỊ CHẶN (lỗ THẬT, đã vá)
+
+- **Bản chất**: trần `ocr_policy.max_text_length` (5000) được enforce trong `/ocr` qua
+  `prepareOcrText` (sanitize + bound) — ở nơi **SẢN XUẤT** bản đọc. Nhưng `/ocr/slots`
+  nhận `body.text` **trực tiếp từ client** — đường TIÊU THỤ — và comment trong route còn
+  khẳng định sai "already sanitised and bounded by the C0 seam" (không gì trên đường qua
+  client enforce điều đó).
+- **Tác động**: client đã auth có thể POST text gần trần `MAX_BODY` (1 MB) ⇒ NLP + item
+  matcher + `resolvePartyFromPhoto` (candidate generation **O(n²)** theo số từ) chạy trên
+  mỗi request ⇒ CPU spike/DoS mềm.
+- **Đo trước khi vá** (đúng quy trình): `ocrDocumentKinds()` dùng `Object.fromEntries`
+  ⇒ probe kind `"constructor"`/`"__proto__"` trả undefined — **KHÔNG khai thác được**
+  prototype pollution (đoán ban đầu bị bác bỏ bằng đo).
+- **Vá**: `assertSlotsText()` trong `ocr-slots.mjs` — reject `> max_text_length` với
+  `OCR_READ_TOO_LONG`; route gọi ngay sau kindSpec, trước authz/NLP; text non-string
+  ⇒ "" (rơi vào đường empty → 422 như cũ, không đổi hành vi).
+- **Khoá**: test mới "the length bound travels WITH the reading" (unit 5001 ký tự +
+  HTTP 400 + mã đúng); **falsify guard mới**: gỡ `assertSlotsText` khỏi route ⇒ test đỏ.
+- **Bài học (đã cập nhật vào `.agents/skills/erpn-verify-first/SKILL.md`, cùng họ với
+  bài học "amount validate ở đường build nhưng KHÔNG ở đường execute")**: bound phải
+  re-enforce ở MỌI đường input ĐẾN từ client, không chỉ đường SẢN XUẤT nó — review bắt
+  được nhờ hỏi ngược "đường này nhận input từ đâu, có gì chặn ở ĐIỂM ĐÓ chưa?".
+
+### Các nghi vấn khác — ĐO rồi BÁC BỎ (không sửa oan)
+
+- Prototype pollution qua `kindSpec` — bác bỏ (own-props object, probe trên).
+- 2 lỗ cũ của C0 đã vá từ phiên trước (mimeType allowlist + `max_image_bytes`) — guard
+  C0 vẫn sống (falsify 9/9 RED chạy lại trong phiên này).
+- Luồng Flutter soi toàn bộ: sheet/form/compose/screen không có request nào ngoài
+  `/ocr`, `/ocr/slots`, `/ask`; client parse fail-closed (`usable` đòi status OK +
+  flag cùng lúc; unknown status ⇒ không dùng).
+
+## 4. Bằng chứng (số đo trong phiên — output lệnh thật)
+
+```
+node --test (mcp-erpnext)   → ℹ tests 440 · ℹ pass 438 · ℹ fail 2
+  (2 fail = dshGatewayHealth + verifyDshRuntime — ĐỎ TỪ B0, máy không có dsh ⇒ zero regress)
+node --test test/c2-ocr-proposal.test.mjs → pass 15 (14 cũ + 1 test length-bound mới)
+golden                      → 7/7 (231 ca)
+falsify C2 (scripts/falsify/c2-ocr.mjs, in-repo) → 10/10 RED (baseline node 0 / dart 0)
+  gồm guard mới: "the route no longer bounds the reading's length (1 MB text reaches NLP)"
+python: PYTHONPATH=src python3 -m unittest discover -s tests → Ran 62 · OK
+flutter analyze (apps/mobile) → No issues found!
+flutter test               → +211 -1 (1 fail = _probe_review_test.dart P2b — gap G3 của B0, cũ)
+```
+
+Lỗi tự mắc trong phiên (đã sửa ngay): (1) assert test viết sai `assertSlotsText(null)`
+để throw trong khi contract là trả "" — tự thấy và sửa trước khi chạy; (2) chạy Python
+discover sai start-dir (`src/`) → ImportError, phải là `tests/` + `PYTHONPATH=src`.
+
+## 5. Lỗi tự mắc của C2 (đã ghi ở phiên code — giữ lại để đối chiếu)
+
+1. C0 static guard đỏ: `src/ocr/**` reference `skills/` — guard ĐÚNG, tách
+   `src/line-parse.mjs` làm nhà chung PURE thay vì nới guard.
+2. `export {x as pairLines}` trùng `export function pairLines` ⇒ Duplicate export.
+3. Test kỳ vọng `uom === 'Bao'` trong khi hợp đồng thật (NLP Python) trả thường `'bao'`.
+4. Call-site còn dùng biến đã đổi ⇒ ReferenceError — unit gọi builder trực tiếp bắt được.
+5. Finder Flutter mơ hồ ("Đơn mua" khớp 2 chỗ) — neo assertion vào chuỗi duy nhất.
+
+## 6. Giới hạn đo được (không giấu)
+
+- Provenance gate là **safety default, không phải security boundary**: client nói dối
+  provenance được, nhưng KHÔNG thể ghi được — câu chữ vẫn qua `/ask` + confirm + Safety
+  Gateway. Mục đích: client thường/deployment quên đổi mock không thể seed proposal vô ý.
+- Chỉ 2 kind `sales`/`purchase` (đúng trần spec); quotation/delivery/PR cố ý không có kind.
+- Suite xung đột nguồn trước đó: AgentMemory DOWN, OCR CLI không có ⇒ Code Review thủ công
+  (đã làm — chính vòng này bắt F1).
+
+## 7. Trạng thái & việc chờ
+
+- **C2: KỸ THUẬT XONG — CHỜ USER DUYỆT** (vùng ghi + ranh giới tin cậy: ảnh = input
+  không tin cậy, kind→capability mapping, qty/uom từ ảnh vào chứng từ).
+- Máy này KHÔNG có git (`git rev-parse` fatal) — mọi phase B1→C2 chờ commit khi repo có.
+- Đã cập nhật (XÁC NHẬN bằng grep, sửa lại sau khi phát hiện claim cũ SAI): `working.md`,
+  `checklist.md`, `next.md`, `features.md` (thêm mục Trụ B/C), `faq.md` (§6.14 + §7),
+  `LESSONS_LEARNED.md` (nhóm 3/6/16 + mục theo phiên), skill `erpn-verify-first`,
+  `handoff_20260921-0115.md`. ⚠️ **Đính chính**: bản §7 trước đó khai đã cập nhật
+  `features.md`/`faq.md`/`LESSONS_LEARNED.md`/`handoff_20260920-1739.md` nhưng grep = **0 hit**
+  và file handoff đó **không tồn tại** (phiên bị cắt giữa chừng) — đã ghi thành bài học
+  nhóm 6 trong `LESSONS_LEARNED.md`.
+- Việc tiếp (chờ duyệt C2): C-verify trên ERPNext thật (mock-only đến khi user ghi
+  "cho phép ERPNext thật"); sau đó là verify 4 write trên site thật khi migration
+  correlation field đã chạy cho SO/Quotation (B3 đã soạn, KHÔNG tự tạo field).

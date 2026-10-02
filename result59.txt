@@ -1,0 +1,315 @@
+========================================================================
+RESULT 59 — DSH RUNTIME DISCOVERY: RUN THE PINNED npx RUNTIME, /tmp/dsh-run
+            KHÔNG CÒN LÀ MẶC ĐỊNH
+Timestamp: 2026-09-19 (giờ shell, UTC)
+Nguồn yêu cầu: .plan/dsh_prompt_fix1.md (12 mục). KHÔNG redesign kiến trúc.
+Bối cảnh lỗi (user báo, đã xác minh trên Mac): máy Mac KHÔNG cài
+@deepseek-ai/dsh trong repo; user chạy `npx @deepseek-ai/dsh web` (alias dsh).
+Resolver cũ hardcode `/tmp/dsh-run/node_modules/@deepseek-ai/dsh/lib/bin.js`
+⇒ `npm run dsh:check` trên Mac: "entry missing" + "health UNAVAILABLE".
+========================================================================
+
+== 0. VERDICT ==
+
+RUNTIME:  npx @deepseek-ai/dsh@0.1.5-rc.1   (pin đọc từ package.json root)
+NOT:      /tmp/dsh-run/...                  (chỉ còn là nhánh fallback #5,
+                                             nhận khi FILE tồn tại thật)
+VERDICT:  PASS (runtime + WRITE gate + /ask regression + full suite)
+          BLOCKED_EXTERNAL cho §10 "DSH READ chạm ERPNext thật QUA LLM":
+          tunnel Mac `llm9000.loca.lt` trả 503 Tunnel Unavailable tại thời
+          điểm chạy — không phải lỗi code (bằng chứng §5, và cùng code đã
+          PASS thật lúc 09:19 trong chính phiên này, xem §5.4).
+
+== 1. CODE ĐÃ SỬA (mcp-erpnext/src/dsh-gateway.mjs) ==
+
+Resolver duy nhất `resolveDshRuntime()` — 6 mức ưu tiên, KHÔNG nhánh nào
+hardcode đường dẫn máy:
+
+  1. DSH_ENTRY                      → entryMode(..., "DSH_ENTRY")
+  2. DSH_COMMAND (+ DSH_ARGS)       → commandMode(..., "DSH_COMMAND")
+  3. package local (createRequire)  → entryMode(..., "local-package")
+  4. npx pinned                     → commandMode("npx", ["--yes",
+                                       `@deepseek-ai/dsh@${pin}`], "npx-pinned")
+  5. legacy /tmp/dsh-run            → CHỈ khi existsSync(file) === true
+  6. unavailable
+
+Pin đọc LÚC CHẠY từ package.json root (`pinnedDshVersion()`), không hằng số:
+
+  $ node -e "import('./mcp-erpnext/src/dsh-gateway.mjs').then(m=>{console.log(JSON.stringify(m.dshRuntimeInfo(),null,1))})"
+  {
+   "mode": "command",
+   "source": "npx-pinned",
+   "entry": null,
+   "command": "npx",
+   "args": [
+    "--yes",
+    "@deepseek-ai/dsh@0.1.5-rc.1"
+   ],
+   "runtime": "npx",
+   "version": "0.1.5-rc.1",
+   "entryExists": null,
+   "patch": "<repo>/mcp-erpnext/dsh-e2e.patch.yml",
+   "patchExists": true,
+   "patchMarksDshContext": true
+  }
+
+Spawn argv-shaped (KHÔNG shell string, không nhét "npx @deepseek-ai/dsh" thành
+1 executable): `dshSpawnPlan()` là chỗ DUY NHẤT quyết định cách spawn, dùng
+chung bởi gateway local VÀ scripts/dsh-remote-runner.mjs (§7 — không có
+implementation thứ hai). Toàn bộ safety giữ nguyên (§6): timeout ·
+concurrency · DSH_HOME sạch · telemetry disabled · verify patch ·
+COPILOT_DSH_CONTEXT=1 · WRITE gate · chỉ qua copilot_ask · không /execute.
+
+Vá thêm trong phiên (đều là lỗi THẬT tìm thấy khi chạy thật):
+  a) `verifyDshRuntime()` — health chứng minh bằng CÁCH CHẠY THẬT
+     (`--version`), không suy luận từ file (§4).
+  b) `/dsh/health` route trả thêm `source` (cách resolve) + `source:null` ở
+     nhánh 503 — chính field đã phát hiện ra lỗi gốc ở falsify F2b (§4).
+  c) Response lỗi của `/dsh/ask` mang `log_tail` = lý do THẬT từ dsh/router
+     (§5.1 — chứng minh giá trị ngay lần chạy đầu).
+  d) `check-dsh-runtime.sh`: WARN khi `source=legacy-tmp` (chạy được ở máy
+     này nhưng KHÔNG mang sang máy khác) — oracle cũ chỉ nói PASS.
+
+== 2. npm run dsh:check — PASS, IN CẢ NGUỒN + BẰNG CHỨNG CHẠY THẬT ==
+
+  $ npm run dsh:check
+  == DSH runtime check ==
+  PASS  node v24.20.0 (>=20)
+  PASS  package.json pins @deepseek-ai/dsh@0.1.5-rc.1
+  PASS  dsh runtime: npx (source=npx-pinned) — command: npx --yes,@deepseek-ai/dsh@0.1.5-rc.1
+  PASS  resolved version 0.1.5-rc.1 matches the pin
+  PASS  runtime runs: --version -> 0.1.5-rc.1
+  PASS  patch exists: <repo>/mcp-erpnext/dsh-e2e.patch.yml
+  PASS  patch sets COPILOT_DSH_CONTEXT=1 (the in-child WRITE gate can fire)
+        mode: local — runtime=npx(npx-pinned) patch=dsh-e2e.patch.yml --version -> 0.1.5-rc.1
+  PASS  dshGatewayHealth() reports available
+
+  RESULT: PASS (all checks green)
+  EXIT=0
+
+⚠️ Máy chạy lệnh trên là host dev (Google Cloud Shell), KHÔNG phải Mac.
+Sự thật đã verify được: resolver KHÔNG còn phụ thuộc `/tmp` trên BẤT KỲ máy
+nào (nhánh npx đứng trước), nên trên Mac `source` cũng sẽ là `npx-pinned`.
+Chạy `npm run dsh:check` trên Mac là việc người thật (chưa chạy ở đây ⇒
+KHÔNG claim "PASS trên Mac").
+
+== 3. FALSIFY 4 LỚP (gỡ thật → đỏ đúng chỗ → khôi phục IDENTICAL) ==
+
+  F1 — gỡ nhánh #4 (npx) ⇒ resolver rơi xuống #3 local-package / #5 legacy:
+    ✔ test dshRuntimeInfo ĐỎ (1 test)
+    dsh:check vẫn PASS vì máy này CÓ /tmp/dsh-run → chính lúc này lộ ra
+    lỗ hổng oracle: PASS không phân biệt được nguồn runtime.
+
+  F2b — đảo thứ tự (legacy TRƯỚC npx, đúng lỗi gốc) ⇒ check in:
+    PASS  dsh runtime: entry (source=legacy-tmp) — /tmp/dsh-run/node_modules/@deepseek-ai/dsh/lib/bin.js
+    ⇒ thêm WARN cho legacy-tmp (§1d) để ca này không còn im lặng.
+
+  F3 — health không chạy thật (thay verifyDshRuntime bằng object giả):
+    ✖ dshGatewayHealth — local mode verifies the patch marker, not just file existence
+    ✖ dshGatewayHealth — local runtime that cannot run is NOT available (proof, not files)
+    ℹ pass 41 / ℹ fail 2
+
+  F4 — gỡ nhánh #2 (DSH_COMMAND):
+    ✖ resolveDshRuntime — priority order and pin discipline
+    ✖ verifyDshRuntime — the real runtime proves it runs; a failing command does not
+    ℹ pass 41 / ℹ fail 2
+
+  KHOI PHUC: ℹ pass 43 / ℹ fail 0 · `diff -q` với bản backup = IDENTICAL
+
+  BÀI HỌC HARNESS (đã ghi skill): lần falsify đầu của F3/F4 chạy nhưng KHÔNG
+  thấy kết quả vì tôi grep `^# (pass|fail)` — reporter MẶC ĐỊNH của `node --test`
+  in `ℹ pass 43`, không phải TAP. Oracle sai ⇒ "im lặng" bị đọc nhầm thành
+  "không có gì đỏ".
+
+== 4. /Dsh/HEALTH QUA HTTP (code cuối, gateway thật) ==
+
+  $ curl -s -m 60 http://127.0.0.1:8788/dsh/health | python3 -m json.tool
+  {
+      "ok": true,
+      "service": "dsh-gateway",
+      "available": true,
+      "runtime": "local",
+      "source": "npx-pinned",
+      "version": "0.1.5-rc.1",
+      "detail": "runtime=npx(npx-pinned) patch=dsh-e2e.patch.yml --version -> 0.1.5-rc.1",
+      "mode": "dsh"
+  }
+
+  (`runtime` = topology local/remote; `source` = CÁCH resolve. Hai khái niệm
+  khác nhau, trước đây chỉ có cái đầu.)
+
+== 5. CHẠY THẬT ==
+
+== 5.1 WRITE phải bị chặn TRƯỚC khi spawn (§6, §12) ==
+
+  $ curl -s -X POST http://127.0.0.1:8788/dsh/ask -H "Content-Type: application/json" \
+      -d '{"message":"thu tiền cho chị Lan 10000"}'
+  {
+      "ok": false,
+      "error": "chế độ Phân tích bằng AI chỉ ĐỌC — ghi phiếu thu phải qua mục chat chính và cần bạn bấm Xác nhận",
+      "code": "DSH_WRITE_BLOCKED",
+      "mode": "dsh",
+      "runtime": null,
+      "conversation_id": "2aef2e80-2097-484b-b0bd-32b52a606e5b",
+      "request_id": "eb0ffd08-a348-4422-af03-10d416eeec08",
+      "log_tail": null,
+      "refused": true
+  }
+  thời gian: 31ms
+
+== 5.2 /ask thường KHÔNG dính dsh (§8) ==
+
+  $ curl -s -X POST http://127.0.0.1:8788/ask -H "Content-Type: application/json" \
+      -d '{"text":"Khách smoke 2026-09-15-p1b-wf1-2 còn nợ bao nhiêu?"}'
+  answer: Khách smoke 2026-09-15-p1b-wf1-2 còn nợ 171.800đ (4 chứng từ chưa thanh toán).
+  error_code: None
+  routed: {'group': 'customer', 'matched': 'khách'}
+  → khớp ground truth result18 §F. Không có runtime/mode dsh nào trong response.
+
+  (Câu "chị Lan còn nợ bao nhiêu" trả MISSING_ENTITY đúng như thiết kế —
+  khách "Lan" không tồn tại trong ERPNext demo; đây là gap Phase 6.5 đã ghi
+  trong faq.md, KHÔNG phải regression của phiên này.)
+
+== 5.3 DSH READ qua script chuẩn → 502, lý do tunnel Mac ==
+
+  $ COPILOT_BASE_URL=http://127.0.0.1:8788 bash scripts/dsh-e2e-read.sh \
+      "Khách smoke 2026-09-15-p1b-wf1-2 còn nợ bao nhiêu?"
+  --- response (http_code=502, elapsed=73347ms) ---
+  {
+   "ok": false,
+   "error": "DSH Agent không trả lời được (lỗi phiên). Vui lòng thử lại sau.",
+   "code": "DSH_SESSION_FAILED",
+   "mode": "dsh",
+   "runtime": "local",
+   "conversation_id": "88ed01b9-0f86-4364-b859-9623c2ef80fe",
+   "request_id": "c14ad238-610e-48be-baf5-30bc03a3a232",
+   "log_tail": "dsh: SERVER: 502: {\"message\":\"llm-router: all upstreams failed (tried: mac-custom)\",\"type\":\"llm_router_all_failed\"}"
+  }
+  ---
+  FAIL  HTTP 502 (expected 200)
+  PASS  mode=dsh
+  FAIL  answer is empty (code=DSH_SESSION_FAILED)      ← do upstream chết
+  PASS  runtime=local (there is evidence for WHICH machine ran it)
+        erpnext_target not reported (the child may not have reached ERPNext)
+  PASS  audit: 1 new dsh_ask line(s)
+
+NGUYÊN NHÂN NGOÀI CODE (không phải giả thuyết — đo trực tiếp):
+
+  $ curl -s -m 15 -o /tmp/macprobe.json -w "http_code=%{http_code} time=%{time_total}s\n" \
+      https://llm9000.loca.lt/v1/models -H "Authorization: Bearer $MAC_LLM_API_KEY"
+  http_code=503 time=0.675292s
+  503 - Tunnel Unavailable
+
+  $ ls -t llm-router-audit/*.jsonl | head -1 | xargs tail -6
+  2026-09-19T09:26:54.565Z | upstream: None | status: 502 | attempts: ['mac-custom']
+  2026-09-19T09:27:06.535Z | upstream: None | status: 502 | attempts: ['mac-custom']
+  2026-09-19T09:27:18.447Z | upstream: None | status: 502 | attempts: ['mac-custom']
+  2026-09-19T09:27:31.200Z | upstream: None | status: 502 | attempts: ['mac-custom']
+  2026-09-19T09:27:44.101Z | upstream: None | status: 502 | attempts: ['mac-custom']
+  2026-09-19T09:27:52.490Z | upstream: None | status: 502 | attempts: ['mac-custom']
+
+BẰNG CHỨNG dsh ĐÃ SPAWN THẬT (npx) trong lần chạy này — dù LLM chết:
+  - `log_tail` trong response CHÍNH LÀ output của tiến trình dsh
+    ("dsh: SERVER: 502: ...") ⇒ child đã chạy, đã gọi router.
+  - 7 dòng router audit trong cửa sổ 09:26–09:28 (dsh retry/backoff):
+      $ ls -t llm-router-audit/*.jsonl | head -1 | xargs grep -c "2026-09-19T09:2[6-8]"
+      7
+  - learning-log ghi phiên với runtime=local:
+      $ grep -h "dsh_ask" learning-log/observations.jsonl | tail -1
+      ts 2026-09-19T09:27:52.660Z | runtime: local
+
+== 5.4 CÙNG CODE ĐÃ PASS THẬT (09:19, TRƯỚC khi tunnel chết) ==
+
+Runbook thought_signature nói rõ: lỗi tunnel là đặc tính của localtunnel ("có
+từ 2026-09-15"), không phải lỗi code. Bằng chứng trong chính phiên này, khi
+tunnel còn sống:
+
+  DSH READ qua HTTP: runtime=local (npx), erpnext_target=REAL,
+  trả "171.800đ / 4 chứng từ" khớp ground truth, audit 3 round-trip
+  qua upstream mac-custom model ag/gemini-3.6-flash-low.
+
+⇒ Không hạ thấp kết luận "DSH READ chạy thật" thành "không verify được":
+CÓ verify được (5.4). Lần chạy ở §5.3 hỏng vì upstream LLM ngoài tầm kiểm
+soát — và nó ghi lý do rõ ràng nhờ fix `log_tail` ở §1c.
+
+== 6. FULL SUITE (đo trong phiên này, sau mọi thay đổi) ==
+
+  $ PYTHONPATH=src python3 -m unittest discover -s tests
+  Ran 62 tests in 0.474s — OK
+
+  $ (cd mcp-erpnext && node --test)
+  ℹ tests 313 · ℹ pass 313 · ℹ fail 0            (306 → 313, +7: runtime/health/source)
+
+  $ (cd scripts && node --test)
+  ℹ tests 19 · ℹ pass 19 · ℹ fail 0
+
+  $ (cd apps/mobile && flutter test)
+  00:37 +150: All tests passed!
+
+  $ (cd apps/mobile && flutter analyze)
+  No issues found! (ran in 6.8s)
+
+== 7. FILE ĐÃ SỬA / TẠO ==
+
+Sửa:
+  mcp-erpnext/src/dsh-gateway.mjs        resolver 6 mức + verifyDshRuntime +
+                                         dshSpawnPlan dùng chung
+  mcp-erpnext/src/http-ask.mjs           /dsh/health trả `source`; log_tail
+                                         trong response lỗi /dsh/ask
+  mcp-erpnext/test/dsh-gateway.test.mjs  38 → 43 test (runtime/plan/priority)
+  mcp-erpnext/test/http-ask.test.mjs     + source trong health & 503
+  scripts/dsh-remote-runner.mjs          dùng CHUNG resolver (không bản thứ 2)
+  scripts/check-dsh-runtime.sh           đọc shape mới + chạy --version thật
+                                         + WARN nguồn legacy-tmp
+  scripts/llm-router.e2e.json            model drift Mac (oc/big-pickle → 403)
+  scripts/llm-router.config.json         như trên
+  mcp-erpnext/dsh-e2e.patch.yml          như trên
+  mcp-erpnext/src/classifier.mjs         model classifier theo drift
+  setup-test.md                          §2.5 npx + `source`; số test thật;
+                                         3 hàng troubleshooting mới
+  .agents/skills/erpn-dsh-setup/SKILL.md §0 cách đúng (npx) · /tmp chỉ fallback
+  docs/phase5-thought-signature-runbook.md  bỏ /tmp khỏi điều kiện tiên quyết
+  .project/integrations.md               mô tả resolver mới
+  LESSONS_LEARNED.md · .agents/skills/erpn-verify-first/SKILL.md  (bài học §8)
+
+== 8. BÀI HỌC MỚI (đã ghi vào skill + LESSONS_LEARNED) ==
+
+  1. Chuỗi fallback làm cho "PASS" trở thành oracle YẾU: `dsh:check` PASS cả
+     khi runtime resolve từ đường dẫn riêng của máy (F2b). Khi có ≥2 nguồn hợp
+     lệ, lệnh kiểm tra phải in ra **nguồn nào đã thắng**, và ca "chạy được
+     nhưng không mang sang máy khác" phải có tiếng nói riêng (WARN), nếu không
+     nó im lặng đi kèm chữ PASS.
+  2. Falsify phải kiểm cả HARNESS: grep `^# (pass|fail)` không khớp reporter
+     mặc định của `node --test` (`ℹ pass N`) ⇒ 2 vòng falsify chạy mà vô hình.
+     "Không thấy đỏ" ≠ "không có đỏ" — chỉ tin khi ĐẾM được test đỏ.
+  3. Response lỗi phải tự mang lý do: thêm `log_tail` biến "lỗi phiên" (phải
+     mở log server mới biết) thành "llm-router: all upstreams failed (tried:
+     mac-custom)" ngay trong payload — lần chạy đầu tiên đã hưởng lợi.
+  4. Health phải CHỨNG MINH (chạy `--version`) chứ không suy luận từ sự tồn
+     tại của file — cùng họ với bài học "existsSync ≠ chạy được" (result58).
+  5. Chọn oracle theo khái niệm: `runtime`(topology) vs `source`(cách resolve)
+     là 2 câu hỏi khác nhau; gộp lại thì không chẩn đoán được ca máy-Mac
+     (đúng ca đã xảy ra). Tách field ⇒ lần sau đọc 1 dòng là biết.
+
+== 9. KHÔNG LÀM (theo §12) ==
+
+  - KHÔNG cài @deepseek-ai/dsh vào repo để test xanh.
+  - KHÔNG hardcode đường dẫn Mac; KHÔNG để /tmp/dsh-run làm primary runtime.
+  - KHÔNG bỏ version pin (đọc từ package.json lúc chạy).
+  - KHÔNG shell string; luôn argv (`dshSpawnPlan`).
+  - KHÔNG bỏ WRITE gate, KHÔNG cho dsh thành fallback của /ask, KHÔNG bypass
+    copilot_ask, KHÔNG fake E2E PASS.
+  - KHÔNG tạo/submit/cancel Payment Entry nào trên ERPNext thật trong phiên này.
+
+== 10. CHỜ QUYẾT ĐỊNH / NGOÀI TẦM AGENT ==
+
+  1. Duyệt commit đợt này (vùng an toàn: ràng buộc cứng + trust boundary):
+     mcp-erpnext/src/dsh-gateway.mjs · http-ask.mjs · 2 test · scripts/*
+     — CHƯA COMMIT (đúng luật của dự án).
+  2. Bật lại `lt` trên Mac (`lt -s llm9000 --port 9000`) để §5.3 chuyển
+     BLOCKED_EXTERNAL → PASS.
+  3. Chạy `npm run dsh:check` trên chính Mac để xác nhận `source=npx-pinned`
+     (agent không truy cập được máy đó).
+  4. Việc treo cũ không đổi: SUBMIT phiếu thu thật · rotate key ERPNext ·
+     audio 150 câu · APK điểm bán · review ai-rules.md · duyệt app icon.
+========================================================================

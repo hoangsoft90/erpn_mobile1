@@ -1,0 +1,202 @@
+result94.txt — next8 / PHASE 8 ROUTE HARDENING — harness corpus + 6 cụm CL + DEFECT-1 + falsify + sổ sách
+Ngày: 2026-10-01 · Lệnh owner: "Phase 8 — Route / intent hardening" (đóng băng corpus next10 thành test trong
+repo, sửa DEFECT-1 + CL-3/2/1/5/4/6 theo cụm, mỗi cụm 1 OpenSpec change, chạy cả corpus sau mỗi cụm, ghi
+resultNN + phase8-result, falsify F1–F5, 0 HTTP 500, 280 ca PASS/ACCEPTED_BY_OWNER). DỪNG chờ owner commit (đụng
+routing mở màn ghi tiền).
+
+════════════════════════════════════════════════════════════════════════════
+§0. BASELINE ĐO ĐƯỢC (từ next10, git cc2073b) — KHÔNG đo lại
+════════════════════════════════════════════════════════════════════════════
+- 280 ca · locked 167 · **88 PASS / 79 FAIL / 113 review (52.7%)** · 6 nhóm lỗi + DEFECT-1 (500 ×4).
+- `routeIntent(record.attributed_normalized)` tái lập ĐÚNG baseline (88/79 trên 167 locked) ⇒ harness
+  không cần Python/ERPNext cho phần ROUTING.
+- Fail theo cụm (đo lại trong phiên trước khi sửa): CL-3 35 · CL-2 30 · CL-1 7 · CL-5 3 · CL-4 2 · CL-6 2 = 79.
+
+════════════════════════════════════════════════════════════════════════════
+§1. HARNESS (đóng băng corpus vào repo)
+════════════════════════════════════════════════════════════════════════════
+- `.plan/next8/_gen_route_corpus.mjs` (throwaway) ⇒ `mcp-erpnext/test/fixtures/route-corpus.json`
+  (280 ca + `gate.locked_failures` [79 id] + `entity_aliases` + bằng chứng audit) +
+  `test/fixtures/route-corpus.snapshot.json`.
+- `test/route-corpus.test.mjs` (cổng routing): `node --test` = 5 pass / 0 fail / 1 skip (exit gate).
+  `ROUTE_CORPUS_STRICT=1 node --test` = 6/6 (0 locked fail).
+- `test/route-corpus-pipeline.test.mjs` (0 5xx + pin DEFECT-1): 3/3.
+
+════════════════════════════════════════════════════════════════════════════
+§2. SỬA THEO CỤM — DELTA PASS/FAIL (chạy cả corpus sau MỖI cụm)
+════════════════════════════════════════════════════════════════════════════
+│ Sau cụm (tích luỹ) │ locked pass │ locked fail │ ghi chú
+│ baseline           │    88      │     79      │
+│ +CL-6 (guard)      │    90      │     77      │ `bật đèn phòng khách`, `cửa hàng mở cửa lúc nào` → không route
+│ +CL-1 (rewrite)    │    97      │     70      │ `«X» trả <số>` → payment_write (7 ca)
+│ +CL-3 (bán)        │   132      │     35      │ `Bán …`/`Bán cho …` → sales_order_write (35 ca)
+│ +CL-2 (đặt hàng)   │   162      │      5      │ `Đặt hàng <NCC>`/`Đặt purchase từ` → purchase_order_write (30 ca)
+│ +CL-5 (lịch sử thu)│   165      │      2      │ 3 ca
+│ +CL-4 (doanh số)   │   167      │      0      │ 2 ca
+DELTA: 79 → 0, chỉ CO (không có ca mới fail).
+
+Checkpoint routing quan trọng (sau tất cả thay đổi):
+- `đặt hàng cho Nguyễn Thị Lan 10 bao cám heo` → sales_order_write/sales_order.create (GIỮ b2/b4/p9)
+- `đặt hàng 3 bao cám heo` (không đối tác) → sales_order_write/sales_order.create (GIỮ A1/A6)
+- `đặt hàng «NCC» 1 bao` / `đặt purchase từ «NCC»` → purchase_order_write/purchase_order.create
+- `đặt mua cho Hà Tiên 10 bao cám heo` → purchase_order_write (entry PO cũ nguyên)
+- `purchase từ Hà Tiên 10 bao cám heo` → purchase_invoice_write (KHÔNG đổi)
+- `bán hàng cho Nguyễn Thị Lan` → sales_write/sales.create (GIỮ S22 — màn Bán Phase 6)
+- `bán được bao nhiêu hôm nay` → nhóm ĐỌC (không thành đơn)
+- `Nam trả 500 nghìn tiền cám` → payment_write/payment.create (CL-1; pin cũ cập nhật)
+- `Lịch sử thu của Nguyễn Thị Lan` → payment/payment.history
+- `doanh số hôm nay` → sales/sales.summary; `hóa đơn chưa trả của chị Lan` → sales/invoice.lookup (không đổi)
+
+════════════════════════════════════════════════════════════════════════════
+§3. DEFECT-1 (HTTP 500) — ROOT CAUSE THẬT + fix
+════════════════════════════════════════════════════════════════════════════
+- Làm mock TRUNG THỰC (`erpnext_payment_entry_list` bắt buộc `party_type` khớp master) ⇒ lộ: pipeline gọi
+  `skills.listPaymentEntries(partyId, knownIds, type)` (3 arg) vào bag `(id, type)` (2 arg) ⇒ type = Set
+  ⇒ skill luôn `"Customer"` ⇒ **sổ NCC đọc bằng sổ khách** (đúng lớp 500 của audit).
+- Fix: `skills.listPaymentEntries(partyId, isPayHistory ? "Supplier" : "Customer")`.
+- Sau fix: `test/route-corpus-pipeline.test.mjs` ⇒ `[sweep] 280 sentences · status {"200":280}` · 3/3
+  (pin DEFECT-1: 4 ca supplier-history đọc `phiếu chi`, KHÔNG `phiếu thu`, nêu tên NCC; gương khách giữ `phiếu thu`).
+
+════════════════════════════════════════════════════════════════════════════
+§4. FALSIFY F1–F5 — `.plan/next8/_falsify_phase8.mjs`
+════════════════════════════════════════════════════════════════════════════
+Output thật:
+  ✔ F1: witness RED · restore byte-identical · every `bán` ⇒ WRITE
+  ✔ F2: witness RED · restore byte-identical · drop the mua/bán direction tell-tale
+  ✔ F3: witness RED · restore byte-identical · hardcode party_type=Customer again (DEFECT-1)
+  ✔ F4: witness RED · restore byte-identical · drop the out-of-domain guard
+  ✔ F5: witness RED · restore byte-identical · let an unresolved/fuzzy party build a write proposal
+  FALSIFY OK — every mutation went RED and every file restored byte-identical
+(F3 lần chạy ĐẦU = GREEN ⇒ pin DEFECT-1 chưa quan sát được chiều tiền trên mock ⇒ đã làm mock trung thực rồi
+mới RED đúng — đây là giá trị của falsify.)
+
+════════════════════════════════════════════════════════════════════════════
+§5. REGRESSION + ĐIỂM DỪNG
+════════════════════════════════════════════════════════════════════════════
+- Node FULL `npm test` (đã `pkill nlp_service`): **1105 test / 1102 pass / 2 fail** — 2 fail ĐÚNG baseline env dsh.
+- Flutter `flutter test`: **449 pass / 3 fail** (baseline untracked `_probe_review_test.dart`) · analyze **1 warning** baseline.
+- OpenSpec: 7 change mới (6 CL + DEFECT-1) `validate --strict` = valid.
+- 2 pin cũ cập nhật có chủ ý (đổi hợp đồng CL-1/CL-5): `test/router.test.mjs`, `test/golden/classifier-cases.json` cls02.
+- Exit gate: `ROUTE_CORPUS_STRICT=1 node --test test/route-corpus.test.mjs` = 6/6 (280 ca: 167 locked PASS ·
+  43 review PASS · 70 review chờ owner phân loại) · 0 HTTP 500.
+- **DỪNG — KHÔNG tự commit** (routing mở màn ghi tiền + vùng tiền). Chờ owner chốt phase8-result §8.
+
+════════════════════════════════════════════════════════════════════════════
+§6. TỰ REVIEW CODE (manual — env này KHÔNG có OCR/AgentMemory/cocoindex/codebase-memory)
+════════════════════════════════════════════════════════════════════════════
+- Cách làm: đọc `git diff` 4 file tracked (`capabilities.json`, `capability-contract.mjs`,
+  `copilot-server.mjs`, `mock-server.mjs`) + tự kiểm null/validate/injection/secret/race;
+  dùng `grep -rn` thay `code_search` (hỏng: ENOTDIR …/rg).
+- ✅ Phát hiện 1 LỖI THẬT do CL-1 (ĐÃ SỬA): rewrite CL-1 quá tham — prepend `payment`
+  cho BẤT KỲ `trả <số>` nào ⇒ cướp câu LỆNH khác:
+    “xuất hóa đơn cho đơn đã trả 500 nghìn” → payment_write (SAI, phải sales_invoice_write)
+    “lập hoá đơn bán cho đơn đã trả 1 triệu” → payment_write (SAI)
+    “xem đơn đã trả 200 nghìn” → payment_write (SAI, phải payment.history)
+- Fix (hẹp): rewrite chỉ chạy khi (a) KHÔNG có mệnh đề `đã trả`/`da tra`, VÀ
+  (b) KHÔNG route `startsWith` nào đã chiếm đầu câu (helper `startsWithRouteClaims`
+  phản chiếu ĐÚNG vị từ của vòng lặp chính). 7 ca CL-1 + các câu HỎI giữ nguyên.
+- Verify sau fix: 12/12 probe đúng · locked 167/167 · strict 7/7 · sweep 280/280 HTTP 200 ·
+  Node FULL 1105/1102/2 (đúng baseline) · `openspec validate …cl1… --strict` valid.
+- Ponytail/impact/dead-code/pattern/scope/lessons: rewrite là THÊM điều kiện deny (không thêm
+  dependency, không nới keyword); CL-6 thuần DENY; không thấy chỗ thừa mới.
+
+════════════════════════════════════════════════════════════════════════════
+§7. 70 CA REVIEW (null-expectation) — ĐỀ XUẤT PASS/ACCEPT (KHÔNG tự ký)
+════════════════════════════════════════════════════════════════════════════
+- Bảng đầy đủ: `.plan/next8/review-70-classification.md` (70 dòng + verdict + matched + token-driven).
+- Đề xuất: PASS 61 · ACCEPT 6 (C5 word-order) · FIX? 3 (C3-157, C5-212, C5-219).
+- **OWNER CHỐT + KÝ 2026-10-01** (lệnh “sign off the remaining 67 … and record them in the fixture”):
+  FIX **C5-212/C5-219** → `payment_write` (rule CL-1b, §9) · **ACCEPT C3-157** + 6 dòng C5 word-order
+  (`accepted_by_owner` ghi vào fixture) · **PASS 61 dòng** còn lại được **ghi `expected_group`/
+  `expected_capability` = route QUAN SÁT ĐƯỢC** (`.plan/next8/_signoff_review_cases.mjs`) · **C2-154**
+  gắn `expected_capability = customer.lookup` (route quan sát; group đã khoá).
+- Harness cập nhật: `route-corpus.test.mjs` tách `accepted` khỏi `fail` cho review (như locked) +
+  **test mới** “every review row the OWNER LABELLED keeps its frozen route” ⇒ việc ký trở thành **GATE**
+  (đổi 1 dòng đã ký ⇒ ĐỎ), không chỉ là báo cáo.
+- Kết quả: `locked 167 PASS · review 113: pass 106 · fail 0 · accepted 7` ⇒ **280/280 PASS-hoặc-ACCEPTED**.
+  `.plan/next8/review-70-classification.md` đã ghi lại trạng thái ĐÃ KÝ (106 PASS · 7 ACCEPT).
+- Cảnh báo tiềm ẩn: `attributed_normalized` bọc entity bằng `«CUSTOMER_A»`/`«SUPPLIER_A»` —
+  CHÍNH token chứa keyword `customer`/`supplier` ⇒ 12/70 ca khớp keyword TRONG token (đúng
+  thứ bucket C3 muốn test, nhưng bằng tên GIẢ thay vì `entity_aliases[].real_name`) ⇒ nên
+  owner đọc; KHÔNG sửa fixture trong phiên này.
+- `accepted_by_owner` GIỮ NGUYÊN `null` tới khi owner ký.
+- 1 ca review có nhãn nhưng lệch capability: C2-154 `«CUSTOMER_B» đã mua bao nhiêu`
+  EXPECT `customer/null` got `customer/customer.lookup` → đề xuất ghi
+  `expected_capability = customer.balance` (chỉ thiếu nhãn; GROUP đúng).
+
+════════════════════════════════════════════════════════════════════════════
+§8. NỢ next5 M1/M2 “Hôm qua” — ROOT CAUSE + ĐỀ XUẤT (VÙNG NGÀY/TIỀN ⇒ DỪNG HỎI OWNER)
+════════════════════════════════════════════════════════════════════════════
+- Nguồn: `.plan/next5/D4-result.md` §95 (phát hiện NGOÀI phạm vi D4, KHÔNG sửa, chờ user) +
+  `.plan/next8/phases/phase-08-route-hardening.md` §5.6.
+- Đo code hiện tại (`apps/mobile/lib/features/ops/presentation/screens/daily_summary_screen.dart`):
+  * `RefreshIndicator(onRefresh: () => _load(force: true))` → `_load` LUÔN đọc HÔM NAY
+    (`client.dailySummary()` không truyền `date`), KHÔNG đọc lại `_yesterday` ⇒ đang chọn
+    “Hôm qua” mà kéo-refresh thì chỉ tải HÔM NAY, 2 thẻ hôm qua KHÔNG refresh.
+  * Retry trong thẻ khi đang xem hôm qua (`_salesInvoices`/`_receipts`, line 405/439) cũng
+    gọi `_load(force: true)` = hôm nay; chỉ nhánh `_yesterday == null` mới gọi `_loadYesterday`.
+  * `_loadYesterday` KHÔNG có tham số `force` và tự bỏ qua khi `_yesterday != null`.
+  ⇒ Đúng mô tả “refresh/retry ‘Hôm qua’ tải lại HÔM NAY”.
+- Ghi chú: phần “tiêu đề nói hôm qua nhưng số là hôm nay” mà D4-result §95 nêu đã ĐƯỢC sửa
+  trong code hiện tại (`_salesInvoices(viewingYesterday ? _yesterday! : data)`) — nợ còn lại
+  đúng là phần REFRESH/RETRY.
+- Đề xuất fix (hẹp, không đổi nghĩa số): khi `_viewDay != null`, refresh/retry phải đọc lại
+  ĐÚNG ngày đang xem (`_loadYesterday(force: true)` + cho `_loadYesterday` nhận `force`).
+  KHÔNG đổi công thức ngày, KHÔNG đổi delta, KHÔNG đụng `date` của drill.
+- ⚠️ Vùng NGÀY/SỐ ⇒ đã hỏi owner; **owner chốt 2026-10-01: “Refresh reads the currently-viewed day”**.
+  Đã triển khai — xem §9. (Ghi chú quy trình: AgentMemory không khả dụng trong env này nên không
+  `POST /observe {hookType:"safety-override"}` được; theo AGENTS.md cần **xác nhận lần 2 trước khi commit**.)
+
+════════════════════════════════════════════════════════════════════════════
+§9. TRIỂN KHAI 2 QUYẾT ĐỊNH OWNER (sau ask_user 2026-10-01)
+════════════════════════════════════════════════════════════════════════════
+**(a) CL-1b — `Thu <đối tác> <số>` → payment_write** (`capability-contract.mjs`):
+- Thêm nhánh: `if (!raw.startsWith("payment") && /^thu\s+(?!tiền|tien|nợ|no\s|hết|het|nhập|nhap)/.test(raw) && /\d/.test(raw)) raw = \`payment ${raw}\``.
+- **Bẫy đã vấp & sửa**: bản đầu dùng `^thu\s+(?!nhập|nhap)` ⇒ nuốt luôn dạng ĐÔI `thu tiền`
+  mà NLP sở hữu ⇒ làm đỏ pin CÓ CHỦ Ý ở `test/b3-quotation.test.mjs:633`
+  (`routeIntent("thu tiền cho chị Lan 500 nghìn") === null`). Thu hẹp để loại `thu tiền|thu nợ|thu hết`.
+- Verify: `Thu «CUSTOMER_A» 50 nghìn` / `Thu «CUSTOMER_C» 50 nghìn` → `payment_write`;
+  `thu tiền …`/`thu hết …` → null; `thu nhập …`/`thuế …` → null; Node FULL **1105/1102/2** (baseline);
+  corpus strict **7/7**; sweep **280/280 HTTP 200**; fixture C5-212/C5-219 nay `expected=payment_write/payment.create`.
+
+**(b) ACCEPT C3-157** (fixture `route-corpus.json`): `accepted_by_owner = {reason, decided_by:"owner", decided_at:"2026-10-01"}`.
+
+**(c) M1/M2 “Hôm qua” — refresh đọc ĐÚNG ngày đang xem** (`daily_summary_screen.dart`):
+- Thêm `_refresh()`: `_viewDay == null` ⇒ `_load(force:true)`; ngược lại ⇒ `Future.wait([_load(force:true), _loadYesterday()])`
+  (thẻ bán/thu đọc ngày đang xem; khối công nợ/nháp luôn-hiện-hôm-nay vẫn được đọc luôn).
+- Thêm `_retryFlowBlock()`: retry khối lỗi bán/thu khi đang xem Hôm qua ⇒ `_loadYesterday()`, không `_load` hôm nay.
+- `RefreshIndicator.onRefresh` → `_refresh` · `ref.listen(copilotApiClientProvider)` → `_refresh`.
+- **KHÔNG** đổi công thức ngày / delta / `date` của drill (server vẫn chọn ngày, §3.7).
+- Test mới `daily_summary_test.dart` “P4-6: pull-to-refresh while viewing Hôm qua re-reads YESTERDAY too”
+  (**FALSIFY**: trả `onRefresh` về `_load(force:true)` ⇒ test ĐỎ đúng assertion ⇒ restore xanh).
+- Regression: Flutter **450 pass / 3 fail** (3 = baseline untracked `_probe_review_test.dart`) · analyze **1 warning** (baseline).
+
+════════════════════════════════════════════════════════════════════════════
+§10. FALSIFY CL-1b + HÔM QUA — `.plan/next8/_falsify_phase8_followup.mjs`
+════════════════════════════════════════════════════════════════════════════
+Output thật:
+  ✔ F6: witness RED · restore byte-identical · disable the CL-1b bare-`Thu` rule (it never promotes)
+  ✔ F7: witness RED · restore byte-identical · widen CL-1b to the NLP-owned dual form `thu tiền` again
+  ✔ F8: witness RED · restore byte-identical · revert RefreshIndicator.onRefresh to today-only
+  ✔ F9: witness RED · restore byte-identical · bypass the viewed-day branch in _refresh (always read today)
+  FALSIFY OK — every mutation went RED and every file restored byte-identical
+- **F6 lần đầu GREEN ⇒ lộ lỗ thật**: cổng corpus CHỈ gate `locked`, nên việc owner ký các dòng
+  REVIEW không được test nào canh ⇒ đã thêm test “every review row the OWNER LABELLED keeps its
+  frozen route” (`route-corpus.test.mjs`) để quyết định của owner trở thành cổng thật; F6 chạy lại RED.
+- F7 dùng pin CÓ CHỦ Ý ở `test/b3-quotation.test.mjs:633` (`routeIntent("thu tiền …") === null`).
+- F8/F9 dùng witness Flutter `daily_summary_test.dart --plain-name "re-reads YESTERDAY"` (test mới §9c).
+
+════════════════════════════════════════════════════════════════════════════
+§11. COMMIT (owner xác nhận lần 2 — “COMMIT Phase 8 (lần 2 — owner xác nhận)”)
+════════════════════════════════════════════════════════════════════════════
+- **`7257fbd`** `feat(next8): route hardening corpus 280 PASS-or-ACCEPTED + DEFECT-1 + hôm qua refresh`
+  — 31 file, **+9.595 / −5**, stage TƯỜNG MINH đúng danh sách owner:
+  4 file Node sửa (`capabilities.json`/`capability-contract.mjs`/`copilot-server.mjs`/`mock-server.mjs`) ·
+  `test/fixtures/route-corpus.json` + `route-corpus.snapshot.json` + `test/route-corpus.test.mjs` +
+  `test/route-corpus-pipeline.test.mjs` (mới) · `apps/mobile/lib/features/ops/presentation/screens/daily_summary_screen.dart` +
+  `apps/mobile/test/daily_summary_test.dart` (mới) · 7 openspec `next8-route-*` (mới).
+- Secret scan trên tập staged: **SẠCH** (chỉ thấy TÊN biến env `ERPNEXT_API_KEY`/`…SECRET`, không giá trị).
+- **KHÔNG push** — repo không có remote. **KHÔNG** Phase 9.
+- Tập không đưa vào (đúng lệnh): `.plan/next8/phase8-result.md` (bị gitignore) · `result94.txt`/`working.md`
+  (owner: “nếu tracked” — cả hai UNTRACKED) · các file ops next5 khác (vẫn untracked).
+- Cây làm việc sau commit: **sạch** (không còn tracked modification).

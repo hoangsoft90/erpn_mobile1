@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<HDon>
+  <DLHDon Id="HD-0000123">
+    <TTChung>
+      <PBan>2.0.0</PBan>
+      <THDon>Hóa đơn giá trị gia tăng</THDon>
+      <KHMSHDon>1</KHMSHDon>
+      <KHHDon>C26TYY</KHHDon>
+      <SHDon>0000123</SHDon>
+      <NLap>2026-09-20</NLap>
+      <DVTTe>VND</DVTTe>
+      <TGia>1</TGia>
+      <HTTToan>TM</HTTToan>
+    </TTChung>
+    <NDHDon>
+      <NBan>
+        <Ten>Đại lý Cám Bình Dương</Ten>
+        <MST>0300000002</MST>
+        <DChi>Số 12, đường Lê Lợi, TP Thủ Dầu Một, Bình Dương</DChi>
+        <SDThoai>02743888999</SDThoai>
+      </NBan>
+      <NMua>
+        <Ten>Minh Phát Cám &amp; VLXD</Ten>
+        <MST>0312345678</MST>
+        <DChi>Ấp 3, xã Tân Thành</DChi>
+      </NMua>
+      <DSHHDVu>
+        <HHDVu>
+          <STT>1</STT>
+          <THHDVu>Cám gà thịt 25kg</THHDVu>
+          <DVTinh>Bao</DVTinh>
+          <SLuong>10</SLuong>
+          <DGia>270000</DGia>
+          <ThTien>2700000</ThTien>
+          <TSuat>10%</TSuat>
+          <TThue>270000</TThue>
+        </HHDVu>
+        <HHDVu>
+          <STT>2</STT>
+          <THHDVu>Cám heo tăng trọng 25kg</THHDVu>
+          <DVTinh>Bao</DVTinh>
+          <SLuong>5</SLuong>
+          <DGia>265000</DGia>
+          <ThTien>1325000</ThTien>
+          <TSuat>10%</TSuat>
+          <TThue>132500</TThue>
+        </HHDVu>
+      </DSHHDVu>
+      <TToan>
+        <TgTCThue>4025000</TgTCThue>
+        <TgTThue>402500</TgTThue>
+        <TgTTTBSo>4427500</TgTTTBSo>
+        <TgTTTBChu>Bốn triệu bốn trăm hai mươi bảy nghìn năm trăm đồng</TgTTTBChu>
+      </TToan>
+    </NDHDon>
+  </DLHDon>
+  <DSCKS />
+</HDon>

@@ -1,0 +1,232 @@
+================================================================================
+result87.txt — next8 / PHASE 3 — Collect: server validation + authoritative proposal
+Ngày: 2026-09-30 · Người chạy: agent · ✅ ĐÃ COMMIT (owner duyệt trong phiên), KHÔNG push
+  commit: c763107e7c75e8f86181b65187a2564b7d241d45 (16 file, branch master)
+Nguồn: .plan/next8/phases/phase-03-collect-server-validation.md
+       openspec/changes/next8-collect-server-validation/{tasks.md,proposal.md,specs/*}
+================================================================================
+
+§0. TRẠNG THÁI TOOL (đo đầu phiên — không tự cài/khởi động lại gì)
+--------------------------------------------------------------------------------
+- AgentMemory :3111        → KHÔNG phản hồi ⇒ bỏ /session/start + bước retrieval-3
+- cocoindex-code / codebase-memory-mcp / OCR / Simplenote → KHÔNG khả dụng
+  ⇒ Code Review chạy THỦ CÔNG (đọc git diff) theo mục "Graceful Degradation".
+- Node v24.21.0 · Flutter /google/flutter/bin · npm test = `COPILOT_MOCK_OK=1 node --test`
+- openspec CLI: `npx --no-install openspec validate next8-collect-server-validation --strict`
+  → "Change 'next8-collect-server-validation' is valid" (change đã có TRƯỚC khi code —
+  thoả owner rule #1; validate lại --strict lần này PASS).
+
+§1. BASELINE (đo TRƯỚC khi sửa trong phiên này)
+--------------------------------------------------------------------------------
+- Node full  : 992 tests / 990 pass / 2 fail  (dshGatewayHealth + verifyDshRuntime,
+               thiếu binary `dsh` — baseline env đã biết, KHÔNG phải regression)
+- Flutter    : 426 pass / 3 fail (test/_probe_review_test.dart — file probe untracked,
+               RenderFlex) + `flutter analyze` 1 warning (test/_probe_b0_voice_autosend.dart)
+
+§2. ĐÃ LÀM (map tasks.md §1–§6)
+--------------------------------------------------------------------------------
+§2.1 READ hoá đơn (tasks §1 · phase-03 §5.1) — src/skills/sales.mjs
+- `listOpenSalesInvoices` nhận `offset` + `complete`; trả `{scanned, matched, truncated,
+  count, offset, complete, data}`; thêm `status` vào `fields`.
+- Phân trang = CẮT trên một lần đọc ĐỦ (`limit: 0`), KHÔNG phải query trang 2
+  (tool pin không có offset). `truncated = complete ? start+cap < matched : raw.length >= cap`.
+- Đường bounded (chat/drill) giữ nguyên hành vi byte-compat.
+- src/mock-server.mjs: nhánh Sales Invoice của `erpnext_doc_list` cho `limit === 0`
+  = KHÔNG giới hạn (mirror tool thật; đo 2026-09-24: 20→20, 100→100, 0→all).
+
+§2.2 Draft-cover theo company (tasks §2 · §5.2) — payment-write.mjs + router.mjs
+- `listOpenDraftPaymentEntries(mcp, partyId, {company})`: thêm `["company","=",company]`
+  khi có company + thêm `company` vào `fields`; không truyền ⇒ hành vi cũ.
+- `openDraftCover(reads, partyId, direction, opts)`: thread `opts.company` xuống read.
+- Executor: cover sống truyền `{company: target.company}`.
+- `buildPaymentProposal` (đường chat) truyền `opts.company` — mặc định null ⇒ đường chat
+  KHÔNG đổi khi không có company.
+- router.mjs: 2 lambda skills-bag nay `(pid, o = {})` forward opts.
+
+§2.3 Builder nhiều reference + tài khoản theo phương thức (tasks §3 · §5.3)
+- `MONEY_CHANNELS = {cash:"Cash", bank_transfer:"Bank"}` + `channelOfMode(mode)` (nhận cả
+  token `cash`/`bank_transfer` lẫn nhãn tiếng Việt; trả null cho phần còn lại ⇒ từ chối).
+- `buildPaymentEntryData`: nhận `references[]` + `unallocated`; 1 dòng `references` cho mỗi
+  allocation; `paid_amount = received_amount = Σ allocated + unallocated`;
+  `unallocated_amount` ghi TƯỜNG MINH (difference_amount = 0). `references: []` là shape
+  THẬT (trả trước, 0 dòng) — dùng `Array.isArray` để không fallback về dòng null-name.
+- `resolvePaymentAccounts(mcp, {direction, invoice, mode, account})` viết lại theo lock §6.2:
+  đọc `erpnext_account_list` leaves của company MỘT LẦN →
+  (1) account user chọn (validate tồn tại + company + `account_type` khớp kênh)
+  → (2) `Company.default_cash_account`/`default_bank_account` (chỉ khi là leaf ĐÚNG loại)
+  → (3) BLOCK `PAYMENT_ACCOUNT_UNRESOLVED`.
+  ĐÃ XOÁ fallback "Cash-type đầu tiên". MoP KHÔNG còn là nguồn account (chỉ còn dùng để
+  resolve NAME của Mode of Payment cho field Link).
+- `buildCollectProposal(skills, {customer, allocations, method, company, handoffId,
+  submitNow, now})`: KHÔNG tự chọn hoá đơn; đọc số SỐNG + trừ nháp CÙNG company;
+  bắt buộc `allocations[]` khi khách còn nợ; rỗng chỉ hợp lệ khi 0 hoá đơn mở (advance,
+  `unallocated = paid`); `Σ allocated == Σ methods` (lệch ⇒ `ALLOCATION_TOTAL_MISMATCH`).
+- `executePaymentProposal`: vẫn TỪ CHỐI `> 1` allocation (`PAYMENT_MULTI_REFERENCE_NOT_READY`)
+  — widen `/execute` multi-ref là PHASE 4 (còn thiếu để 1 proposal nhiều references chạy
+  đầu-cuối THẬT).
+
+§2.4 Gỡ 422 multi-invoice (tasks §5) — src/copilot-server.mjs
+- XOÁ block `COLLECT_MULTI_INVOICE_NOT_READY` khỏi `proposeCollectFromHandoff`.
+- Thay bằng chuỗi kiểm theo bảng §5.4: company scope → 1 method (lock §6.1) → amount →
+  claimed_total (client chỉ là ĐẦU VÀO để so) → resolve account (§6.2) → `buildCollectProposal`.
+- 2 hoá đơn hợp lệ ⇒ 200 + `allocations[]` nhiều dòng (1 PE / 1 method).
+
+§2.5 Bảng §5.4 — 8 dòng, mỗi dòng 1 test + mã + copy tiếng Việt
+- #1 ownership/capability → test/next8-collect-propose.test.mjs (ticket bịa/ngoài principal
+  ⇒ 409 STALE_HANDOFF, không probe được) + next8-collect-handoff.test.mjs.
+- #2 NO_MATCH / MISSING_REQUIRED_FIELD → server-validation "§5.4 #2" + "#5".
+- #3 INVOICE_ALREADY_PAID → "§5.4 #3" (số SỐNG trừ nháp cùng company).
+- #4 INSUFFICIENT_OUTSTANDING / INVALID_AMOUNT → "§5.4 #4" ×2.
+- #5 Σ khớp (lock §6.3) → "§5.5(c)" + "§5.4 #5".
+- #6 đúng 1 method (lock §6.1) → propose HTTP "the form's values are re-validated
+  server-side" (`PAYMENT_METHOD_COUNT_INVALID` + copy "một hình thức thanh toán").
+  Ở tầng module, luật này được TÁI DÙNG từ `transaction-draft.validatePaymentMethods`
+  (mã đã có từ Phase 1 — "mã đã có thì tái dùng"), không viết bản thứ hai trong route.
+- #7 account tồn tại/đúng company/đúng `account_type` → "§5.4 #7" ×2 + "§6.2" ×2
+  (+ "§6.2 a bank intent cannot be satisfied by a Cash-type account").
+- #8 ERPNext đọc được (fail-closed) → MỚI: propose HTTP "§5.4 #8 an unreadable ERPNext is
+  fail-closed: ERP_UNAVAILABLE + no proposal" (`MOCK_ERP_FAIL_ACCOUNT_LIST=1` ⇒ 503 +
+  `ERP_UNAVAILABLE` + `proposal:null` + copy "thử lại").
+
+§2.6 2 LỖI THẬT tìm thấy KHI VERIFY (không phải khi viết code)
+--------------------------------------------------------------------------------
+(A) FIXTURE THIẾU ⇒ đỏ giả trên suite cũ: `test/payment-write.test.mjs` chạy
+    `executePaymentProposal` cuối-cùng mà `mockMcp()` cục bộ chỉ phục vụ
+    sales_invoice_list / doc_get(SI, MoP, PE) / doc_list(PE, MoP) — KHÔNG có
+    `erpnext_account_list` và doc_get(Company). Sau §6.2 (đọc account list là BẮT BUỘC)
+    toàn bộ file đỏ với `PAYMENT_ERP_UNAVAILABLE: unexpected tool erpnext_account_list`
+    (500 thay vì 503/200). ⇒ Sửa ĐÚNG CHỖ: thêm fixture ACCOUNTS/COMPANY_DEFAULTS vào
+    mock của test (mirror src/mock-server.mjs), KHÔNG hạ assertion.
+    Kèm: test "site không có cash mode ⇒ từ chối" viết lại theo luật §6.2 — nay dựng site
+    CÓ mode Cash nhưng công ty KHÔNG có leaf loại Cash và KHÔNG khai `default_cash_account`
+    ⇒ phải `PAYMENT_ACCOUNT_UNRESOLVED` (/loại Cash/), cấp tính chất AN TOÀN như cũ
+    (không được rơi sang sổ Bank), không phải hạ nhẹ.
+
+(B) REGRESSION THẬT trong đường production (bắt bởi 3 test Phase 1 đỏ):
+    bản đầu của tôi lấy company = `authz.company ?? null` và TRẢ 422 `COMPANY_SCOPE_REQUIRED`
+    khi trống. Sai: đó là THÊM một ràng buộc mới — deployment chưa pin company là ca BÌNH
+    THƯỜNG (chính màn này và `/collect/accounts` đọc company mặc định của site), nên
+    cách đó giết tính năng trên site 1-công-ty mà vờ như đang kiểm an toàn.
+    Luật đúng (đã có sẵn trong repo, ghi rõ trong `resolveReadCompany`): 
+    **config pin → company mặc định của phiên ERPNext → từ chối**, và "không tự chọn
+    sổ của một công ty" (C0 §6.4).
+    ⇒ Tách `readSessionCompany` + `resolveReadCompany` ra `src/company-scope.mjs`
+    (một nhà cho trust boundary; TRƯỚC ĐÂY là hàm private trong http-ask.mjs) và dùng
+    CHÍNH nó ở `proposeCollectFromHandoff`. Mã trả về client vẫn là `COMPANY_SCOPE_REQUIRED`
+    (taxonomy plan §2/§5.4 #7) khi `COMPANY_UNRESOLVED`, status 503 như route anh em.
+    Thêm 2 test HTTP: (i) KHÔNG pin company ⇒ 200 + account `1110 - Cash - DFC`
+    (chứng minh company lấy từ site — chỉ đọc được dưới đúng company đó);
+    (ii) KHÔNG pin VÀ site không có Default Company (`MOCK_ERP_DEFAULT_COMPANY=""`)
+    ⇒ `COMPANY_SCOPE_REQUIRED` + `proposal:null` + copy có `COPILOT_COMPANY`.
+
+§2.7 PONYTAIL / REVIEW-FINDING ĐÃ XỬ LÝ
+- Route tự viết lại luật đếm/loại/số tiền của method = bản sao thứ hai của một luật TIỀN
+  → nay tái dùng `validatePaymentMethods` + `DRAFT_CODES` từ transaction-draft.mjs.
+- `validateTransactionDraft` (transaction-draft.mjs) nay KHÔNG còn caller production
+  (nửa allocation của nó đã bị `buildCollectProposal` thay bằng bản kiểm trên số SỐNG).
+  GIỮ LẠI (không xoá trong phase tiền) + ghi ở đây làm việc dọn dẹp Phase 4.
+- Thêm tripwire "mọi token trong `PAYMENT_MODES` phải có channel" — 2 bảng
+  (`PAYMENT_MODES` vs `MONEY_CHANNELS`) lệch nhau sẽ im lặng rơi vào sổ Bank.
+
+§3. FALSIFY F1–F7 — ĐỎ ĐÚNG CHỖ + RESTORE BYTE-IDENTICAL (tasks §6)
+--------------------------------------------------------------------------------
+| # | Đột biến | Test ĐỎ |
+|---|---|---|
+| F1 | bỏ push filter `company` ở read hoá đơn | §5.1(a) only the resolved company's invoices are read |
+| F2 | bỏ kiểm `account_type` của account user chọn | §5.4 #7 wrong-typed account is ACCOUNT_TYPE_MISMATCH |
+| F3 | dùng `outstanding` của row, không trừ nháp sống | §5.4 #3 covered by an open draft is INVOICE_ALREADY_PAID |
+| F4 | bỏ kiểm tổng khớp | §5.5(c) mismatch between allocations and the payment total |
+| F5 | thêm lại fallback "Cash đầu tiên" | §6.2 ...no matching default the answer is BLOCK + §6.2 bank intent cannot be satisfied by a Cash-type account (2 test) |
+| F6 | cho on-account khi khách CÒN hoá đơn mở | §5.4 #5 empty allocation list is MISSING_REQUIRED_FIELD |
+| F7 | nhận >1 payment method | propose: the form's values are re-validated server-side (lock §6.1) |
+- F7 chạy LẠI sau khi luật chuyển sang `validatePaymentMethods` (mutate `list.length >
+  maxMethods`) ⇒ vẫn ĐỎ đúng test đó.
+- Khôi phục: md5 khớp lại từng file —
+  sales.mjs a1fde6edddae9b0a88b22dd70081d997 ·
+  payment-write.mjs 0f9854287508575b1442029a531fa2ad ·
+  copilot-server.mjs a9aa796f6cf20c5e0eeb9d6420daa511 ·
+  http-ask.mjs bee6e993f356621ffa4c2fa2b87d1f0b ·
+  transaction-draft.mjs fc0a3b23e9c5defb27716472a09755e5
+- Không còn file `.bak`/`.orig`/`.falsify*` trong cây (find = rỗng).
+
+§4. KIỂM THỬ — SỐ ĐO ĐƯỢC
+--------------------------------------------------------------------------------
+- Targeted (8 file, COPILOT_MOCK_OK=1): 127 pass / 0 fail
+  (next8-collect-propose · -reads · -accounts · -draft · -handoff · -server-validation ·
+   payment-write · correlation-field)
+- File mới `test/next8-collect-server-validation.test.mjs`: 27/27
+  (§5.1 a–d, §5.2 ×2, §5.3 ×3, §5.4 #2/#3/#4×2/#5/#7×2, §5.5 ×3, §6.2 ×5,
+   tripwire token↔channel, executor multi-ref refusal)
+- `npm test` (FULL): **1022 tests / 1020 pass / 2 fail** — 2 fail ĐÚNG baseline env dsh
+  (dshGatewayHealth, verifyDshRuntime). 992 → 1022 = +30 test mới, 0 regression khác.
+- Flutter: 426 pass / 3 fail = ĐÚNG baseline (3 fail trong `test/_probe_review_test.dart`
+  untracked) · `flutter analyze` = 1 warning baseline (`_probe_b0_voice_autosend.dart`).
+  Phase 3 KHÔNG sửa một dòng Dart nào (client Phase 2 đã gửi đúng token `cash`/
+  `bank_transfer` — đã đối chiếu `collect_models.dart`), nên không cần UI mới.
+
+§5. DIFF PHẠM VI
+--------------------------------------------------------------------------------
+ Sửa (tracked): mcp-erpnext/src/{copilot-server,http-ask,mock-server,router}.mjs
+                mcp-erpnext/src/skills/{payment-write,sales}.mjs
+                mcp-erpnext/test/next8-collect-propose.test.mjs
+ Mới (untracked — owner phải `git add`):
+                mcp-erpnext/src/company-scope.mjs
+                mcp-erpnext/test/next8-collect-server-validation.test.mjs
+                mcp-erpnext/test/payment-write.test.mjs   ← sửa fixture §2.6-A nhưng file NÀY
+                  chưa từng được track (root commit Phase 2 không stage hết file test)
+                  ⇒ kiểm bằng `git ls-files --error-unmatch` (báo "did not match").
+KHÔNG chạm: safety-gateway.mjs · luật 9 write khác · Sales/Purchase screen · N-PE split ·
+fallback account chéo · Flutter · force-push · self-commit.
+
+§6. CODE REVIEW (thủ công — OCR không khả dụng)
+--------------------------------------------------------------------------------
+1. Bug/security quét tay trên `git diff`: không thấy NPE mới (mọi nhánh đọc đều `?? null`
+   + null-check trước dùng), không SQL/đường ghi mới, không secret trong diff.
+2. Ponytail: đã GỠ 1 bản sao luật tiền (§2.7); không thêm dependency/abstraction nào.
+3. Impact: caller của `resolvePaymentAccounts`/`buildPaymentEntryData`/`openDraftCover`/
+   `listOpenDraftPaymentEntries`/`listOpenSalesInvoices` đều nằm trong suite đã chạy
+   (1022 test) — không có caller nào đỏ ngoài baseline.
+4. Dead code: `validateTransactionDraft` (xem §2.7 — cố ý giữ, ghi nợ Phase 4).
+5. Pattern: giữ đúng khuôn `{ok:false, code, reason}` + copy tiếng Việt + markUntrusted.
+6. Scope: đối chiếu tasks.md — không lan ra ngoài (mục §5).
+7. Lessons: AgentMemory/Simplenote KHÔNG khả dụng ⇒ không tra được; bài học ghi ở §7.
+
+§7. BÀI HỌC (đáng ghi lại — chờ công cụ memory quay lại)
+--------------------------------------------------------------------------------
+L1. Thêm một ràng buộc "an toàn" (bắt buộc pin company) có thể GIẾT tính năng thật và
+    trông vẫn như đang chặt hơn. Trước khi thêm, phải đọc route ANH EM trong cùng màn
+    (`/collect/accounts`) xem luật đã chốt là gì — ở đây là "config pin → default của site
+    → từ chối", không phải "pin hoặc chết".
+L2. Khi một hàm bắt đầu gọi một READ mới, mọi test double cục bộ phục vụ hàm đó sẽ đỏ với
+    lỗi trông NHƯ lỗi production (`unexpected tool …`). Phân biệt bằng cách hỏi: "lỗi này
+    nằm ở test double hay ở thứ tự đọc thật?" — ở đây là test double (đã đối chiếu
+    src/mock-server.mjs có nhánh đó thật).
+L3. Trust boundary phải ở MỘT nhà: hàm resolve company bị private trong http-ask.mjs nên
+    route khác không dùng được ⇒ dẫn thẳng tới L1. Tách ra module dùng chung là fix gốc.
+
+§8. CÒN LẠI / RỦI RO ĐÃ BIẾT (nói thẳng, không báo xanh thay)
+--------------------------------------------------------------------------------
+- CHƯA chạy `/execute` nhiều reference THẬT (Phase 4). Một proposal 2 hoá đơn hiện
+  dựng được (200) nhưng execute TỪ CHỐI có mã — đúng phạm vi, KHÔNG phải đã xong.
+- `buildPaymentEntryData` nay LUÔN gửi `unallocated_amount` (0 ở đường 1-hoá-đơn cũ).
+  ERPNext tự tính lại field này trong validate nên kỳ vọng vô hại, nhưng đây là thay đổi
+  payload trên ĐƯỜNG GHI ĐANG CHẠY ⇒ phải xác nhận bằng 1 lần ghi thật đầu tiên ở Phase 4.
+- Mock không có khách nào có 2 hoá đơn mở ⇒ ca "2 hoá đơn hợp lệ" chỉ được pin ở unit test
+  (`buildCollectProposal`), không có E2E HTTP. Ghi rõ, không giả vờ đã E2E.
+- `DEFAULT_COMPANY` cho deployment thật vẫn là human gate (đặt `COPILOT_COMPANY`).
+
+§9. COMMIT (owner duyệt) — ĐÃ XONG, KHÔNG push
+--------------------------------------------------------------------------------
+- `git commit` → **c763107** (`c763107e7c75e8f86181b65187a2564b7d241d45`), branch `master`
+- Stage TƯỜNG MINH 16 file: 7 tracked sửa + 3 untracked phải add (company-scope.mjs ·
+  next8-collect-server-validation.test.mjs · payment-write.test.mjs) + **6 file openspec change
+  `next8-collect-server-validation/`** (proposal + 4 spec delta + tasks) — theo đúng tiền lệ
+  Phase 2 (commit 16c17fa đã stage 2 change openspec của phase đó); file này KHÔNG có trong
+  danh sách owner liệt kê nên ghi rõ ở đây để owner soi lại.
+- BANNED CHECK: 0 path khớp `.env` / `.plan/` / `_probe_` / `*.g.dart` / `node_modules` /
+  `.agent_sessions` / `initp` / store runtime.
+- SECRET SCAN trên `git diff --cached`: chỉ có chữ "token" trong comment/tên test + 1 import
+  `risk-levels.mjs` — **0 secret** (không dán giá trị nào ra ngoài).
+- PUSH: **KHÔNG** (owner chưa ghi PUSH=CÓ) ⇒ HEAD local `master` hơn origin... không có remote.
+- Sổ sách đã ghi: result87.txt (file này) · .plan/next8/phase3-result.md · working.md (mục 31) ·
+  openspec/changes/next8-collect-server-validation/tasks.md (tick 27/27, validate --strict = valid).

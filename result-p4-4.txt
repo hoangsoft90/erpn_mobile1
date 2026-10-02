@@ -1,0 +1,109 @@
+result-p4-4.txt — P4-4: DRILL-DOWN STRUCTURED (plan4_final §4.4) — 2026-09-21
+Depends: P4-2 (route READ) + P4-3 (màn Tóm tắt ngày) + A1 (pattern /read/list)
+Phạm vi: tap chỉ số → drill id CỐ ĐỊNH · list ≤10 · Back · KHÔNG classifier · KHÔNG /execute
+CẤM đã đối chiếu: WRITE mới · camera · submit · free-text vào classifier làm đường chính
+
+════════════════════════════════════════════════════════════════════
+§0 — ĐO TRƯỚC KHI CODE (dữ kiện thật)
+════════════════════════════════════════════════════════════════════
+| # | Đo được | Hệ quả thiết kế |
+|---|---------|-----------------|
+| 1 | A1 đã có `ui_screens` + `GET /read/list` + `ReadListScreen` (envelope items/total/truncated) | P4-4 tái dùng đúng envelope + màn list Flutter; KHÔNG dựng extractor thứ hai — drill dùng lại CHÍNH các reader của ops-summary để số dòng luôn cộng ra đúng số block |
+| 2 | `ui_screens` gắn theo entity khách; drill là theo NGÀY + id cố định | contract thêm block `drill_screens` riêng, validate fail-closed như `ui_screens` |
+| 3 | plan4 §4.4 cấm inject free-text vào classifier làm đường chính | route nhận `id` + `date` thuần; từ chối mọi id không khai trong contract |
+| 4 | 5 drill id được nêu trong spec: sales_orders_today · invoices_today · receipts_today · overdue_customers · app_drafts_today | mỗi id gán 1 capability READ đúng dữ liệu nó đọc (authorize() chạy theo nó TRƯỚC khi chạm ERPNext): sales.summary / invoice.lookup / payment.history / customer.balance / ops.daily_summary |
+
+════════════════════════════════════════════════════════════════════
+§1 — CODE (server)
+════════════════════════════════════════════════════════════════════
+1. `capabilities.json` — block `drill_screens`: 5 id, mỗi id {title, capability, limit{default 10, min 5, max 10},
+   comment}. `capability` là Nguồn quyền + Nguồn số (đọc đúng tập mà block aggregate cộng).
+2. `src/capability-contract.mjs` — validate `drill_screens` fail-closed (id rỗng/trỏ capability lạ ⇒ contract
+   invalid) + accessor `drillScreen(id)` / `listDrillScreens()` + clamp limit server-side.
+3. `src/skills/ops-summary.mjs` — `readDayDrill(id, date, limit)`: DÙNG LẠI đúng primitive của aggregate
+   (cùng filter, cùng cách tách submitted/draft, cùng cách chia theo HĐ/ứng trước, cùng đo quá hạn).
+   Quy ước đếm: đếm bằng ĐỘ DÀI danh sách đã lọc company/null thay vì SQL count (bài học §4.2 — count gộp
+   cả dòng null ⇒ lệch với block aggregate).
+4. `src/drill-views.mjs` — envelope GIỐNG A1 (items, total_documents, truncated, generated_at, meta) để
+   Flutter tái dùng khuôn màn list; thêm `drill_id` + `title` + `date` cho title bar.
+5. `src/http-ask.mjs` — route `GET|POST /read/drill`: auth basic non-loopback như /ask · bucket READ ·
+   **KHÔNG** qua NLP/classifier · id lạ ⇒ 404 `DRILL_UNKNOWN` · date sai ⇒ 400 (đúng logic P4-2) ·
+   company resolve server-side — tách phần này thành helper dùng chung `resolveReadCompany()`
+   (ranh giới tin cậy 1 nhà, route mới không copy) · partial từ skill đi thẳng response.
+
+════════════════════════════════════════════════════════════════════
+§2 — CODE (Flutter)
+════════════════════════════════════════════════════════════════════
+6. `lib/features/ops/data/drill_models.dart` — parse envelope A1-shape; `truncated` + `total` hiển thị
+   trung thực ("… và N dòng nữa").
+7. `CopilotApiClient.dailySummaryDrill({id, date})` — GET /read/drill, chung Dio/auth với summary.
+8. `lib/features/ops/presentation/screens/drill_list_screen.dart` — màn list: Back (AppBar) về đúng nơi
+   gọi · retry khi lỗi · không affordance ghi (không TextField/FilledButton) · footer provenance giữ REAL|MOCK.
+9. Route `/drill` FAIL-CLOSED: thiếu `extra` intent ⇒ màn lỗi rõ ràng, không đoán id.
+10. Tap chỉ số trên màn Tóm tắt ngày → `context.go` GoRouter (KHÔNG `Navigator.pushNamed` — không đi qua
+    GoRouter, test lộ ngay): SO submitted/draft (bảng con) · HĐ · thu · quá hạn · nháp app.
+
+════════════════════════════════════════════════════════════════════
+§3 — TEST + BẰNG CHỨNG (số thật, chạy tại 2026-09-21)
+════════════════════════════════════════════════════════════════════
+- Test server mới: `test/p44-read-drill.test.mjs` **9/9** — trong đó GUARD CHỐNG DRIFT: trên cùng fixture,
+  TỔNG dòng drill phải bằng ĐÚNG số block aggregate (SO sub/draft, SI, thu theo HĐ/ứng trước, quá hạn,
+  nháp app) — chống "extractor thứ hai" tự drift khỏi summary.
+- Authz tách file `test/p44-read-drill-authz.test.mjs` (contract tạm trước import — khuôn P4-2).
+- Flutter: `test/drill_list_test.dart` **8/8** — trong đó: tap drill KHÔNG gọi /execute (assert trên log
+  request) · KHÔNG qua classifier (đường là id, không text) · truncated hiển thị đúng · Back · fail-closed
+  khi thiếu intent.
+- **Node: 519 (517 pass, 2 fail dsh-gateway từ B0)** (+9). **Flutter: 241/241 PASS** (+8). **analyze: 0 issue.**
+- **Falsify P4-4: 12/12 RED** — harness mới `scripts/falsify/lib/harness.mjs` (lib DÙNG CHUNG: runner Dart
+  + Node không copy logic lần thứ ba) + `scripts/falsify/p44-read-drill.mjs`; mỗi ca xanh-trước/mutate/
+  đỏ ĐÚNG TÊN test/restore byte-identical. Ca tiêu biểu: gỡ clamp limit ⇒ đỏ test "limit 11 bị clamp";
+  gỡ guard drift ⇒ đỏ đúng test tổng = block; đổi route thành inject text vào classifier ⇒ đỏ test
+  "không classifier".
+- **Python: 62 OK** (`PYTHONPATH=src`, không đụng nhưng chạy cho chắc).
+- Mutation sót: 0 (grep các mutation đã apply = rỗng).
+
+════════════════════════════════════════════════════════════════════
+§4 — VÒNG LẶP THẬT (read-only, service thật + ERPNext thật)
+════════════════════════════════════════════════════════════════════
+`/tmp/p44-real-loop.mjs`: gọi /read/daily-summary + 5 drill trên CÙNG ngày (2026-09-21), đối chiếu:
+  CHECK MATCH  SO submitted count/amount, SO draft amount ......... MATCH
+  CHECK MATCH  invoices amount (575.000) ........................... MATCH
+  CHECK MATCH  receipts total (11.430.000) + against/advance tách .. MATCH
+  CHECK MATCH  overdue total (4.700.000, top khách P1A-ACCEPT…) ... MATCH
+  CHECK MATCH  app drafts count (0) ................................ MATCH
+  RESULT: ALL MATCH — drill và summary đọc CÙNG một nguồn số tại thời điểm đo.
+
+════════════════════════════════════════════════════════════════════
+§5 — LỖI TỰ GÂY DỌC ĐƯỜNG (đã sửa, đã falsify lại)
+════════════════════════════════════════════════════════════════════
+1. Fixture credit note để SỐ DƯƠNG ⇒ guard drift đỏ oan theo hướng ngược — số thật phải âm; sửa fixture
+   trước khi kết luận code sai (đúng nhóm 27: phép kiểm phải chạm đúng thứ nó định đo).
+2. Test authz đoán sai tên helper khuôn P4-2 ⇒ tách đúng khuôn (contract tạm + import sau).
+3. `Navigator.pushNamed` KHÔNG đi qua GoRouter ⇒ test điều hướng đỏ; app chỗ khác dùng `context.go` ⇒
+   theo đúng khuôn repo.
+4. **Test chaos `http-execute` dùng store idempotency MẶC ĐỊNH của repo** (duy nhất 1 test không truyền
+   `idemStore`) — record PENDING sót lại trong `idempotency-store/commands.json` làm LẦN CHẠY SAU đỏ
+   (fail ổn định, tái hiện được; cất store đi thì pass). Sửa test cũ truyền store riêng — KHÔNG phải
+   lỗi code P4-4 nhưng là state độc hại thật, đã bịt.
+5. SQL count GỘP dòng null (drill = summary + 1) ⇒ chuyển sang đếm bằng list đã lọc; guard drift bắt
+   được ngay — đúng vai trò của nó.
+6. **[Review vòng 2, 2026-09-21] `clampUiLimit`: `Number(null) = 0` ⇒ KHÔNG gửi limit bị clamp về min (5)
+   thay vì default (10)** — trang co lại im lặng so với hợp đồng đã hứa. Đã sửa (absent/undefined/rỗng ⇒
+   default) + test riêng (GET không limit, POST không limit, `limit=` rỗng) + ca falsify ⇒ **14/14 RED**.
+7. **[Review vòng 2, 2026-09-21] Nháp app KHÔNG lọc company (cả block `appDrafts` lẫn drill `app_drafts_today`)**
+   — nháp do copilot tạo cho công ty khác bị đếm oan là nháp của tiệm. Đã sửa cả 2 nơi (thêm field `company`
+   + `rowOfCompany`), fixture thêm PO-APP (của mình) + PO-OTHER (công ty khác), guard drift mở rộng phủ
+   app_drafts (drill rows = block count, PO-OTHER vắng mặt ở CẢ HAI). Suite: Node **520 (518 pass, 2 fail dsh từ B0)**.
+
+════════════════════════════════════════════════════════════════════
+§6 — GIỚI HẠN + CHỜ USER
+════════════════════════════════════════════════════════════════════
+- Không emulator/device ⇒ UI chứng minh bằng widget test trên router thật + vòng HTTP thật; APK theo
+  quyết định user "để sau" (không push/không git init từ máy này).
+- OCR review không chạy (checkout không có git ⇒ không diff) ⇒ review mặc định (đọc diff thủ công) —
+  đã chạy trong vòng review: không phát hiện lỗ hổng mới sau các fix §5.
+- AgentMemory/MCP Simplenote không có trong tool phiên này.
+- ❓ CHỜ USER: (a) duyệt commit (vùng đọc SỐ TIỀN ⇒ AI không tự ký duyệt); (b) P4-5 nháp block chi tiết.
+- **Review vòng 2 (2026-09-21)**: docs trước đây ghi sai tên helper — code thật là **`resolveReadCompany()`**
+  (không phải `resolveReadCompany()`), đã sửa ở các file docs; thêm 2 bug thật §5.6–5.7 (clamp absent
+  limit, thiếu scoping company cho nháp) — đã sửa + test + falsify 14/14 RED.

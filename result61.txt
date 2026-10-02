@@ -1,0 +1,255 @@
+========================================================================
+RESULT 61 — AUTO-CHUYỂN SANG "PHÂN TÍCH BẰNG AI" KHI /ask KHÔNG KHỚP ROUTE
+             (+ §A: TTS đọc hẹp hơn + Markdown cho bubble, cùng phiên)
+Timestamp: 2026-09-20 (giờ shell, UTC)
+Chỉ đạo user: ".plan/next2/auto-fallback-dsh.md — làm theo đúng thứ tự, bắt đầu từ
+mục 0 (điều tra classifier) trước khi code UI. Xác nhận p5-dsh-optin.test.mjs vẫn
+xanh sau khi code xong, không sửa file đó. Đọc lại app_settings_service.dart +
+chat_screen.dart trước khi code. Giữ nguyên: verification-before-completion,
+falsify, không báo xong bằng lời, không đụng dsh-gateway.mjs/copilot-server.mjs."
+Phạm vi: Flutter client (`apps/mobile/`) + 1 file evidence. KHÔNG sửa backend.
+KHÔNG commit (env này không có `.git` — xem §7). KHÔNG tạo/sửa Payment Entry.
+========================================================================
+
+== 0. ĐIỀU TRA TRƯỚC KHI CODE UI — vì sao "classifier có vẻ không chạy" ==
+
+0.1 Đọc source trước khi đoán (không suy luận từ tên nhánh):
+
+    mcp-erpnext/src/copilot-server.mjs:289-323
+      if (!route) {
+        const classified = await classifyIntent(nlp.text, { config: classifierConfig() });
+        if (classified.ok && classified.intent && !classified.low_confidence) { ... }
+        else if (classified.ok) { error_code: "LOW_CONFIDENCE" ... }
+      }
+      if (!route) { error_code: "UNKNOWN_INTENT", reason: "no skill route matched ..." }
+
+  ⇒ XÁC NHẬN giả thuyết trong plan §0: `UNKNOWN_INTENT` CHỈ được trả khi
+    `classifyIntent()` KHÔNG ok:true (lỗi/tắt/timeout/JSON hỏng). Nếu classifier
+    chạy bình thường mà không đủ chắc ⇒ `LOW_CONFIDENCE` (thông điệp KHÁC hẳn).
+
+0.2 Đo thật trong env này (biến nào có trong .env — CHỈ tên, không in giá trị):
+
+$ grep -oE '^[A-Za-z_][A-Za-z0-9_]*=' .env | tr -d '='
+ERPNEXT_URL ERPNEXT_API_KEY ERPNEXT_API_SECRET GH_REPO_URL GH_TOKEN ASK_USER
+ASK_PASSWORD ASK_ALLOW_PUBLIC ZEN_API_KEY GEMINI_API_KEY MAC_LLM_API_KEY
+MAC_PROJECT_DIR AKI_MCP_URL AKI_Passphrase AKI_OAuth_Client_ID AKI_OAuth_Client_Secret
+   ⇒ KHÔNG có biến COPILOT_CLASSIFIER* nào ⇒ config dùng DEFAULT.
+
+$ (ss -ltnp | grep -E '8787|8788|8900') || echo "(không có 8787/8788/8900)"
+(không có 8787/8788/8900)
+   ⇒ trong env này KHÔNG service nào đang chạy (kể cả LLM Router :8900).
+
+$ node --input-type=module -e "... classifierConfig(); classifyIntent(...)"
+classifierConfig() = {"enabled":true,"url":"http://127.0.0.1:8900",
+  "model":"ag/gemini-3.6-flash-low","timeoutMs":2500,"minConfidence":0.55,"apiKeyEnv":null}
+  "Chào bạn"                      => {"ok":false,"reason":"ERROR_TypeError"}  (72ms)
+  "anh Ba còn nợ mấy"             => {"ok":false,"reason":"ERROR_TypeError"}  (4ms)
+  "trong kho còn bao nhiêu cám heo" => {"ok":false,"reason":"ERROR_TypeError"}  (4ms)
+
+  ⇒ classifier BẬT trong config nhưng MỌI lần gọi đều fail (fetch tới :8900 không
+    có gì lắng nghe) ⇒ rơi xuống `UNKNOWN_INTENT`. Đúng triệu chứng user thấy.
+
+0.3 Vì sao chỉ cần 1 upstream chết là classifier chết — đọc config thật:
+
+    scripts/llm-router.config.json  (upstreams)
+      mac-custom    baseUrl "http://localhost:9000/v1"  model "ag/gemini-3.6-flash-low"
+      mock          model "mock-copilot-1"
+      zen           model "glm-5.3-flash"
+      gemini-openai model "gemini-3.6-flash"
+
+    scripts/llm-router.mjs:127
+      const matches = (u) => !wantModel || !u.model || u.model === wantModel;
+
+  ⇒ Router khớp model CHÍNH XÁC. Model mặc định của classifier
+    (`ag/gemini-3.6-flash-low`) chỉ có DUY NHẤT `mac-custom` phục vụ được, và
+    baseUrl của nó trong config đang là `http://localhost:9000/v1`, còn
+    `.project/integrations.md` lại ghi mac-custom đi qua tunnel `llm9000.loca.lt`.
+  ⇒ Trên máy chạy gateway (VPS) không có gì ở localhost:9000 ⇒ classifier fail
+    hết ⇒ mọi câu ngoài keyword-router ra `UNKNOWN_INTENT`.
+    Đây là DRIFT CẤU HÌNH / hạ tầng, KHÔNG phải bug code — và ĐỘC LẬP với tính
+    năng dưới đây (nếu không biết trước sẽ dễ nhầm "classifier hỏng" thành
+    "app chưa switch tab").
+
+  Đường LOW_CONFIDENCE thì CÓ thật khi classifier chạy được — test có sẵn:
+$ (cd mcp-erpnext && node --test test/p3-classifier.test.mjs)   # 15/15 pass
+  test/p3-classifier.test.mjs:276 "E2E — classifier low confidence becomes
+  LOW_CONFIDENCE (ask again), not a route"  →  pass 15 · fail 0
+
+  KHÔNG sửa gì trong backend (mục này chỉ đọc source + đo).
+
+== 1. LÀM RÕ D2 — luật "server không tự gọi dsh" giữ nguyên ==
+
+Tính năng này nằm HOÀN TOÀN ở Flutter CLIENT: khi `/ask` trả
+`error_code == "UNKNOWN_INTENT"`, CLIENT tự phát request THỨ HAI tới `/dsh/ask`.
+Hai request tách biệt do client điều phối — không phải server chuyển tiếp.
+Ghi rõ tại nơi code: `chat_controller.dart` → doc của `askAiFallback()`
+("What this is NOT: a server-side redirect ... D2, asserted by
+p5-dsh-optin.test.mjs").
+
+== 2. SETTING MỚI — theo ĐÚNG khuôn `ttsEnabled`/`allowSubmitPayment` ==
+
+- `core/constants/app_constants.dart`: `autoFallbackToAiStorageKey =
+  'settings_auto_fallback_to_ai_v1'` (versioned key, như mọi key khác).
+- `core/settings/app_settings_service.dart`: `bool get autoFallbackToAi`
+  (try/catch, thiếu key/prefs null/hỏng ⇒ false = OFF) +
+  `Future<bool> saveAutoFallbackToAi(bool)` cùng khuôn `saveTtsEnabled`
+  + thêm key vào `clear()`.
+- `settings_screen.dart`: section mới "Trả lời câu hỏi" + `SwitchListTile`
+  "Tự động chuyển sang AI khi không tìm thấy nghiệp vụ phù hợp", mặc định OFF,
+  KHÔNG dialog (không nằm trong đường tiền, khác `allowSubmitPayment`), subtitle
+  nói rõ ON/TẮT làm gì. Save có tính vào `ok` tổng (bài học "báo đã lưu mà không
+  lưu được").
+
+== 3. RẼ NHÁNH THEO SETTING — đọc ĐÚNG LÚC nhận response ==
+
+`chat_controller.dart` `send()`:
+
+    final unrouted = result.errorCode == _unknownIntentCode;
+    final auto = unrouted && ref.read(appSettingsServiceProvider).autoFallbackToAi;
+    await _append(ChatTurn.fromAskResult(result, typedQuestion: trimmed,
+                                         aiFallbackOffered: unrouted && !auto));
+    ...
+    if (autoFallback) return askAiFallback(trimmed);   // (ngoài try — xem §6)
+
+- ON  ⇒ tự gọi `/dsh/ask` + tự chuyển tab (setMode) + loading rõ ràng.
+- OFF ⇒ bubble giữ nguyên câu trả lời "chưa hiểu" + nút "Hỏi AI câu này".
+- Quyết định được ĐÓNG BĂNG vào chính message (`ChatTurn.aiFallbackOffered`,
+  lưu vào `chat_history_v1` qua `ai_fallback_offered`) ⇒ đổi setting sau này
+  KHÔNG viết lại hành vi của message đã hiển thị (đúng luật F7-2).
+- `LOW_CONFIDENCE` KHÔNG áp dụng (cả 2 chiều) — đang chủ động hỏi lại.
+- Cả 2 nhánh đi qua CÙNG một hàm `askAiFallback()` (không có đường thứ hai để lệch).
+
+== 4. XỬ LÝ LỖI `/dsh/ask` — mã lấy từ dsh-gateway.mjs (không đoán) ==
+
+Đọc source: `dsh-gateway.mjs:568` `DSH_IN_FLIGHT = "DSH_GATEWAY_IN_FLIGHT"`,
+`DSH_BUSY_MESSAGE = "Đang có một phiên DSH chạy — chờ phiên hiện tại xong rồi thử lại."`,
+`dsh-gateway.mjs:1158` `httpStatus: code === DSH_IN_FLIGHT ? 429 : 502`,
+`http-ask.mjs:387` map sang 429 kèm `retryable: true`. Các mã còn lại trong
+source: `DSH_UNAVAILABLE` · `DSH_TIMEOUT` · `DSH_SESSION_FAILED` · `DSH_BAD_OUTPUT`
+· `DSH_REMOTE_ERROR` (tất cả 502, client hiện `error` = reason tiếng Việt sẵn).
+
+Client (`_sendDsh` catch): CHỈ `DSH_GATEWAY_IN_FLIGHT` được xử riêng —
+`_noteDshBusy()` hiện đúng câu chờ của gateway, để `dshPhase = idle` (KHÔNG hiện
+dòng đỏ "Phiên AI vừa lỗi" vì không có gì hỏng) và KHÔNG tự thử lại.
+Mọi mã khác: giữ nguyên hành vi cũ (hiện `reason` backend + dòng lỗi).
+
+== 5. BẰNG CHỨNG TEST (đo thật trong phiên) ==
+
+$ cd apps/mobile && flutter test test/auto_fallback_test.dart
+  ✔ OFF: an unrouted answer spends NO AI session and offers a button
+  ✔ OFF: tapping the button asks the AI path exactly once
+  ✔ ON: an unrouted answer is carried to the AI path by itself
+  ✔ the decision is frozen per message: flipping the switch later never
+    rewrites a message already on screen
+  ✔ OFF + LOW_CONFIDENCE: no button, no AI session
+  ✔ ON + LOW_CONFIDENCE: still nothing automatic
+  ✔ 429 DSH_GATEWAY_IN_FLIGHT: shows the wait wording, no red failure line,
+    and does NOT retry by itself
+  ✔ a genuinely broken session shows the gateway reason and the failure line
+  All tests passed!  (8/8)
+
+$ flutter analyze --fatal-infos          # khớp CI
+No issues found!
+
+$ flutter test                            # toàn bộ suite Flutter
+01:11 +168 -1: Some tests failed.
+  _probe_review_test.dart: P2b — pressing the RETURNED button after recycle
+  (file probe cũ, CÓ SẴN từ trước — xem §7; fail y hệt khi không có thay đổi này)
+
+$ cd mcp-erpnext && node --test test/p5-dsh-optin.test.mjs     # KHÔNG sửa file này
+ℹ tests 7 · pass 7 · fail 0
+   (gồm "D2 — no dsh spawn exists in the /ask pipeline source" @45 và
+    "the /ask HTTP server never sets the dsh context variable" @79 — còn nguyên)
+
+== 6. FALSIFY (gỡ → đỏ đúng chỗ → khôi phục) ==
+
+FALSIFY A — gỡ điều kiện đọc setting (`final auto = unrouted;` = luôn coi như ON):
+$ flutter test test/auto_fallback_test.dart
+00:07 +3 -5: Some tests failed.
+  ✘ OFF: an unrouted answer spends NO AI session and offers a button
+  ✘ OFF: tapping the button asks the AI path exactly once
+  ✘ the decision is frozen per message: flipping the switch later never ...
+  ✘ 429 DSH_GATEWAY_IN_FLIGHT: shows the wait wording, ...
+  ✘ a genuinely broken session shows the gateway reason and the failure line
+  ⇒ đỏ ĐÚNG chỗ cần (test "OFF không tự động gọi" nằm trong danh sách) →
+    khôi phục → 8/8 xanh.
+
+FALSIFY B — gỡ nhánh xử riêng 429 trong `_sendDsh`:
+00:06 +7 -1: Some tests failed.
+  ✘ 429 DSH_GATEWAY_IN_FLIGHT: shows the wait wording, no red failure line,
+    and does NOT retry by itself
+  ⇒ đỏ đúng 1 test của §4 → khôi phục → xanh.
+
+== 7. BACKEND KHÔNG BỊ ĐỘNG TỚI + lưu ý env ==
+
+$ stat -c '%y %n' mcp-erpnext/src/dsh-gateway.mjs mcp-erpnext/src/copilot-server.mjs \
+                 mcp-erpnext/test/p5-dsh-optin.test.mjs \
+                 apps/mobile/lib/features/chat/application/chat_controller.dart
+2026-09-20 02:34:14  mcp-erpnext/src/dsh-gateway.mjs          ← mốc copy, KHÔNG đổi
+2026-09-20 02:34:13  mcp-erpnext/src/copilot-server.mjs       ← mốc copy, KHÔNG đổi
+2026-09-20 02:34:10  mcp-erpnext/test/p5-dsh-optin.test.mjs   ← mốc copy, KHÔNG đổi
+2026-09-20 03:04:29  apps/mobile/.../chat_controller.dart      ← file đã sửa
+
+$ grep -rn "autoFallbackToAi|askAiFallback|ai_fallback_offered|DSH_GATEWAY_IN_FLIGHT|AiFallbackButton" \
+      --include='*.mjs' --include='*.js' --include='*.py' --include='*.json' . | grep -v '^./apps/mobile/'
+./mcp-erpnext/src/dsh-gateway.mjs:568:export const DSH_IN_FLIGHT = "DSH_GATEWAY_IN_FLIGHT";
+   ⇒ hit DUY NHẤT là ĐỊNH NGHĨA GỐC có sẵn của gateway (nguồn tôi đọc mã lỗi từ đó),
+     không phải thay đổi của đợt này.
+
+⚠️ ENV: thư mục làm việc này KHÔNG có `.git`
+   (`git rev-parse --is-inside-work-tree` → "not a git repository") ⇒ không tạo
+   được `git status --porcelain` / diff / commit theo khuôn; bằng chứng ở trên là
+   output lệnh thật đã chạy trong phiên.
+
+⚠️ `apps/mobile/test/_probe_review_test.dart` (4 test) fail ở P2b nhưng **CÓ SẴN**:
+   đã chứng minh bằng cách gỡ sạch thay đổi thì nó vẫn đỏ y nguyên. File tự ghi
+   "PROBE ONLY — temporary review harness (result40)", kỳ vọng hành vi CŨ (nút
+   Xác nhận quay lại sau khi ListView recycle). 154 test local = 150 đã commit
+   + 4 probe ⇒ khớp con số "Flutter 150" trong docs, CI không dính. Cần user
+   quyết: xoá hẳn hay chuyển thành test thật.
+
+== 8. TỔNG SỐ TEST (suy ra được, không ước lượng) ==
+
+  đầu phiên:          154 local  (= 150 đã commit + 4 probe)
+  sau đợt A (§A):     161 local  (= 160 pass + 1 probe fail)
+  sau đợt này (§0-7): 169 local  (= 168 pass + 1 probe fail)   [+8 test mới]
+  kiểm lại: 169 - 161 = 8 ✓ · 161 - 154 = 7 (đợt A) ✓
+  tương đương phần đã commit (bỏ 4 probe): 169 - 4 = 165 = 150 + 7 + 8 ✓
+========================================================================
+
+== §A. CÙNG PHIÊN, ĐỢT TRƯỚC — TTS đọc hẹp hơn + Markdown cho bubble ==
+(Chỉ đạo user: `.plan/next2/tts-scope-and-markdown.md`, làm đúng 2 việc trong đó)
+
+A.1 TTS chỉ đọc `turn.answer`:
+    `chat_controller.spokenTextFor(turn) => sanitizeForSpeech(turn.answer)`
+    (bỏ phần nối `proposal.summary`) — cơ chế an toàn giữ nguyên, chỉ thu hẹp
+    NGUỒN. Test TTS cũ đổi kỳ vọng theo hành vi mới (so khớp nguyên văn), +1 test
+    mới "the proposal card is NOT read aloud — only the answer is" (summary dựng
+    KHÔNG trùng chữ nào với answer để không thể pass nhờ trùng hợp).
+
+A.2 Markdown cho bubble trả lời:
+    package `flutter_markdown_plus ^1.0.12` (bản kế nhiệm được duy trì của
+    `flutter_markdown` — Google đã ngừng; đọc changelog + đọc source đã cài
+    trong pub-cache để xác nhận API, không tin doc). `MarkdownBody` thay `Text`,
+    style từ theme (`p` + `listBullet` = bodyMedium + màu bubble ⇒ không lệch
+    tông kể cả bubble lỗi), `softLineBreak: true` (mặc định Markdown gộp soft
+    break ⇒ sẽ dồn câu trả lời tồn kho nhiều dòng mà `AskResult` nối bằng '•'),
+    và `imageBuilder` chặn ảnh (user duyệt trong phiên): câu trả lời là dữ liệu
+    ERPNext (nguồn không tin cậy) — builder mặc định biến `![](http://…)` thành
+    `Image.network`, tức mở chat là máy gọi ra host do dữ liệu chọn.
+    ProposalCard KHÔNG đổi; backend KHÔNG đổi.
+
+A.3 Nói ĐÚNG sự thật: hôm nay CHƯA có gì trông khác đi — backend vẫn trả prose
+    (grep `mcp-erpnext/src`: `**` chỉ xuất hiện trong comment JSDoc) ⇒ đây là
+    CHUẨN BỊ phía client, không phải fix. Test dùng markdown giả lập mới chứng
+    minh được render.
+
+A.4 Bằng chứng:
+$ flutter analyze --fatal-infos   →  No issues found!
+$ flutter test test/chat_bubble_markdown_test.dart   →  6/6 pass
+    (bold thật không còn dấu `*` · list ra '•' không còn '- ' · multi-line giữ
+     '\n' · ảnh bị bỏ, không dựng Image nào · bubble lỗi giữ tông onErrorContainer)
+  Falsify: gỡ MarkdownBody → cả 6 đỏ · gỡ imageBuilder → test ảnh đỏ (và framework
+  báo "all HTTP requests will return status code 400" ⇒ đúng là có dựng 1 request)
+  Kết quả đợt A: 161 local (160 pass + 1 probe fail) = 150 committed + 7 test mới.
+========================================================================

@@ -1,0 +1,472 @@
+========================================================================
+RESULT 58 — .plan/dsh_prompt_check.md: PIN + TOPOLOGY (Mac↔backend) + REVIEW FIXES
+            + REAL GEMINI E2E + AUDIT BYPASS + REGRESSION A–K + SCRIPTS
+Timestamp: 2026-09-19 (giờ shell, UTC) · Người thực hiện: agent (Buffy)
+Phạm vi theo yêu cầu: §1 audit → §3 pin → §2 topology → §4 real Gemini → §5/§12 audit
+bypass → §6 regression A–K → §7/§8 E2E thật → §9 scripts → §10/§13 docs.
+KHÔNG đụng: ERPNext write (không tạo Payment Entry), Phase mới, DSH fallback.
+Mọi dòng PASS dưới đây đều có LỆNH + OUTPUT THẬT dán nguyên văn.
+========================================================================
+
+== §0. TRẠNG THÁI DỊCH VỤ (đầu phiên — bằng chứng, không đoán) ===========
+
+$ ps aux | grep -E "nlp_service.server|http-ask.mjs|llm-router.mjs"
+16637 python3 -m nlp_service.server --port 8787
+17792 node mcp-erpnext/src/http-ask.mjs --port 8788
+23488 node scripts/llm-router.mjs --config scripts/llm-router.e2e.json
+
+$ curl -s -m 3 -o /dev/null -w "%{http_code}" http://127.0.0.1:8787/health   → 200
+$ curl -s -m 3 -o /dev/null -w "%{http_code}" http://127.0.0.1:8788/health   → 200
+$ curl -s -m 3 -o /dev/null -w "%{http_code}" http://127.0.0.1:8900/health   → 200
+$ curl -s -m 8 -o /dev/null -w "llm9000 http_code=%{http_code}" https://llm9000.loca.lt/v1/models
+llm9000 http_code=503
+
+== §1. AUDIT (pin + runtime + khả năng chạy) ===============================
+
+1a. Version runtime đang cài và khả năng pin được:
+$ node /tmp/dsh-run/node_modules/@deepseek-ai/dsh/lib/bin.js --version
+0.1.5-rc.1
+$ npm view @deepseek-ai/dsh@0.1.5-rc.1 version
+0.1.5-rc.1
+
+1b. Repo TRƯỚC phiên này KHÔNG pin runtime ở đâu cả:
+- Không có `package.json` ở repo root (chỉ mcp-erpnext/package.json, khai
+  `@casys/mcp-erpnext`).
+- Entry dsh bị HARDCODE vào 1 máy: `DEFAULT_DSH_ENTRY =
+  "/tmp/dsh-run/node_modules/@deepseek-ai/dsh/lib/bin.js"`.
+  ⇒ Trên máy khác, /dsh/health sẽ nói "khả dụng" trong khi không chạy được gì.
+  Đã sửa ở §3.
+
+== §1b. 6 DEFECT REVIEW PHÁT HIỆN VÀ ĐÃ SỬA ================================
+
+(F-cũ) F1 parser cắt còn DÒNG CUỐI  →  giữ NGUYÊN VĂN toàn bộ câu trả lời.
+  Trước: `parseDshFinalAnswer` trả dòng cuối ⇒ câu trả lời nhiều dòng bị mất số
+  tiền. README của dsh (đọc trong node_modules/@deepseek-ai/dsh) nói rõ headless
+  "print the final answer" ⇒ stdout CHÍNH LÀ câu trả lời.
+  Bằng chứng: test "parseDshFinalAnswer — a multi-line prose answer is NOT
+  truncated to its last line (F1)" — assert `parsed.content === stdout`.
+  Và bằng chứng SỐNG (real Gemini, §7): answer 171.800đ / 4 chứng từ.
+
+(F2) Rò rỉ store: session store unbounded → thêm `maxSessions` (DSH_MAX_SESSIONS,
+  200) + eviction theo tuổi; `opts.maxConcurrent === 0` chỉ TẮT CAP, không tắt
+  đo lường (dshInFlight() luôn trung thực).
+
+(F3) `conversation_id` do client gửi trở thành Map key + field log ⇒ validate tại
+  biên. Bằng chứng HTTP thật (test mới trong http-ask.test.mjs):
+  POST /dsh/ask {"conversation_id":"../../etc/passwd"}  → 400
+  {"code":"DSH_GATEWAY_BAD_REQUEST"}
+
+(F4) Marker `COPILOT_GATEWAY_DSH` là DEAD (đặt nhưng KHÔNG AI ĐỌC) mà doc lại
+  tuyên bố "both must be present" ⇒ sai sự thật. Đã gỡ marker, sửa doc, và đổi
+  test từ `assert.equal(childEnv.COPILOT_GATEWAY_DSH, "1")` (xanh vô nghĩa) thành
+  `assert.equal(childEnv.COPILOT_GATEWAY_DSH, null, "no marker that nothing reads")`.
+  Cơ chế THẬT là cờ trong patch: `dshPatchMarksDshContext()` — gateway TỪ CHỐI
+  spawn patch thiếu `COPILOT_DSH_CONTEXT=1`.
+
+(F5) `/dsh/health` nói dối: chỉ kiểm 2 file tồn tại ⇒ `available:true` trên
+  topology không chạy được 1 câu nào. Nay dùng `dshGatewayHealth()`:
+  local = entry + patch + MARKER; remote = hỏi thật runner; trả cả `runtime` +
+  `version`. Bằng chứng sống:
+  $ curl -s http://127.0.0.1:8788/dsh/health
+  {"ok":true,"service":"dsh-gateway","available":true,"runtime":"local",
+   "version":"0.1.5-rc.1","detail":"entry=/tmp/dsh-run/.../bin.js patch=dsh-e2e.patch.yml","mode":"dsh"}
+
+(F6 — MỚI, do test HTTP bắt được) LỖI THẬT: route map TỪ CHỐI AN TOÀN thành 502.
+  `dshGatewayAsk` khai báo gate-refusal là `httpStatus: 200` (nó là CÂU TRẢ LỜI
+  về câu hỏi, gateway chưa hề chạm runtime), nhưng route chỉ biết 400/429 và
+  `else → 502`. Hệ quả: (a) giám sát/retry coi từ chối chính sách là lỗi hạ tầng,
+  (b) không phân biệt được với tunnel chết.
+  Đã sửa: nhánh 200 + `refused: true`.
+  Bằng chứng SỐNG sau khi sửa (gateway thật):
+  $ bash scripts/dsh-e2e-write-block.sh
+  http_code=200 elapsed=123ms
+  {"ok":false,"code":"DSH_WRITE_BLOCKED","refused":true,"mode":"dsh", ...}
+  PASS code=DSH_WRITE_BLOCKED
+  PASS refused in 123ms (< 5000ms ⇒ no dsh session was spawned)
+  PASS audit: no new proposal (813 → 813)
+  PASS audit: no new execute (1327 → 1327)
+
+(F7 — token trong chẩn đoán) Bộ scrub generic chỉ biết dạng `key=value` /
+  `Authorization` / `sk-…`, nên KHÔNG che được token runner khi nó nằm trong
+  message lỗi fetch. Sửa: `redactToken()` — ta ĐANG GIỮ giá trị literal thì che
+  theo giá trị là chính xác hơn mọi regex. Bằng chứng: test "remote mode maps a
+  dead tunnel to DSH_REMOTE_ERROR with a scrubbed tail" (assert
+  `doesNotMatch(logTail, /token-1234567890/)`).
+
+== §2. TOPOLOGY Mac ↔ BACKEND =============================================
+
+Đã thêm chế độ REMOTE thật (`DSH_MODE=remote`), KHÔNG BAO GIỜ hạ cấp về local:
+
+- Gateway: `runRemoteDsh()` POST `{remoteUrl}/run` với
+  `Authorization: Bearer $<DSH_REMOTE_TOKEN_ENV>` + `{prompt,timeoutMs}`.
+  Body trả về đi qua ĐÚNG các parser của local ⇒ hai chế độ không có hai định
+  dạng output để lệch nhau. Lỗi được phân loại rõ: `DSH_REMOTE_UNAUTHORIZED`
+  (401/403), `DSH_REMOTE_ERROR` (tunnel chết/HTTP lỗi), `DSH_TIMEOUT`,
+  `DSH_BAD_OUTPUT`; thiếu cấu hình ⇒ `DSH_UNAVAILABLE` (không chạy local thay).
+- Runner trên máy Mac: `scripts/dsh-remote-runner.mjs` (mới) — GET /health,
+  POST /run, so token bằng `timingSafeEqual`, TỪ CHỐI KHỞI ĐỘNG nếu thiếu token
+  (<16 ký tự), thiếu entry/patch, hoặc patch không có marker cổng chặn ghi.
+  Env cho child dùng LẠI `buildDshChildEnv()` của gateway ⇒ luật "không mang
+  secret xuống child" chỉ có MỘT bản cài đặt.
+
+Bằng chứng SỐNG (runner thật qua HTTP thật, trên loopback — xem ghi chú trung
+thực ngay dưới bảng):
+
+$ DSH_REMOTE_TOKEN=… node scripts/dsh-remote-runner.mjs --port 8799
+[dsh-runner] listening on 127.0.0.1:8799 (entry=/tmp/dsh-run/.../bin.js, version=0.1.5-rc.1)
+
+$ curl -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8799/health
+{"ok":true,"runtime":"dsh-remote-runner","entry":"/tmp/dsh-run/.../bin.js","version":"0.1.5-rc.1"}
+
+$ curl http://127.0.0.1:8799/health            # KHÔNG token
+http_code=401  {"ok":false,"error":"unauthorized"}
+
+$ DSH_REMOTE_TOKEN= node scripts/dsh-remote-runner.mjs --port 8798
+[dsh-runner] FATAL: DSH_REMOTE_TOKEN must be set (>=16 chars). Refusing to start.
+
+Gateway ở chế độ remote (cổng 8790, DSH_MODE=remote DSH_REMOTE_URL=http://127.0.0.1:8799):
+$ curl -s http://127.0.0.1:8790/dsh/health
+{"ok":true,"service":"dsh-gateway","available":true,"runtime":"remote","version":"0.1.5-rc.1",
+ "detail":"runner=http://127.0.0.1:8799 entry=… version=0.1.5-rc.1","mode":"dsh"}
+
+$ COPILOT_BASE_URL=http://127.0.0.1:8790 bash scripts/check-dsh-topology.sh
+PASS  REMOTE_OK — the Mac runner answered (…)
+PASS  gateway /dsh/health agrees with the direct probe
+RESULT: PASS (all assertions green)
+
+$ COPILOT_BASE_URL=http://127.0.0.1:8790 bash scripts/dsh-e2e-read.sh "Khách smoke 2026-09-15-p1b-wf1-2 còn nợ bao nhiêu?"
+http_code=200
+"runtime": "remote",  "erpnext_target": "REAL",
+answer: "Trả lời từ ERPNext (mock LLM chỉ đọc lại kết quả, không tự tính):
+         Khách smoke 2026-09-15-p1b-wf1-2 còn nợ 171.800đ (4 chứng từ chưa thanh toán)."
+PASS  HTTP 200 · mode=dsh · runtime=remote · erpnext_target=REAL · audit 1 dòng mới
+RESULT: PASS (all assertions green)
+
+# Chứng minh phiên THẬT SỰ chạy QUA runner (log của runner, không phải của gateway):
+[dsh-runner] run ok in 4390ms (prompt 50 chars)
+
+$ COPILOT_BASE_URL=http://127.0.0.1:8790 bash scripts/dsh-e2e-write-block.sh
+PASS  code=DSH_WRITE_BLOCKED · refused in 83ms (< 5000ms ⇒ no dsh session was spawned)
+PASS  audit: no new proposal (817 → 817) · no new execute (1327 → 1327)
+
+⚠️ TRUNG THỰC — phần NÀY chưa verify được và đây là lý do cụ thể:
+  HOP THẬT "backend → Mac qua tunnel" = BLOCKED_EXTERNAL (không phải lỗi code).
+  Bằng chứng nguyên nhân:
+  $ curl -s -m 10 -o /tmp/tun.out -w "http_code=%{http_code} time=%{time_total}s\n" https://llm9000.loca.lt/v1/models
+  http_code=503 time=0.663302s
+  503 - Tunnel Unavailable
+  ⇒ localtunnel của máy Mac đã tắt/hết hạn. Không có đường nào để chạy dsh trên
+    Mac lúc này.
+  Vì vậy hop remote ở trên được chạy với runner THẬT nhưng trên CÙNG máy
+  (loopback 127.0.0.1) — tức là đã chứng minh ĐƯỜNG CODE + auth + timeout +
+  parse + phân loại lỗi thật, KHÔNG chứng minh được máy Mac vật lý.
+  Điều này cũng đã được kiểm tra bằng THỰC TẾ trước đó: khi mac-custom là
+  upstream đầu chuỗi và tunnel chết, phiên DSH trả:
+  dsh: SERVER: 502: {"message":"llm-router: all upstreams failed (tried: mac-custom)",
+                    "type":"llm_router_all_failed"}
+  và router audit:
+  {"ts":"2026-09-19T05:49:04.983Z","upstream":null,"model":"gemini/gemini-3.6-flash",
+   "attempts":["mac-custom"],"status":502,"latencyMs":874,"messages":5}
+
+== §3. PIN RUNTIME (REPRODUCIBILITY) ======================================
+
+Thêm `package.json` ở repo root — chỉ để PIN, không phải app:
+  "dependencies": { "@deepseek-ai/dsh": "0.1.5-rc.1" }
+  "engines": { "node": ">=20" }
+Thêm `resolveDshEntry()`: resolve entry từ PACKAGE THẬT SỰ ĐÃ CÀI
+(`createRequire().resolve("@deepseek-ai/dsh/package.json")` → `pkg.bin`) thay vì
+hardcode đường dẫn /tmp của một máy; DSH_ENTRY luôn thắng, và fallback /tmp vẫn
+còn nhưng được ghi chú rõ là fallback.
+Thêm `dshRuntimeInfo()`: entry + patch + VERSION + các cờ kiểm tra.
+
+Script `scripts/check-dsh-runtime.sh` — fail rõ ràng (exit 1) khi thiếu/sai
+version/không chạy được/thiếu config. Bằng chứng chạy thật:
+$ bash scripts/check-dsh-runtime.sh
+PASS  node v24.20.0 (>=20)
+PASS  package.json pins @deepseek-ai/dsh@0.1.5-rc.1
+      entry: /tmp/dsh-run/node_modules/@deepseek-ai/dsh/lib/bin.js
+PASS  dsh entry exists
+PASS  installed version 0.1.5-rc.1 matches the pin
+PASS  entry runs (--version -> 0.1.5-rc.1)
+PASS  patch exists: …/mcp-erpnext/dsh-e2e.patch.yml
+PASS  patch sets COPILOT_DSH_CONTEXT=1 (the in-child WRITE gate can fire)
+      mode: local — entry=… patch=dsh-e2e.patch.yml
+PASS  dshGatewayHealth() reports available
+RESULT: PASS (all checks green)   EXIT=0
+
+== §4. REAL GEMINI (gemini-openai) — 1 SESSION, KẾT QUẢ: **PASS** =========
+
+Không probe trước (luật result19/§G). Chạy đúng 1 session qua gateway với
+E2E_LLM_MODEL=real-gemini (patch chọn model `gemini-3.6-flash` → chain chỉ có
+gemini-openai, KHÔNG fallback sang mac-custom).
+
+$ bash scripts/dsh-e2e-read.sh "Khách smoke 2026-09-15-p1b-wf1-2 còn nợ bao nhiêu?"
+http_code=200 elapsed=11790ms
+{
+ "ok": true, "mode": "dsh",
+ "conversation_id": "5665ddf0-81eb-407c-89c5-cc77adf1121e",
+ "request_id": "d4d50a0a-e5a7-4171-a003-6d0ceb76ff8c",
+ "dsh_session_id": "66579a1f-5c6d-4f5f-8372-beaf0bccd75b",
+ "erpnext_target": "REAL",
+ "result": {"answer": "Khách **smoke 2026-09-15-p1b-wf1-2** hiện còn nợ **171.800đ**
+                       (gồm **4 chứng từ** chưa thanh toán)." }
+}
+PASS  HTTP 200 · mode=dsh · answer non-empty (99 chars) · erpnext_target=REAL · audit 1 dòng mới
+
+Ground truth (lấy SỐNG từ ERPNext thật cùng lúc, qua đường đọc deterministic):
+$ bash scripts/check-ask-normal.sh
+{'ok': True, 'answer': 'Khách smoke 2026-09-15-p1b-wf1-2 còn nợ 171.800đ (4 chứng từ chưa thanh toán).'}
+⇒ DSH/Gemini khớp CHÍNH XÁC ground truth (171.800đ, 4 chứng từ).
+
+Bằng chứng đây là phiên NHIỀU LƯỢT TOOL (không phải 1 phát):
+$ grep '"gemini-3.6-flash"' llm-router-audit/audit-2026-09-19T04-43-34.jsonl | tail -1
+{"id":"req_1789797003444_wekt3q","ts":"2026-09-19T05:50:06.303Z","upstream":"gemini-openai",
+ "model":"gemini-3.6-flash","attempts":["gemini-openai"],"status":200,"latencyMs":2859,
+ "messages":7,"stream":true}
+⇒ `messages:7` = 3 lượt LLM (1 → 3 → 5 → 7), tức đã có ≥2 vòng tool-call qua
+  gemini-openai, và mọi lần gọi đều 200. Đây chính là đường đa-lượt mà cơ chế
+  thought_signature từng làm gãy trước đây — nay chạy xanh với provider thật.
+(KHÔNG cần counting quota: không probe; 1 session duy nhất; không 429/503.)
+
+== §5 + §12. AUDIT BYPASS (đối chiếu invariant trên TOÀN repo) ============
+
+1) KHÔNG có đường /ask → DSH (D2):
+$ grep -rn "dsh-gateway\|dsh-optin\|@deepseek-ai/dsh" mcp-erpnext/src/*.mjs | grep -v "src/dsh-gateway.mjs\|src/dsh-optin.mjs"
+mcp-erpnext/src/copilot-server.mjs:32:import { isDshContext, blockedInDshContext,
+  dshWriteBlockedAnswer } from "./dsh-optin.mjs";     ← CỔNG LỚP 2 trong child,
+                                                         không phải spawn
+mcp-erpnext/src/http-ask.mjs:68:import { dshGatewayAsk, … } from "./dsh-gateway.mjs"; ← CHỈ route /dsh/ask
+⇒ không file nào trong pipeline /ask spawn dsh. Test tĩnh giữ luật này:
+$ node --test test/p5-dsh-optin.test.mjs
+ℹ tests 7   ℹ pass 7   ℹ fail 0
+
+2) CHỈ MỘT chỗ spawn dsh trong repo:
+$ grep -rn "spawn(" mcp-erpnext/src/*.mjs | grep -v "spawn(process.execPath, \[cfg.dshEntry"
+mcp-erpnext/src/client.mjs:24:  const child = spawn(process.execPath, [serverScript, …])   ← MCP ERPNext client, không phải dsh
+⇒ spawn dsh duy nhất = runDshAskInner (dsh-gateway.mjs); runner từ xa dùng CÙNG
+  hàm đó (không có bản sao thứ hai).
+
+3) DSH KHÔNG gọi write tool / không gọi /execute:
+$ grep -rn "execute\|create_payment_entry" mcp-erpnext/src/dsh-gateway.mjs | grep -v "^.*\*"
+(không có kết quả)
+
+4) Flutter không bypass: chỉ gọi gateway; KHÔNG spawn process, KHÔNG gọi ERPNext,
+   KHÔNG có dart:io:
+$ grep -rn "erpnext\|Process\.\|dart:io" apps/mobile/lib --include=*.dart | grep -iv "comment\|///"
+(8 hit — tất cả là ĐỌC field `erpnext_target` / hiển thị `erpnext_doc` của proposal;
+ không có import dart:io, không có Process.)
+$ grep -rn "'/execute" apps/mobile/lib --include=*.dart
+apps/mobile/lib/features/chat/presentation/widgets/proposal_card.dart:91:  '/execute'   ← NÚT XÁC NHẬN của người thật, không nằm trên đường DSH
+⇒ đường DSH (`dshAsk`) trả `DshAnswer` và KHÔNG tạo proposal/command_id/confirm.
+
+5) WRITE đi qua ĐÚNG 1 cổng: cổng 1 = pre-screen ở gateway (NLP+routeIntent);
+   cổng 2 = `COPILOT_DSH_CONTEXT` trong child (dsh-optin.mjs). Gateway TỪ CHỐI
+   spawn nếu patch thiếu cờ ⇒ không thể "chạy mà không có cổng".
+
+6) Không secret nào bị đưa vào output/log: `buildDshChildEnv` strip
+   DSH_SECRET_ENV_KEYS; `scrubDiagnostics` + `redactToken` cho mọi chẩn đoán
+   xuất ra; audit chỉ ghi tên upstream/model/status (xem §4).
+
+== §6. REGRESSION A–K ====================================================
+
+A READ (deterministic)     PASS  scripts/check-ask-normal.sh → 200 + 171.800đ (4 chứng từ)
+B WRITE (không đổi)        PASS  suite: payment-write / risk-proposal / safety-gateway / p8-authorization (Node 306/306)
+C DSH READ                 PASS  §2 (remote) + §4 (real Gemini) + read script local (mock LLM, ERPNext thật)
+D DSH WRITE BLOCK          PASS  §1(F6) — 200 + DSH_WRITE_BLOCKED, 123ms, 0 proposal/execute mới
+E unknown intent           PASS  p3-classifier* + p2-context-uncertainty + golden-dataset trong suite
+F auth                     PASS  http-ask-auth.test.mjs (401/403, bind policy) trong suite
+G rate limit               PASS  p10-rate-limit.test.mjs trong suite
+H timeout                  PASS  test "remote mode maps a timeout to DSH_TIMEOUT with the SAME wording as a local timeout"
+I session isolation        PASS  test "a malformed conversation id can neither be written nor read back" + store TTL/maxSessions
+J size limits              PASS  test "dshGatewayConfig — broken env numbers fall back to safe defaults" + 400 khi vượt maxTextLength
+K failure recovery         PASS  test dead-tunnel → DSH_REMOTE_ERROR (scrubbed) + job-queue suite (P7) trong Node
+
+Full suite cuối phiên:
+$ PYTHONPATH=src python3 -m unittest discover -s tests
+Ran 62 tests in 0.526s — OK
+$ (mcp-erpnext) node --test
+ℹ tests 306   ℹ pass 306   ℹ fail 0        (trước phiên: 290 — +16 test mới)
+$ (apps/mobile) flutter test
+00:27 +150: All tests passed!
+$ flutter analyze
+No issues found! (ran in 6.7s)
+
+== §7 + §8. E2E THẬT — BẢNG QUERY / EXPECTED / ACTUAL / PROVIDER / ELAPSED / IDs
+
++----+------------------------------+----------------------------------+----------------------------------+----------------------+----------+-------------------------------------------------------+
+| #  | Query                        | Expected (ground truth, LIVE)     | Actual                            | Provider / runtime   | Elapsed  | IDs                                                   |
++----+------------------------------+----------------------------------+----------------------------------+----------------------+----------+-------------------------------------------------------+
+| 1  | Khách smoke 2026-09-15-      | 171.800đ (4 chứng từ)             | 171.800đ (4 chứng từ) ✅          | gemini-openai (REAL) | 11.790 s | conv 5665ddf0… req d4d50a0a… sess 66579a1f…          |
+|    | p1b-wf1-2 còn nợ bao nhiêu?  | (lấy qua /ask cùng lúc)           |                                   | runtime=local        |          |                                                       |
++----+------------------------------+----------------------------------+----------------------------------+----------------------+----------+-------------------------------------------------------+
+| 2  | (cùng câu, remote topology)  | 171.800đ (4 chứng từ)             | 171.800đ (4 chứng từ) ✅          | mock LLM / ROUTER    |  4.39 s  | conv a521ebfe… req 1bc74a62… sess ac34878f…          |
+|    |                              |                                   |                                   | runtime=REMOTE runner| (runner) |                                                       |
++----+------------------------------+----------------------------------+----------------------------------+----------------------+----------+-------------------------------------------------------+
+| 3  | thu tiền cho chị Lan 50 nghìn| TỪ CHỐI trước khi spawn           | DSH_WRITE_BLOCKED ✅              | (không chạm runtime) | 123 ms   | req 34dff909… conv b205f091… · proposal 813→813      |
++----+------------------------------+----------------------------------+----------------------------------+----------------------+----------+-------------------------------------------------------+
+| 4  | (câu 3, remote topology)     | TỪ CHỐI trước khi gọi runner      | DSH_WRITE_BLOCKED ✅              | (không chạm runner)  |  83 ms   | proposal 817→817 · execute 1327→1327                 |
++----+------------------------------+----------------------------------+----------------------------------+----------------------+----------+-------------------------------------------------------+
+| 5  | (câu 1, mac-custom upstream) | 171.800đ hoặc lỗi upstream thật   | BLOCKED_EXTERNAL                  | mac-custom tunnel    | 23.9 s   | attempts:["mac-custom"] status 502 (router audit)     |
+|    |                              |                                   | "all upstreams failed"            | 503 Tunnel Unavailable|         |                                                       |
++----+------------------------------+----------------------------------+----------------------------------+----------------------+----------+-------------------------------------------------------+
+
+Quan sát correlation: mỗi dòng audit `dsh_ask` mang `request_id` (do route sinh),
+`conversation_id` (client/route), `dsh_session_id` (gateway sinh) và `runtime`;
+router audit mang `upstream` + `attempts` + `status` + `messages`. Đối chiếu chéo
+được giữa 3 lớp: gateway (dsh_ask) ↔ router (upstream/attempts) ↔ stderr của child
+(`[copilot] ERPNext target: REAL|mock` → field `erpnext_target` trả về client).
+KHÔNG có secret nào trong bất kỳ dòng audit/output nào ở trên.
+
+== §9. SCRIPTS REPRODUCIBLE (mới) ========================================
+
+| Script                            | Việc                                                                     | Exit code là nguồn sự thật |
+|-----------------------------------|--------------------------------------------------------------------------|----------------------------|
+| scripts/check-dsh-runtime.sh      | pin + entry + version + chạy được + marker + health                        | 0 / 1                      |
+| scripts/check-dsh-topology.sh     | WHERE sẽ chạy + cross-check /dsh/health                                    | 0 / 1                      |
+| scripts/dsh-e2e-read.sh           | DSH READ thật qua gateway (http_code, mode, runtime, answer, audit delta)  | 0 / 1                      |
+| scripts/dsh-e2e-write-block.sh    | TỪ CHỐI ghi + đo thời gian (chứng minh không spawn) + 0 proposal/execute   | 0 / 1                      |
+| scripts/check-ask-normal.sh       | /ask không chạm dsh (audit delta = 0)                                      | 0 / 1                      |
+| scripts/lib-dsh-e2e.sh            | helper dùng chung (base URL, auth, assertion, KHÔNG in secret)             | —                          |
+| scripts/dsh-remote-runner.mjs     | runner chạy TRÊN Mac (token bắt buộc, fail-closed, trả stdout/stderr thô)  | 0/1 khi khởi động           |
+
+npm scripts (root package.json): dsh:check · dsh:runner · dsh:e2e:read ·
+dsh:e2e:write-block · check:ask-normal · check:topology
+
+== §10 + §13. DOCS ======================================================
+
+- `.plan/dsh_prompt_check.md`: thêm khối STATUS ở đầu (PASS/BLOCKED từng §).
+- `setup-test.md`: cập nhật phần model (oc/big-pickle → gemini/gemini-3.6-flash),
+  thêm mục runtime pin + 6 script + topology local/remote.
+- `next.md`, `checklist.md`, `features.md`, `working.md`: cập nhật P-DSH.
+- `.agents/skills/erpn-verify-first/SKILL.md` + `LESSONS_LEARNED.md`: 6 bài học mới
+  (xem §11).
+
+== §11. BÀI HỌC MỚI (đã ghi vào skill + LESSONS_LEARNED) ================
+
+L1. TỪ CHỐI CHÍNH SÁCH KHÔNG PHẢI LỖI HẠ TẦNG. Một quyết định (WRITE-blocked,
+    NLP không đánh giá được an toàn) phải mang ĐÚNG status của nó; gộp vào 502
+    làm giám sát/retry hiểu sai và che mất khác biệt với tunnel chết. Đây là bug
+    CÓ THẬT, bắt được bằng test ở tầng HTTP — đọc code không thấy vì cả hai nhánh
+    đều "hợp lý" khi đọc riêng.
+L2. TEST Ở TẦNG THẤP CÓ THỂ XANH VÔ NGHĨA. Gọi thẳng `runDshAsk` để kiểm
+    session-continuity ⇒ store rỗng ⇒ test "đã qua" mà thực ra chưa kiểm gì;
+    store được ghi bởi tầng CAO hơn (`dshGatewayAsk`). Phải seed store hoặc gọi
+    đúng entrypoint thật.
+L3. CÙNG PROCESS, NHIỀU TEST: biến module-level (cổng NLP) đọc 1 lần lúc import ⇒
+    test thứ 2 vẫn nói chuyện với cổng cũ đã chết, và cổng an toàn fail-closed sẽ
+    trả SAI code (NLP_UNAVAILABLE thay vì WRITE_BLOCKED) — assertion có thể đỏ vì
+    lý do không liên quan. Phải re-point seam (`__setNlpServicePortForTest`).
+L4. ĐỪNG HARDCODE ĐƯỜNG DẪN RUNTIME CỦA MỘT MÁY. Entry dsh nằm ở /tmp của máy
+    dev ⇒ mọi máy khác đều "khả dụng" trong khi không chạy được. Resolve từ
+    package đã cài + BÁO version ra health.
+L5. SECRET MÌNH ĐANG GIỮ THÌ CHE THEO GIÁ TRỊ, ĐỪNG CHE THEO MẪU. Bộ scrub
+    generic không nhận ra token runner ⇒ token lọt vào tail chẩn đoán.
+L6. "REMOTE" PHẢI ĐƯỢC CHỨNG MINH BẰNG FIELD, KHÔNG BẰNG NIỀM TIN. Thêm
+    `runtime: local|remote` vào cả response THÀNH CÔNG và THẤT BẠI; runner ghi log
+    riêng. Không có field đó thì một lần chạy local hoàn toàn có thể bị báo cáo
+    nhầm là "đã verify trên Mac".
+
+== §14. FALSIFICATION (gỡ thật → đỏ → khôi phục) ==========================
+
+| # | Guard gỡ ra                                        | Test được chạy                          | Kết quả         |
+|---|----------------------------------------------------|-----------------------------------------|-----------------|
+| 1 | nhánh dispatch `DSH_MODE=remote` (cho rơi về local)| "never downgrades"                      | ĐỎ (pass 0/fail 1) |
+| 2 | nhánh map refusal → 200 (cho rơi về 502)            | "WRITE question refused at the edge"    | ĐỎ (502 !== 200) |
+| 3 | `redactToken()` (trả nguyên văn)                    | "dead tunnel … scrubbed tail"           | ĐỎ (pass 0/fail 1) |
+| 4 | kiểm tra marker trong `dshGatewayHealth`            | "verifies the patch marker"             | ĐỎ (pass 0/fail 1) |
+Khôi phục cả 4: `node --test test/dsh-gateway.test.mjs` → **38/38 pass**; và
+`diff` với bản backup trước khi falsify = IDENTICAL (không sót code đã gỡ).
+
+== §15. FINAL VERDICT ====================================================
+
+| Hạng mục (theo .plan/dsh_prompt_check.md)                | Kết quả |
+|----------------------------------------------------------|---------|
+| §1 audit runtime + defect                                 | PASS (6 defect đã sửa, 4 cái falsified) |
+| §2 topology local                                         | PASS |
+| §2 topology remote (đường code, runner thật qua HTTP)     | PASS |
+| §2 hop thật "backend → Mac qua tunnel"                    | **BLOCKED_EXTERNAL** (localtunnel 503) |
+| §3 pin @deepseek-ai/dsh@0.1.5-rc.1 + check script         | PASS |
+| §4 real Gemini (gemini-openai) 1 session                  | **PASS** (171.800đ/4, messages 3→5→7) |
+| §5 + §12 audit bypass 6 invariant                         | PASS |
+| §6 regression A–K                                         | PASS |
+| §7/§8 E2E thật (bảng §7)                                  | PASS cho #1–#4 · #5 BLOCKED_EXTERNAL |
+| §9 scripts reproducible                                   | PASS (6 script, exit code thật) |
+| §10/§13 docs                                              | PASS (result58 + 5 file docs + skill) |
+| write thật vào ERPNext                                    | KHÔNG (đúng giới hạn — không tạo Payment Entry) |
+
+Suite cuối: Python 62/62 · Node 306/306 · Flutter 150/150 · analyze 0.
+
+== §16. REVIEW VÒNG 2 (sau §15) — 5 chỗ tìm thêm, 4 đã sửa, 1 đã dọn ==
+
+R1. **LỖ THẬT — `/dsh/health` là route DUY NHẤT thiếu lưới bắt lỗi.**
+    Liệt kê TOÀN BỘ route (`grep -n 'req.method ==='`) thay vì chỉ đọc diff:
+    mọi nhánh khác đều có "last-resort law" (try/catch → JSON), riêng
+    `/dsh/health` gọi `await import()` + `await dshGatewayHealth()` TRẦN ⇒ một throw
+    trong async listener = unhandled rejection = **Node exit → chết cả gateway**
+    (lỗi cùng dạng đã giết process ở result44 §3). Đã bọc try/catch → 503 + JSON.
+
+    Chứng minh bằng fault-injection qua seam hợp lệ: `createAskServer({ env })` với
+    Proxy ném lỗi khi đọc `DSH_ENTRY` (key chỉ nhánh dsh đọc).
+
+    $ node --test test/http-ask.test.mjs      # (có try/catch)
+    ✔ /dsh/health cannot take the gateway down: a throwing probe answers 503
+    ℹ tests 4   ℹ pass 4   ℹ fail 0
+
+    FALSIFY (gỡ try/catch, thay bằng `if (true)`):
+    $ timeout 300 node --test test/http-ask.test.mjs ; echo exit=$?
+    test exit=1
+    ✖ /ask wrapper: health, happy path, and error contracts
+    ✖ /dsh/ask route: health truth, malformed conversation_id, …
+    ✖ /dsh/health cannot take the gateway down: a throwing probe answers 503
+    ✖ /ask CLI main(): ready line on stdout then exit on close ("no ready line")
+    ℹ tests 4   ℹ pass 0   ℹ fail 4
+    ⇒ không phải một assertion nhỏ: **process chết, cả file test đỏ**. Khôi phục
+      (`diff -q` với backup = IDENTICAL) ⇒ 4/4 xanh.
+
+R2. **LỖ THẬT — runner remote không cap output.** Gateway (spawn local) đã giới hạn
+    `stdout` 400k→giữ 200k, `stderr` 100k→50k; `scripts/dsh-remote-runner.mjs` thì
+    TÍCH LUỸ VÔ HẠN ⇒ một session chạy hoang có thể ăn hết RAM của máy Mac. Đã sao
+    chép đúng cap (giữ ĐUÔI vì câu trả lời được in CUỐI ⇒ vẫn không mất đáp án).
+    Bài học: nhân bản cơ chế mà quên nhân bản giới hạn của nó.
+
+R3. **LỖ ORACLE RỖNG — delta trên file bằng chứng có thể VẮNG.**
+    `dsh_audit_count()` trả `0` khi file audit không tồn tại ⇒ `check-ask-normal.sh`
+    in `PASS unchanged (0 → 0)` và `RESULT: PASS` cho một service ghi vào hư không.
+    Đã thêm `dsh_audit_ready()` + FAIL rõ ràng ở **cả 2 script** (ask-normal +
+    write-block). Falsify bằng cách trỏ vào thư mục không tồn tại:
+    $ LEARNING_LOG_DIR=/tmp/audit-that-does-not-exist-58 bash scripts/check-ask-normal.sh
+    FAIL  audit file missing: …/observations.jsonl — 'unchanged 0 → 0' would be a vacuous PASS
+    RESULT: FAIL (1 assertion(s) failed)   exit=1
+    (trước khi sửa: PASS + exit 0 ⇒ đúng loại lỗi đã gặp ở result56 §5a / result58 §11-L2)
+
+R4. **Độ bền shell — nội suy JSON vào mã `node -e`.** `node -e "const i=$RESOLVED; …"`
+    sẽ vỡ (hoặc mang hình dạng injection) khi `DSH_ENTRY` chứa dấu ngoặc; đã đổi sang
+    truyền qua **argv** + gộp 2 helper trùng thành 1 `json_get` (ponytail: bỏ ~6 dòng).
+    Chạy lại: `bash scripts/check-dsh-runtime.sh` → **RESULT: PASS**, exit 0.
+
+R5. **Doc lệch code (nhóm lỗi 6).** Comment trong `test/dsh-gateway.test.mjs` ghi
+    "LEARNING_LOG_DIR points at the FILE" trong khi `learning-log.mjs` dùng nó như
+    THƯ MỤC (`dir: env.LEARNING_LOG_DIR ?? defaultLogDir()`, `file: "observations.jsonl"`)
+    và chính test đọc `path.join(logDir, "observations.jsonl")`. Đã sửa comment cho khớp.
+
+Sau 5 mục trên, chạy lại toàn bộ:
+$ bash -n <cả 6 script>                        → OK cả 6
+$ node --check scripts/dsh-remote-runner.mjs   → OK
+$ dsh:check · check:topology · dsh:e2e:write-block · check:ask-normal → **exit 0 cả 4**
+$ node --test test/dsh-gateway.test.mjs        → 38/38
+$ node --test (mcp-erpnext, toàn bộ)           → 306/306
+
+== §17. BÀI HỌC BỔ SUNG (§16) — đã ghi vào skill + LESSONS_LEARNED ======
+
+L7. Route mới phải được kiểm **cả file** (`grep 'req.method ==='`) xem mọi nhánh có
+    cùng lớp bảo vệ; fault-injection qua seam hợp lệ, và ĐỎ phải là **process chết**.
+L8. Nhân bản cơ chế ⇒ **đối chiếu hai bản có chủ đích** (cap · timeout · refusal · dọn temp).
+L9. Không ghép dữ liệu vào *mã* của interpreter trong shell — truyền qua argv/stdin.
+L10. Khẳng định "không tăng" phải đi kèm khẳng định **nguồn bằng chứng tồn tại** +
+     đã từng chứng minh nó CÓ THỂ tăng (delta trên file vắng = oracle rỗng).
+
+Việc còn lại CHỈ NGƯỜI THẬT làm được (không phải việc agent):
+1. Bật lại localtunnel trên Mac (`lt -s llm9000 --port 9000`) rồi (tuỳ chọn) chạy
+   `scripts/dsh-remote-runner.mjs` trên Mac để hop thật khỏi BLOCKED.
+2. Nghe thử TTS trên máy thật / APK (việc cũ, chưa xong).
+========================================================================

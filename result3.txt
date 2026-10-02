@@ -1,0 +1,155 @@
+========================================================================
+RESULT 3 — FIX BUG HẬU TỐ TIỀN TỆ DÍNH LIỀN (user duyệt) + PHASE 2 SKELETON
+Timestamp: 2026-09-13 14:35
+Env: Linux VPS / cloud shell, Python 3.12.3. Repo erpn_mobile1, branch master.
+     AgentMemory DOWN. MCP cocoindex-code / codebase-memory-mcp KHÔNG expose.
+     OCR không chạy được. Simplenote MCP không có trong tool list.
+     → Code Review làm THỦ CÔNG (manual diff review + adversarial probing).
+========================================================================
+
+SCOPE phiên này
+  - Fix bug hậu tố tiền tệ dính liền (user chọn "Fix ngay (khuyến nghị)")
+  - Commit gộp Phase 1 sau khi fix (user chọn "Commit gộp sau khi xử lý bug")
+  - Bắt đầu Phase 2 — dựng khung MCP ERPNext read-only + skill layer
+    (user chọn "Bắt đầu Phase 2 — dựng khung trước")
+  - Code chạm TIỀN trong phiên này → đã xin user duyệt TRƯỚC khi sửa,
+    và KHÔNG tự commit (chờ user xác nhận lại sau báo cáo)
+
+------------------------------------------------------------------------
+0. QUYẾT ĐỊNH USER CHỐT (2026-09-13, bằng ask_user có bản ghi)
+------------------------------------------------------------------------
+  a) Bug hậu tố dính liền: FIX NGAY
+  b) Commit: GỘP SAU KHI XỬ LÝ BUG (user duyệt trước — vẫn phải xác nhận lại
+     sau khi thấy báo cáo, vì code chạm tiền)
+  c) Phase 2: BẮT ĐẦU — dựng khung trước; khi nối ERPNext thật cần
+     user cung cấp URL + API key (hoặc site + token)
+
+------------------------------------------------------------------------
+1. TRẠNG THÁI TRƯỚC KHI SỬA (verify bằng lệnh thật)
+------------------------------------------------------------------------
+  Ran 55 tests in 0.370s / OK · money accuracy: 247/247 = 100.00%
+  "anh Nam trả 2000đ"     -> amount = None   ❌
+  "anh Nam trả 5000vnd"   -> amount = None   ❌
+  "anh Nam trả 500 đồng"  -> amount = 500    ✅ (có dấu cách)
+
+  PROBE MỞ RỘNG phát hiện NGHIÊM TRỌNG hơn ch-012/ch-013 đã ghi:
+    "anh Nam trả 2tr5đ"      -> None        ❌ (hậu tố đ sau shorthand)
+    "anh Nam trả 230.000đ"   -> None        ❌ (hậu tố đ sau số nhóm)
+    "anh Nam trả 1 500 000đ" -> 1500        ❌❌ SAI TIỀN IM LẶM
+      (num '1' + num '500' + num '000' bị coi là "1 500 000" NHƯNG token '000'
+       cuối bị lookahead chặn → chỉ còn "1 500" = 1500)
+    "anh Nam trả 2tr5k"      -> 2500000000  ❌❌ (shorthand + scale dính nhau
+       nhân đột biến 2,5 tỷ — SAI TIỀN IM LẶM)
+
+------------------------------------------------------------------------
+2. CÁCH FIX (money.py — vùng TIỀN, đã xin user duyệt)
+------------------------------------------------------------------------
+2.1 Lookaheads của num/shorthand: (?!\w) → (?!\d)
+    glued giữ nguyên (?!\w) vì scale word luôn là chữ.
+    → "2000đ" / "5000vnd" / "500đồng" / "2tr5đ" / "230.000đ" token hoá đúng.
+
+2.2 Guard chống merge rác xuất hiện DO lookahead mới (tất cả fail về None):
+    (i)  shorthand + scale word kế tiếp, dính liền: "2tr5k" → từ chối
+         (trước guard: 2.500.000.000)
+    (ii) num + word-số dính liền: "2024năm", "2024rưỡi", "2024linh",
+         "500năm", "2024lẻ" → từ chối
+         — dùng _SUSPICIOUS_AFTER_DIGITS = ONES | TENS(trừ chục) | HUNDREDS
+           | FILLERS | HALVES | HALF_WORDS. "chục" đứng ngoài vì "10năm"
+           phải vẫn bị chặn qua ONES ('năm') — xác nhận bằng probe.
+         — cố ý KHÔNG đưa vào: scale word (2triệu OK), hậu tố tiền (2000đ OK),
+           danh từ thường (2 chai nước OK)
+    (iii) shorthand vỡ token: "2tr50" tách thành num '2' + word 'tr' + other
+         '50' → nếu không chặn sẽ im lặng thành "2 triệu" (mất '50').
+         Chặn bằng re.match(r"(?:[tT][rR]|[kK])\d", text[t.end:]) ngay đầu
+         nhánh num → từ chối.
+
+2.3 KHI NGHI TRONG LÚC SỬA (ghi lại để minh bạch, 2 lỗi của agent):
+    - Lỗi A: str_replace chèn guard vào GIỮA chuỗi if/elif/else → mọi num
+      token không chứa chữ rơi vào else → accuracy rơi 247 → 108 (43.72%).
+      Phát hiện bằng full test ngay sau khi sửa; đã hoàn nguyên cấu trúc và
+      đặt guard đúng chỗ.
+    - Lỗi B: set literal trong _SUSPICIOUS_AFTER_DIGITS dùng ONES | {...} mà
+      ONES là dict → TypeError khi import → CLI crash (stdout rỗng).
+      Phát hiện bằng JSONDecodeError khi probe; sửa thành set(ONES).
+      Bài học: cả 2 lỗi đều bị bắt bởi verification loop (test + probe),
+      không lọt ra ngoài.
+    - Lỗi C: file test_money.py chứa byte NUL (do escape \u0000 trong
+      docstring) → SyntaxError khi import module test. Sửa bằng thay byte.
+
+------------------------------------------------------------------------
+3. KẾT QUẢ SAU FIX (verify, output thật)
+------------------------------------------------------------------------
+  Ran 58 tests in 0.333s / OK
+  money accuracy: 259/259 = 100.00%
+  Corpus: money 259 (neg 37) · kinship 30 · synonym 45 · challenge 11
+
+  GLUE HỢP LỆ — 13/13 đúng:
+    2000đ=2000 · 5000vnd=5000 · 500đồng=500 · 2tr5đ=2500000
+    230.000đ=230000 · 1 500 000đ=1500000 (trước fix: 1500!)
+    2triệu=2000000 · 0.5triệu=500000 · 230k=230000 · 2tr5=2500000
+    5000k=5000000 · "2000 đ"=2000 · "500 đồng"=500
+
+  RÁC — 7/7 bị chặn (None): 2tr5k · 2tr50 · 2024năm · 2024rưỡi · 2024linh
+    · 500năm · 2024lẻ
+
+  LÕI KHÔNG VỠ — 12/12: 2tr5 tiền cám heo · 320 nghìn một bao · SĐT · năm
+    · củ cải · chai nước · nhà 1234 · hai trẹo · một chai · 2 triệu 500
+    · trả 2000 · không triệu
+
+------------------------------------------------------------------------
+4. THAY ĐỔI FILE
+------------------------------------------------------------------------
+  SỬA:
+    - src/vietnamese_nlp/money.py   (lookahead + 3 guard + _SUSPICIOUS_AFTER_DIGITS)
+    - tests/test_money.py           (+class TestGluedCurrencySuffix 3 test;
+                                     +5 dòng MUST_NOT_PARSE; sửa NUL byte)
+    - tests/data/dialect_cases.json (+5 neg, +8 glue, đổi ch-012/ch-013)
+    - README.md · checklist.md · features.md · next.md
+  TẠO:
+    - result3.txt (file này)
+    - handoff_20260913-1435.md
+    - mcp-erpnext/ (skeleton Phase 2 — xem mục 6)
+
+------------------------------------------------------------------------
+5. COMMIT PHASE 1 (chờ xác nhận cuối của user)
+------------------------------------------------------------------------
+  User đã duyệt commit gộp SAU khi fix bug — bug đã fix, test 58/58 PASS.
+  Theo nguyên tắc "code chạm tiền → AI không tự commit", tôi sẽ commit SAU
+  khi user xác nhận lần cuối trong báo cáo này.
+  Kế hoạch commit: message "feat: phase 1 — Vietnamese NLP pipeline
+  (money/kinship/synonyms/quantity)". Add: src/ tests/ pyproject.toml
+  README.md .gitignore result1.txt result2.txt result3.txt checklist.md
+  features.md next.md handoff_*.md AGENTS.md openspec/ .plan/ KHÔNG add
+  (.plan/ bị gitignore) .gemini/ .opencode/ initp KHÔNG add (chưa review).
+
+------------------------------------------------------------------------
+6. PHASE 2 SKELETON (không nối ERPNext thật — chưa có credential)
+------------------------------------------------------------------------
+  Tạo mcp-erpnext/:
+    package.json           — pin ĐÚNG @casys/mcp-erpnext@3.0.4 (không ^/~)
+    src/index.mjs          — stdio bootstrap, bắt lỗi, không chạy nếu thiếu env
+    src/readonly-guard.mjs — whitelist tool đọc; CHẶN mọi tool write/create/
+                             update/delete/submit/cancel ở tầng code
+                             (không chỉ ở prompt — đúng yêu cầu phase-02)
+    src/skills/customer.mjs — find_customer / get_customer_balance
+    src/skills/sales.mjs    — stock_balance / list_unpaid_invoices
+    src/skills/payment.mjs  — (read-only stub, Phase 7 mới có write)
+    src/skills/inventory.mjs— (stub)
+    src/router.mjs          — intent → skill group, KHÔNG dùng embedding
+                              (theo phản biện review3/4 trong phase-02)
+    test/router.test.mjs    — node --test: routing + readonly-guard
+  Verify: npm install chạy được, lockfile tạo; node --test PASS.
+  CHƯA nối ERPNext thật (cần user cung cấp URL + API key/site token).
+  LƯU Ý: skeleton chưa chạy được end-to-end cho tới khi có credential.
+
+------------------------------------------------------------------------
+7. RỦI RO CÒN LẠI / VIỆC CẦN LÀM
+------------------------------------------------------------------------
+  - Chờ user xác nhận commit (đã duyệt trước, xác nhận lại lần cuối)
+  - Phase 2 cần: ERPNext URL + API key/site token (hoặc site + secret)
+  - Lớp bảo vệ chưa đủ (đúng phạm vi skeleton): audit log, rate limit,
+    schema check — nằm ở phase-05
+  - Định nghĩa Flutter client track (khoảng trống lớn nhất)
+  - Thu audio 3 miền (chặn Phase 4)
+  - `bạc` = ? (chờ mệnh giá) · viết tắt `m` (chưa làm)
+========================================================================

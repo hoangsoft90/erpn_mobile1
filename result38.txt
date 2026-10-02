@@ -1,0 +1,164 @@
+========================================================================
+RESULT 38 — REVIEW 2f7ec1f + FIX F6 (BỎ CALL TRÙNG resolveCustomer) + LỖI TEST CỦA CHÍNH MÌNH
+Timestamp: 2026-09-16 (giờ shell)
+Phạm vi: review commit docs 2f7ec1f + diff sau commit (khi đó working tree sạch)
+        → phát hiện F6 trên đường tiền (answerQuestion) → fix + test + falsify.
+KHÔNG đụng ERPNext thật · KHÔNG submit/delete PE · KHÔNG mở phase mới.
+Nguyên tắc: mọi claim = lệnh + output thật; vùng tiền phải falsify; không tự commit.
+========================================================================
+
+== 1. SCOPE REVIEW 2f7ec1f (docs-only) — PASS
+
+  git show --stat --oneline 2f7ec1f
+  → 10 files changed, 262 insertions(+), 10 deletions(-):
+    checklist.md · docs/demo-payment-draft.md · docs/device-test-checklist.md ·
+    features.md · handoff_20260916-result35.md · handoff_20260916-result36.md ·
+    next.md · result35.txt · result36.txt · working.md
+
+  Kiểm lẫn code trong commit:
+  git show --name-only --pretty=format: 2f7ec1f \
+    | grep -E "^(apps/|mcp-erpnext/src/|mcp-erpnext/test/|src/)"
+  → NONE ✓  (đúng "docs only", không lẫn file code nào)
+
+== 2. ĐỐI CHIẾU DOCS ↔ CODE (các claim trong runbook/checklist)
+
+  TTL 10 phút:
+    mcp-erpnext/src/proposal-freshness.mjs:19: export const DEFAULT_TTL_MS = 10 * 60 * 1000;
+  Banner STALE/EXPIRED (đọc từ HTTP thật):
+    mcp-erpnext/src/http-ask.mjs:442: if (err?.code === "PROPOSAL_STALE") {
+    mcp-erpnext/src/http-ask.mjs:450: code: "PROPOSAL_STALE",
+    mcp-erpnext/src/proposal-freshness.mjs:77: code: "PROPOSAL_EXPIRED",
+  Route huỷ:
+    mcp-erpnext/src/http-ask.mjs:172: if (req.method === "POST" && path === "/execute/cancel") {
+  → khớp docs/device-test-checklist.md + docs/demo-payment-draft.md.
+
+== 3. 🔴 F6 — CALL resolveCustomer TRÙNG (đường tiền) — ĐÃ FIX
+
+  Cơ chế (đọc source):
+    - answerQuestion() có GUARD ngoài: resolveCustomer(skills, nlp.text) — dòng 291.
+    - Nhánh route.group === "payment_write" TRƯỚC ĐÂY gọi resolveCustomer() LẦN NỮA
+      trên cùng text.
+  Tác động thật:
+    - Mỗi câu "thu tiền cho <khách> <số>" trả giá thêm 1 vòng full-catalog
+      findCustomer("") (round-trip thừa, chậm + chạm ERPNext thêm).
+    - Hai khối resolve song song có thể LỆCH nhau trong tương lai (sửa 1 nơi,
+      quên nơi kia) — bug "guard-before-branch" đúng nhóm đã gặp ở fix notIf
+      (result31).
+    - Không phải lỗi ghi sai tiền: cùng input ⇒ cùng output, và mọi đường ghi
+      vẫn qua /execute + gate. Nên đây là lỗi HIỆU NĂNG/DRIFT, không phải
+      double-write.
+
+  Fix (mcp-erpnext/src/copilot-server.mjs):
+    - Nhánh payment_write REUSE đúng binding `customer`/`ambiguous`/`candidates`
+      đã resolve ở guard ngoài; xoá call thứ hai; giữ nguyên nhánh trả lỗi
+      (không tìm thấy / mơ hồ) + note ⚠️ ambiguity truyền trong answer.
+
+  Kiểm sau fix (lệnh + output thật):
+    grep -c "await resolveCustomer(skills" mcp-erpnext/src/copilot-server.mjs
+    → 1        (chỉ còn guard ngoài)
+
+== 4. HÀNH VI KHÔNG ĐỔI — test E2E thật vẫn xanh
+
+  mcp-erpnext/test/copilot.test.mjs:251 ("a collect-money command returns a HIGH
+  write proposal") đi qua PIPELINE THẬT (NLP service + router + copilot + mock
+  ERPNext), assert nguyên văn:
+    p.action === "create_payment_entry" · p.risk === "HIGH" · p.executable === false
+    p.entity.name === "Nguyễn Thị Lan"
+    p.params.amount_vnd === 500_000
+    p.params.invoice === "SINV-0001"
+  → PASS sau khi bỏ call trùng ⇒ khách vẫn resolve đúng, chỉ hết round-trip thừa.
+
+== 5. 🟡 LỖI CỦA CHÍNH TÔI trong test này (đã ghi vào skill)
+
+  Test mới test/copilot-dup-resolve.test.mjs (assert ở mức SOURCE) lần đầu ĐỎ
+  trên code ĐÃ ĐÚNG:
+    AssertionError: found 2 — must be CALLED from exactly ONE site
+  Nguyên nhân thật: regex /resolveCustomer\(skills/ khớp CẢ dòng ĐỊNH NGHĨA
+  `export async function resolveCustomer(skills, cleanedText)` lẫn call site
+  ⇒ đếm = 2 (đúng là 1 call + 1 def). Comment trong test còn tự mâu thuẫn
+  ("two legitimate" nhưng assert.equal(..., 1)).
+  Sửa: đếm đúng call expression → /await resolveCustomer\(skills/g → PASS.
+
+  Falsify (bắt buộc, vùng tiền):
+    - Chèn tạm `await resolveCustomer(skills, nlp.text); // FALSIFY-MARKER-ONLY`
+      vào đầu nhánh payment_write → test FAIL đúng thông điệp "found 2".
+    - Gỡ marker → grep -c "FALSIFY-MARKER-ONLY" = 0 · grep -c "await
+      resolveCustomer(skills" = 1 · test PASS.
+  ⇒ Test chứng minh được nó bắt LỖI THẬT, không xanh giả.
+
+== 6. FULL SUITE SAU FIX (lệnh + output thật)
+
+  PYTHON   PYTHONPATH=src python3 -m unittest discover -s tests
+           → Ran 60 tests in 0.527s — OK
+  NODE     cd mcp-erpnext && node --test
+           → ℹ tests 120 · pass 120 · fail 0   (119 → 120: +test hồi quy F6)
+  FLUTTER  cd apps/mobile && flutter test
+           → 00:04 +34: All tests passed!
+           flutter analyze → No issues found! (ran in 6.4s)
+
+== 7. TRẠNG THÁI COMMIT
+
+  git status --short →
+    M  mcp-erpnext/src/copilot-server.mjs          (fix F6 — vùng tiền)
+    ?? mcp-erpnext/test/copilot-dup-resolve.test.mjs (test hồi quy)
+    ?? result38.txt · ?? handoff_20260916-result38.md
+    ?? .gemini/ · ?? .opencode/ · ?? initp        (rác local, KHÔNG stage)
+    ?? handoff_20260916-result37.md · ?? result37.txt (evidence phiên 37, chưa commit)
+
+  HEAD hiện tại = 2f7ec1f (đã push).
+  ⇒ Đợt F6 CHẠM ĐƯỜNG TIỀN ⇒ KHÔNG tự commit. Chờ user duyệt.
+  Message đề xuất:
+    fix: payment_write reuses the outer customer resolve (one round-trip per
+    question, no second resolveCustomer call)
+
+  Secret scan: đợt này chỉ chạm 1 file .mjs + 1 test + docs — không thêm giá
+  trị key/secret nào; không stage .env / idempotency-store / .plan.
+
+== 8. ADDENDUM — ĐÓNG GÓI BÀI HỌC LỖI VÀO SKILL (user yêu cầu 2026-09-16)
+
+Lỗi THẬT trong phiên (tự phát hiện, tự sửa) — đối chiếu skill trước khi thêm
+(grep tránh nhân bản):
+
+  a) F6 — code MÌNH viết ở result31 (nhánh payment_write tự resolve lại khách)
+     → đã có hàng test (F6-guard) nhưng THIẾU hàng thiết kế.
+     ĐÃ THÊM hàng mới: "Nhánh MỚI cắm vào pipeline gọi LẠI hàm tốn kém ...
+     bug chờ, không phải bug hiện" (gộp cùng nhóm với result31 §11-F1 —
+     2 đường classify/resolve cùng 1 text).
+  b) Test hồi quy của tôi ĐỎ trên code ĐÚNG (regex đếm lẫn dòng định nghĩa).
+     Đã có sẵn ở bảng cuối (từ lượt trước).
+  c) Probe HTTP thiếu header `Content-Type: application/json` ⇒ dio parse String
+     ⇒ báo "bug" giả. grep toàn bộ .agents/skills/ = 0 hit ⇒ THIẾU.
+     ĐÃ THÊM vào mục 3.
+  d) Bộ đếm tự viết SAI ĐƠN VỊ: `python l.split("|")` = số pipe + 1 và ĐẾM CẢ
+     pipe đã escape `\|` ⇒ báo động giả "5 hàng lệch cột + 1 bảng hỏng".
+     Kiểm lại bằng bộ đếm escaping-aware `re.split(r'(?<!\\)\|', l)`:
+        table@10 rows=21 cols=4 bad=NONE · table@104 rows=54 cols=3 bad=NONE ·
+        table@294 rows=5 cols=3 bad=NONE → TOTAL malformed = 0
+     (trước khi sửa: table@104 bad_rows=[155] — ĐÚNG 1 hàng thật thiếu dấu
+     phân cách; đã sửa, nội dung giữ nguyên).
+     ĐÃ THÊM (cùng mục 3, cùng gốc với b và c: "bộ đo đếm sai thứ").
+  e) Lỗi SHAPE THAM SỐ tool gọi lặp lại nhiều lần trong phiên: `read_files`
+     dạng object thiếu `path` (`{"limit":n,"offset":m}` trần) → tool lỗi mỗi lần.
+     grep `read_files` trong .agents/skills/ = 0 hit ⇒ THIẾU.
+     ĐÃ THÊM bullet vào mục 6 (cạnh bullet `write_file` thiếu `instructions`).
+
+  Kết quả kiểm integrity SAU khi thêm (escaping-aware, in thật):
+     table@  10 rows= 21 cols=5 bad_rows=NONE
+     table@ 104 rows= 54 cols=4 bad_rows=NONE
+     table@ 294 rows=  5 cols=4 bad_rows=NONE
+     TOTAL malformed rows: 0 · 283 → 299 phần tử (đếm bằng `read().split("\n")`;
+     `wc -l` = 298 — hai con số khác nhau vì split() tính cả phần tử rỗng cuối,
+     đúng bài học "ghi rõ ĐƠN VỊ ĐẾM" ở mục 3)
+     Nội dung mới có mặt đúng 1 lần: "CHÍNH BỘ ĐO" · "read_files` dạng object" ·
+     "bug chờ, không phải bug hiện" · "F6-guard".
+
+  Ghi chú: `.agents/skills/` KHÔNG nằm trong repo (quyết định user 2026-09-16
+  — "không đưa vào repo"), nên các thay đổi skill không xuất hiện trong
+  `git status`. Không đổi code → không cần chạy lại suite.
+
+== 9. KẾT LUẬN
+Review 2f7ec1f: docs-only đúng scope · docs khớp code · +1 bug thật (F6) đã
+fix, falsify, hành vi E2E không đổi · +1 lỗi tự gây (test đếm lẫn dòng định
+nghĩa) đã ghi vào skill erpn-verify-first.
+KHÔNG đụng ERPNext thật. DỪNG — chờ user duyệt commit F6.
+========================================================================

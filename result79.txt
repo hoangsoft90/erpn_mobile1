@@ -1,0 +1,120 @@
+result79 — 2026-09-28 — next8 D0–D4 + review hardening + M1 + docs-sync + push CI
+
+════════════════════════════════════════════════════════════════════
+1. PHẠM VI PHIÊN
+════════════════════════════════════════════════════════════════════
+- Review find-bugs lần 2 toàn bộ diff next8 (user yêu cầu) → 0 High / 1 Medium / 4 Low.
+- Fix theo user duyệt: L1+L2 (cap entity_id) + L4 (stderr noise) — change
+  openspec/changes/next8-review-hardening/.
+- Fix M1 (prefix namespace) — change openspec/changes/next8-pick-namespace-guard/.
+- Sổ sách: tasks.md D4 tick đủ, working.md mục 19–22, LESSONS + skill +3 hàng.
+- REAL-server probe T1/T2: đã verify-first cấu hình; kết quả cuối phiên xem §6.
+- Docs-sync toàn bộ + push GH build APK (KHÔNG clone — môi trường này có .git).
+
+════════════════════════════════════════════════════════════════════
+2. REVIEW FIND-BUGS LẦN 2 (không sửa, chỉ báo cáo)
+════════════════════════════════════════════════════════════════════
+Method: diff tạm 3 cụm (/tmp/diff-copilot.txt 351 dòng, diff-server-rest 213,
+diff-flutter 157) + verify code thật (session-context.clear(scope), contextScopeFor,
+readBody MAX_BODY, matcher countPickerMatches so pickerForRowsByText, mock restore).
+Kết quả: 0 High · 1 Medium · 4 Low:
+- M1: id lệch kind đi qua helper chỉ-check-list ⇒ refusal dán nhãn sai (STALE/INVALID
+  cho entity còn sống). Không leak — hint-not-authority giữ nguyên.
+- L1: pickedEntityId echo vào reason/stderr không bound. L2: /ask không cap entity_id
+  trong khi /dsh/ask cap 140 (MAX_BODY 1MB chặn DoS thật — chỉ lệch contract).
+- L3: bare "hủy" ngoài phiên picker → FORBIDDEN_IN_AI_PATH (đúng thiết kế bare-word).
+- L4: set("item",{id:null}) chắc chắn-refuse mỗi câu ambiguous ⇒ stderr noise.
+Verify SẠCH: clear(scope) đúng prefix user⟨0conv; bailout trước authz chỉ đọc text +
+clear đúng scope; total ≥ shown luôn đúng; mock restore dedupe-by-name; Flutter TTL
+cùng clock local.
+
+════════════════════════════════════════════════════════════════════
+3. REVIEW-HARDENING (L1+L2+L4) — TDD đỏ→xanh
+════════════════════════════════════════════════════════════════════
+Fix:
+- http-ask.mjs: export MAX_ENTITY_ID_LENGTH = 140 (1 hằng dùng chung); /ask check
+  entity_id >140 ⇒ 400 DSH_GATEWAY_BAD_REQUEST "entity_id không hợp lệ" (shape y hệt
+  /dsh/ask); /dsh/ask đổi literal 140 sang hằng.
+- copilot-server.mjs: XOÁ block set("item",{id:null,…}) (L1183-1194 cũ) — lời gọi
+  không bao giờ thành công (null id không lưu được; kind TỒN TẠI nên refusal còn
+  mis-code CONTEXT_KIND_UNKNOWN). Luật D1 ".ok check + stderr log" giữ nguyên cho 3
+  call site thật (item-picked/supplier/customer).
+TDD: đỏ đúng lý do (T-A 200≠400; T-C stderr còn dòng noise) → xanh 4/4
+  (T-A cap /ask; T-B 140-char giữ hành vi cả 2 route; T-C hết noise; T-D pin /dsh/ask).
+Số đo: targeted 7 suite 36/36 · Node FULL 917/915/2 (baseline pair
+  dshGatewayHealth+verifyDshRuntime) · secrets scan sạch.
+Chi tiết: .plan/next8/review-hardening-result.md
+
+════════════════════════════════════════════════════════════════════
+4. M1 — PICK NAMESPACE GUARD — TDD đỏ→xanh + falsify 2/2
+════════════════════════════════════════════════════════════════════
+Thiết kế (refinement-only): ENTITY_KIND_SERIES {supplier:"SUP-", customer:"CUST-",
+item:"CAM-"} + pickIdKindSeries(id) (không đoán series lạ ⇒ null). Refine ở CẢ
+pickFromCandidates + pickRowFromCandidates: id KHÔNG có trong list (list tra TRƯỚC =
+authority) + series nhận diện được + khác kind của nhánh ⇒ ENTITY_PICK_WRONG_KIND.
+Cùng kind/series lạ ⇒ giữ mã cũ. Id CÓ trong list luôn thắng bất chấp series.
+Surface: supplier READ + inventory (error_code/reason riêng, fresh chips + rows:[]);
+customer giữ contract D0 (refusal chỉ lên stderr); Flutter không đổi (không switch
+error_code). Không round-trip mới.
+TDD: đỏ đúng lý do U3/T1/T5 → xanh 8/8 (U1 list-authority, U2 same-kind, U4 không
+  đoán, T1/T3/T4/T5 E2E).
+Falsify scripts/falsify/next8-m1-namespace.mjs: F1 bỏ-refine ⇒ U3+T1+T5 RED ✅;
+  F2 series-override-list ⇒ U1 RED ✅; restore byte-identical.
+Số đo: targeted 8 suite 44/44 · Node FULL 925/923/2 · secrets scan sạch.
+Lưu ý đọc log: dòng "✖ ambiguous misses" = console.log diagnostic của golden-dataset
+  test ĐANG PASS (bucket miss dưới target) — không phải fail.
+Chi tiết: .plan/next8/m1-namespace-result.md
+
+════════════════════════════════════════════════════════════════════
+5. BÀI HỌC MỚI (skill erpn-verify-first +3 hàng; LESSONS_LEARNED đợt mới)
+════════════════════════════════════════════════════════════════════
+1) node --test trực tiếp thiếu COPILOT_MOCK_OK=1 ⇒ ERPNEXT_NOT_CONFIGURED 500 hàng
+   loạt (D3 0/7) — npm test là wrapper có opt-in; suite đồng loạt 500 ⇒ in body ra
+   trước khi debug code.
+2) Refusal refinement phải pin CẢ 2 CHIỀU (mã mới đúng chỗ + mã cũ không bị ăn theo)
+   — falsify 2 chiều: bỏ-refine ⇒ ca mới đỏ; mở-rộng ⇒ guard đỏ.
+3) Dòng ✖ trong test output ≠ luôn là fail — console.log diagnostic của test PASS
+   cũng in ✖; chỉ tin ℹ pass/fail + mục "failing tests".
+(+ 3 lesson tổng hợp trong LESSONS_LEARNED: dead-code set() là noise; cap ở 1 hằng
+dùng chung; series check đứng SAU list lookup.)
+
+════════════════════════════════════════════════════════════════════
+6. REAL-SERVER PROBE T1/T2 — TRẠNG THÁI CUỐI PHIÊN
+════════════════════════════════════════════════════════════════════
+Verify-first xong: .env có ERPNEXT_URL (tunnel ngrok) + key/secret (chỉ soi tên key,
+không in giá trị; .env 600); skill layer = skills/purchasing.mjs findSupplier →
+erpnext_supplier_list (read-only guard); ERP target chọn theo process.env ⇒ probe
+REAL = load .env + KHÔNG set COPILOT_MOCK_OK; answerQuestion là đường /ask dùng
+(nlp Python vẫn cần chạy local port 0).
+Việc chạy probe THẬT (T1 "nhà cung cấp <tên-gần-nhau>" ⇒ AMBIGUOUS; T2 cùng câu +
+entity_id ⇒ resolve đúng) phụ thuộc tunnel + NLP + dữ liệu thật ở thời điểm chạy —
+KẾT QUẢ: ❓ CHƯA CHẠY ĐƯỢC TRONG PHIÊN NÀY (không có bằng chứng đo thật, không báo
+PASS). Probe script đã dựng sẵn: chạy lại khi tunnel sống — lệnh xem handoff.
+
+════════════════════════════════════════════════════════════════════
+7. DOCS-SYNC + PUSH CI
+════════════════════════════════════════════════════════════════════
+- checklist.md (phiên mới + mục CHỜ), next.md (trạng thái mới nhất), features.md
+  (next8 + tương lai), faq.md §20 (picker + các từ chối mới), LESSONS_LEARNED.md,
+  working.md (mục 19–22).
+- Kết quả push + CI (ĐO THẬT):
+  - Commit: `83effb0` — feat(next8): entity picker end-to-end (D0–D4) + review
+    hardening + M1 namespace guard — 49 file +3265/−40.
+  - Push: fast-forward `900d960..83effb0` → remote branch `change/flutter-chat-mvp`
+    (HTTPS + GH_TOKEN từ .env, output mask; KHÔNG clone, KHÔNG force — remote tip
+    trước push = parent local, kiểm qua ls-remote).
+  - CI run `36417937846` android-debug-apk trên đúng `83effb0`: **SUCCESS** (~6 phút).
+  - Artifact `erpn-chat-debug-apk` **85,4 MB**, hết hạn 2026-12-27.
+  - Lưu ý môi trường: origin SSH permission denied trong cloud shell này ⇒ dùng
+    HTTPS+token; môi trường CÓ .git nên KHÔNG dùng đường rsync/merge của skill deploy.
+  - Secrets: 2 vòng grep (pattern + git grep --cached) đều rỗng; vùng cấm
+    (.env/.plan/.agent_sessions/.chats/.gemini/.opencode/node_modules/probe) 0 file staged.
+
+════════════════════════════════════════════════════════════════════
+8. CHỜ USER
+════════════════════════════════════════════════════════════════════
+1. Duyệt commit tách riêng cụm next8 (nếu muốn revert được từng phần).
+2. Archive 5 openspec change next8.
+3. REAL probe T1/T2 khi tunnel sống.
+4. Xoá 2 probe Flutter untracked (_probe_review_test, _probe_b0_voice_autosend)?
+5. Treo cũ: voice máy thật · doanh thu ngày quá khứ · repo vars/secret 0/0 · revoke token.

@@ -1,0 +1,231 @@
+================================================================================
+result83.txt — next8 / PHASE 2 — COLLECT SCREEN (đọc company-scoped + UI thu tiền)
+Ngày: 2026-09-29 · Người chạy: agent · Trạng thái: XONG KỸ THUẬT — CHỜ OWNER DUYỆT COMMIT
+Nguyên tắc: minimal change · server READ-ONLY cho hoá đơn/tài khoản · 0 write ERP · 0 /execute
+Nguồn: .plan/next8/phases/phase-02-collect-screen.md (§5.1–5.5 · §6 test · §7 falsify · §9 DoD)
+Owner lock §6.1–6.5: sessions/res1.md — KHÔNG nới lock nào.
+Báo cáo đầy đủ: .plan/next8/phase2-result.md · OpenSpec: openspec/changes/next8-collect-screen/
+KHÔNG tự commit (chạm đường tiền) — xem §9.
+================================================================================
+
+§0. ĐÃ LÀM / KHÔNG LÀM
+--------------------------------------------------------------------------------
+ĐÃ LÀM (đúng phạm vi Phase 2, gồm 2 quyết định mở rộng owner đã duyệt):
+A. (a) WIRE `company` + `q` xuyên MỌI caller của phép đọc hoá đơn — §6.4 thi hành thật, không
+   chỉ ở route mới (chi tiết §1).
+B. (b) `POST /collect/accounts` (READ) + capability + mock (`erpnext_account_list`) — §2.
+C. (c) Flutter `features/collect/` (data + application + presentation) + route `/collect` +
+   chat auto-open 1 lần/handoff + **22 ca** widget test — §3.
+D. Falsify **F1–F5** (+ **F6** phát sinh trong lúc audit) — §4.
+E. Audit toàn app "ghi state sau await" + "dùng context sau await" → fix 1 gap thật — §5.
+
+KHÔNG LÀM (cố ý, ngoài phạm vi Phase 2):
+- Validator §6.2 (account sai `account_type` bị chặn ở tầng server trước proposal/execute) —
+  owner đã chốt để **Phase 3**. Phase 2 chỉ làm "nửa UI": picker chỉ đưa tài khoản ĐÚNG loại,
+  không có affordance đổi sang loại kia, không fallback chéo (T17).
+- Gỡ 422 multi-invoice (`COLLECT_MULTI_INVOICE_NOT_READY`) — Phase 3/4 (§8, có debt chi tiết).
+- Split 1 lần thu → N PE (TM+CK) — backlog, không thuộc NEXT8.
+- **KHÔNG gọi `/execute`** từ màn hình này (§1 kiểm bằng tripwire + test).
+- KHÔNG thêm package Flutter nào; KHÔNG sửa ERPNext; KHÔNG chạy migration.
+
+§1. (a) WIRE COMPANY + q — §6.4 THI HÀNH TRÊN MỌI CALLER
+--------------------------------------------------------------------------------
+Vấn đề gốc (Phase 0 audit #7): phép đọc hoá đơn mở cũ dùng `erpnext_sales_invoice_list`
+(field cố định, `limit: 100` cắt IM LẶNG, không lọc company, không lọc docstatus) ⇒ số trên
+màn hình có thể là số của công ty khác hoặc bị cắt mà không ai biết.
+
+ĐÃ SỬA (một nguồn logic duy nhất — `skills/sales.mjs#listOpenSalesInvoices`):
+- đọc bằng `erpnext_doc_list` (field/filter tự do) + `filters [["customer","=",id],["docstatus","=","1"]]`
+  và `["company","=",company]` khi caller biết company (value STRING — đúng dialect tool thật);
+- lọc `outstanding_amount !== 0` ở tầng skill (credit note âm VẪN là chứng từ mở — result20);
+- tìm kiếm ở tầng skill (name/posting_date/due_date/amount; "15/9" → ISO) ⇒ `q` không phải cắt trang;
+- trả `scanned` / `matched` / `truncated` (`truncated` = "page đã đầy", KHÔNG phải "chắc chắn còn nữa");
+- hằng `OPEN_INVOICE_READ_CAP = 200` để **module-private** (guard `router.test.mjs` cấm module skill
+  export non-function — xem §4 bài học "không tái tạo đúng thứ vừa bị guard bắt").
+
+Các caller đã wire company (đây là điểm §6.4 thường bị bỏ sót — chỉ sửa route mới là chưa đủ):
+  · `read-views.mjs#readScreen({..., company, query})` → trả thêm `company`, `matched_total`;
+  · `http-ask.mjs /read/list` — parse `q`, company lấy từ `listAuthz.company` (server resolve
+    bằng `resolveCompanyScope`, **KHÔNG** tin `body.company`);
+  · `copilot-server.mjs` — nhánh handoff thành công + `proposeCollectFromHandoff()` dùng company
+    đã resolve từ `authorize()`;
+  · `skills/payment-write.mjs` — builder nhận `opts.company` (receive-side);
+  · `router.mjs` — skills bag nhận `opts` (company) cho `listUnpaidInvoices`/`getCustomerBalance`;
+  · `skills/customer.mjs#getCustomerBalance(..., {company})` — trả thêm `company`, `truncated`.
+
+Hệ quả đã đo: đường chat `customer.balance`, A1 drill-down, `/collect/propose` giờ đọc CÙNG một
+nguồn đã lọc company ⇒ "số trên màn = số server validate" (không còn 2 chuẩn).
+
+§2. (b) POST /collect/accounts (READ) + MOCK
+--------------------------------------------------------------------------------
+- `skills/accounts.mjs` (MỚI): `listMoneyAccounts({company})` — `erpnext_account_list` + đọc
+  Company defaults; CHỈ leaf (`is_group = 0`); nhóm `{cash[], bank[], defaults{}, resolved{Cash,Bank}}`;
+  default chỉ được honour khi đúng là leaf của type đó; thiếu company ⇒ `{ok:false,
+  code:"COMPANY_REQUIRED"}` và **KHÔNG đọc gì** (không liệt kê tài khoản mọi công ty).
+  Type map: `cash → "Cash"`, `bank_transfer → "Bank"`.
+- `capabilities.json`: thêm capability READ cho route tài khoản (không thêm màn hình mới).
+- `http-ask.mjs`: route `POST /collect/accounts` (bucket `read`, qua `authorize`, `finally close`),
+  trả payload đã **unwrap** khỏi `markUntrusted` (bug tự mắc: ban đầu trả nguyên `{__untrusted,
+  source, data}` ⇒ client không đọc được — xem §4 bài học).
+- `mock-server.mjs`: thêm `erpnext_account_list` (branch đặt TRƯỚC branch generic cùng doctype) +
+  fixture `ACCOUNTS`; thêm field `company` vào fixture `SINV` và dời hằng `COMPANY` lên trước
+  `INVOICES` (thiếu `company` trên fixture ⇒ read company-scoped trả 0 dòng trên mock — đúng lớp
+  lỗi "mock dễ dãi hơn tool thật").
+
+§3. (c) FLUTTER — FEATURE `collect`
+--------------------------------------------------------------------------------
+- `collect/data/collect_repository.dart` (MỚI) — `fetchOpenInvoices({entityId, q, limit})`,
+  `fetchAccounts()`, `propose(...)`.
+- `collect/application/collect_controller.dart` (MỚI, `@riverpod` **Notifier** — sync build)
+  — state `CollectUi`; **epoch/request token** chống response cũ ghi đè; **không** có API tự phân bổ;
+  `canSubmit` mirror luật server (1 phương thức, phân bổ trong hạn, tổng khớp, 0 HĐ ⇒ chỉ rỗng).
+- `collect/presentation/screens/collect_screen.dart` + 4 widget (`invoice_allocation_tile`,
+  `payment_method_section`, `account_picker`, `collect_summary`) — 4 khối: Khách · Hoá đơn ·
+  Phương thức · Tổng; **1 nút XÁC NHẬN THU** → `proposeCollect` → `ProposalCard` (nháp).
+- `app_router.dart`: route `/collect` (`name: collect`), nhận handoff qua `extra`; thiếu ⇒ màn
+  refusal tiếng Việt (không tự dựng handoff).
+- `chat_screen.dart`: answer có handoff collect ⇒ tự mở màn, guard theo `handoff_id` (mỗi ticket
+  mở ĐÚNG 1 lần, kể cả sau restore lịch sử).
+- `chat_models.dart`: `ChatTurn` giữ raw map `business_handoff` + `BusinessHandoffRef` (chat KHÔNG
+  import model của feature collect — chiều phụ thuộc `chat ← collect`).
+- Copy theo lock: "Mỗi lần thu một hình thức thanh toán." · on-account "Thu không gắn hoá đơn
+  (ứng trước / chưa phân bổ)."
+- Widget test: `test/collect_screen_test.dart` — **22 ca** (T1–T20 theo §5.3 + **T15b** + **T15c**).
+
+§4. FALSIFY F1–F5 (+F6) — MỖI CA: PHÁ → CHỨNG MINH ĐỎ → RESTORE BYTE-IDENTICAL
+--------------------------------------------------------------------------------
+F1  Thêm hàm tự phân bổ oldest-first vào controller
+    → ĐỎ: "no auto-allocation" + T9 + T19 (+T12 nút bị chặn)
+    → restore: sha256 khớp.
+F2  Bỏ `allocations: const {}` khi (đổi) khách  ⇒ **lần đầu KHÔNG ĐỎ — đây là phát hiện, không
+    phải lỗi cấu hình**: bộ test hiện có **không có oracle** cho scenario "đổi khách ⇒ xoá phân bổ"
+    (T15 chỉ test epoch guard = response cũ không ghi đè). Đã VIẾT THÊM **T15b** (tầng controller,
+    qua `ProviderContainer`) rồi chạy lại mutation:
+    → ĐỎ: `Expected: empty` / `Actual: {'SINV-0001': 2500000}`
+    → restore: sha256 khớp.
+F3  Bỏ guard in-flight (`|| ui.submitting`) trong `confirm()`
+    → ĐỎ: T18 — `Expected: <1>` / `Actual: <2>` (2 request `/collect/propose` cho 1 lần bấm đôi)
+    → restore: sha256 khớp.
+F4  Cho submit khi tổng phân bổ ≠ tổng phương thức (bỏ `allocatedTotal != paymentTotal`)
+    → ĐỎ: T12 — `Expected: null` / `Actual: <Closure: () => void>` (nút XÁC NHẬN **bật** cho tổng lệch)
+    → restore: sha256 khớp.
+F5  Bỏ lọc company ở phép đọc (`filters.push(["company","=",company])`)
+    → ĐỎ: 2 test company-scope — `18 tests / 16 pass / 2 fail`; `actual: 4` / `expected: 2`
+      (read nới sang hoá đơn của công ty khác)
+    → restore: sha256 khớp.
+F6  Bỏ `if (!ref.mounted) return result;` sau `await reloadAfterPaid()` (guard MỚI, xem §5)
+    → ĐỎ: T15c — `Expected: not null` / `Actual: <null>`
+    → restore: sha256 khớp.
+Restore cuối cùng: `sha256sum -c /tmp/f35-baseline.sha256` → `sales.mjs` OK ·
+`collect_repository.dart` OK · `apps/mobile/lib + mcp-erpnext/src` = **0 marker `FALSIFY-F*`**.
+(`collect_controller.dart` hash đổi **có chủ ý** vì F6 kết thúc bằng việc GIỮ lại guard mới.)
+
+§5. AUDIT TOÀN APP — "GHI STATE SAU AWAIT" + "DÙNG CONTEXT SAU AWAIT"
+--------------------------------------------------------------------------------
+Phạm vi: 2 notifier (`ChatController` AsyncNotifier, `CollectController` Notifier) + 4 widget State
+(`ocr_sheet`, `ocr_slots_form`, `pipeline_progress`, `invoice_allocation_tile`) + `app/providers.dart`
+(toàn `Provider` không state ⇒ sạch).
+
+(5.1) Ghi state sau await — 1 GAP THẬT đã sửa:
+  · `CollectController.resolveCustomer()` (tìm ra ở F2): gán `state` sau `await` mà không kiểm
+    `ref.mounted` ⇒ user bấm back giữa lúc đang đọc ⇒ ném "Cannot use the Ref ... after it has been
+    disposed". Đã thêm guard ở 4 continuation (resolveCustomer try/catch · search try/catch · confirm).
+  · `CollectController.confirm()` nhánh `INVOICE_ALREADY_PAID`: `await reloadAfterPaid()` rồi ghi
+    `state` **không** kiểm lại `ref.mounted` (cùng lớp lỗi, trễ một `await`) ⇒ đã thêm guard + test
+    **T15c**.
+  · Các file còn lại SẠCH: `chat_controller.dart` (16 cặp await→state đều có `ref.mounted`, kể cả
+    2 nhánh catch `return false` ngay sau `_recordFailure`; file còn tự ghi comment về hiểm hoạ này),
+    `chat_screen.dart` (23/23), `settings_screen.dart`, `daily_summary_screen.dart`,
+    `proposal_card.dart`, `read_list_screen.dart`, `drill_list_screen.dart`, `ai_fallback_button.dart`,
+    `customer_offer_card.dart`, `entity_picker.dart`, `pipeline_progress.dart`.
+
+(5.2) Dùng context sau await (điều hướng/dialog/messenger) — **0 gap**:
+  12 điểm đã review tay: 3 `context.push` trong closure đồng bộ · `chat_screen:93` trong
+  `addPostFrameCallback` có `if (!mounted) return;` · `app_drawer:273` capture `GoRouter.of(context)`
+  TRƯỚC `pop()` (đúng pattern, có comment) · 2 `ScaffoldMessenger.of(context)` đều có `mounted` chắn ·
+  `await showOcrSheet/showOcrSlotsForm(context, …)` truyền context TRƯỚC await, sau await đều
+  `if (!mounted) return;`.
+
+(5.3) Đo lint để biết "analyze sạch" có phải bằng chứng không (probe tạm, đã xoá):
+  · `flutter_lints 6.0.0` có khai `use_build_context_synchronously`, nhưng đo bằng CÙNG một file
+    vi phạm (4 kiểu dùng context sau await, không guard) đặt ở 2 nơi:
+      – trong `test/` ⇒ **0 hit** rule (chỉ `avoid_print` = control);
+      – trong `lib/`  ⇒ **4 hit** rule.
+  · ⇒ Rule **chỉ bảo vệ `lib/`**. Nên "`flutter analyze` sạch ở `lib/`" LÀ bằng chứng cho (5.2),
+    nhưng KHÔNG nói gì về code trong `test/`.
+  · 2 file probe đã xoá; analyze trở lại đúng 1 warning baseline.
+
+§6. BẰNG CHỨNG — LỆNH + SỐ THẬT (đo trong phiên này, không chép số phiên trước)
+--------------------------------------------------------------------------------
+$ cd apps/mobile && flutter test test/collect_screen_test.dart
+  → 00:09 +22: All tests passed!            [22 ca: T1–T20 + T15b + T15c]
+
+$ cd apps/mobile && flutter analyze
+  → 1 issue found: warning `unused_field` @ test/_probe_b0_voice_autosend.dart:50
+    (file PROBE untracked, có TRƯỚC phase này, KHÔNG thuộc next8 — không sửa)
+
+$ cd apps/mobile && flutter test > /tmp/flutter-full-final.txt
+  → 426 pass / 3 fail  ("+426 -3: Some tests failed")
+    3 fail = _probe_review_test.dart (P1, P1b, P2b) — probe untracked, lỗi RenderFlex overflow
+    của chính harness, KHÔNG phải regression.
+
+$ cd mcp-erpnext && COPILOT_MOCK_OK=1 node --test \
+      test/next8-collect-reads.test.mjs test/next8-collect-accounts.test.mjs \
+      test/a1-read-drilldown.test.mjs test/router.test.mjs
+  → ℹ tests 52 · ℹ pass 52 · ℹ fail 0
+
+$ cd mcp-erpnext && npm test > /tmp/next8-f345-full.txt
+  → ℹ tests 992 · ℹ pass 990 · ℹ fail 2
+    2 fail = dshGatewayHealth + verifyDshRuntime (baseline env: máy thiếu binary `dsh`)
+
+Ghi chú vận hành (đã tốn thời gian 2 lần trong phiên):
+- Chạy `node --test` trực tiếp PHẢI có `COPILOT_MOCK_OK=1` cùng dòng lệnh, nếu không: 500
+  `ERPNEXT_NOT_CONFIGURED` hàng loạt trông y như regression của chính mình.
+- Full-suite ghi ra FILE rồi grep `ℹ (tests|pass|fail)` + `✖ ` — không pipe qua `tail` (mất summary).
+
+§7. BASELINE FAIL ĐÃ BIẾT (KHÔNG phải regression của Phase 2)
+--------------------------------------------------------------------------------
+1. Node full — 2 fail: `dshGatewayHealth` + `verifyDshRuntime` (cần binary `dsh` trên máy; đúng cặp
+   baseline đã ghi ở Phase 1/next9).
+2. Flutter full — 3 fail: `_probe_review_test.dart` (untracked probe: P1, P1b, P2b) — RenderFlex
+   overflow 5787px do viewport nhỏ của harness; tồn tại TRƯỚC phase này.
+3. `flutter analyze` — 1 warning: `_probe_b0_voice_autosend.dart` (untracked probe).
+4. File KHÁC không thuộc phase: `faq1.md`, `todo1.md` đang modified ở working tree từ TRƯỚC phiên
+   này — KHÔNG chạm, KHÔNG đưa vào commit.
+
+§8. DEBT / NGOÀI PHẠM VI (ghi rõ để không quên)
+--------------------------------------------------------------------------------
+D1. **§6.2 validator (Phase 3)**: hiện server CHƯA chặn account sai `account_type` trước
+    proposal/execute. Phase 2 chỉ chặn ở UI (picker chỉ đưa tài khoản đúng loại). ⇒ Phase 3.
+D2. **422 `COLLECT_MULTI_INVOICE_NOT_READY`** (`copilot-server.mjs:2452–2459`): server TỪ CHỐI
+    khi `allocations.length > 1`. Đây là **MVP tạm của Phase 1** theo quyết định owner (3)
+    — lock §6.1 KHÔNG cấm multi-invoice (Phase 0 đã chứng minh 1 PE nhiều `references`).
+    ⚠️ **ĐO ĐƯỢC trong phase này**: UI Phase 2 **cho tick nhiều hoá đơn và nút XÁC NHẬN BẬT**
+    (test **T9** đang PIN hành vi này), nghĩa là user tick 2 hoá đơn + tổng khớp ⇒ bấm xác nhận
+    ⇒ server trả 422 kèm lý do tiếng Việt. Fail-closed (không ghi gì, user thấy lý do) nên không
+    phải lỗi an toàn — nhưng là **ma sát UX có test pin**. Hai lựa chọn cho owner (chưa tự làm):
+    (a) giữ nguyên + gỡ 422 ở Phase 3/4 như kế hoạch; (b) chặn UI ở 1 tick cho tới Phase 3
+    (đổi T9). **KHÔNG tự chọn** — thuộc quyết định owner.
+D3. **Builder ghi `references` hardcode ĐÚNG 1 dòng** (`payment-write.mjs:366`) ⇒ kể cả khi gỡ 422,
+    đường GHI vẫn chưa dựng được PE nhiều hoá đơn. Đây mới là phần việc thật của "multi-invoice
+    Phase 3/4" (tầng validate đã cho phép nhiều `allocations` sẵn).
+D4. Split 1 lần thu → N PE (TM+CK) — backlog ngoài NEXT8.
+D5. UI-checkpoint (ảnh chụp màn hình + owner xác nhận) — **CHƯA LÀM** (môi trường phiên này không
+    có MCP/screenshot). Đây là mục DoD duy nhất còn mở ⇒ chặn commit vùng tiền.
+
+§9. TRẠNG THÁI & VIỆC TIẾP THEO
+--------------------------------------------------------------------------------
+Phase 2 XONG KỸ THUẬT theo DoD (trừ UI-checkpoint — §8 D5): 22 ca xanh, analyze baseline,
+falsify F1–F5 (+F6) đỏ đúng rồi restore byte-identical, 0 write / 0 `/execute` mới.
+
+CHƯA COMMIT — vùng tiền, theo rule dự án (AI không tự ký duyệt). Cần owner:
+  (1) xác nhận UI-checkpoint (ảnh màn hình);
+  (2) quyết định D2 (giữ 422 tới Phase 3/4 hay chặn UI 1 tick);
+  (3) lệnh commit (message + có push hay không).
+Sau khi owner duyệt: commit `feat(next8)` cho cụm Phase 2 → cập nhật `working.md` mục (28).
+
+Môi trường phiên này: AgentMemory / cocoindex-code / codebase-memory-mcp / open-code-review /
+Simplenote ĐỀU KHÔNG KHẢ DỤNG ⇒ Code Review chạy THỦ CÔNG (đọc diff + review tay từng điểm),
+KHÔNG tự cài/khởi động lại service nào. Bài học mới của phiên đã ghi vào skill
+`.agents/skills/erpn-verify-first/SKILL.md` (§7 mới + 3 hàng bảng bài học).
+================================================================================

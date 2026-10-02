@@ -1,0 +1,121 @@
+================================================================================
+result74.txt — next5 DRAWER READ ĐÓNG + fix "Hôm qua" + audit NEXT6 (phiên 2026-09-26)
+Ngày: 2026-09-26 · Project: erpn_mobile1 · Branch: change/flutter-chat-mvp
+2 commit: `17d6f9b` (next5 D0–D5, 39 file) + `ed79f77` (P4-6 "Hôm qua" [VÙNG SỐ TIỀN], 8 file).
+KHÔNG push · KHÔNG dùng ERPNext thật ghi gì trong phiên này · KHÔNG tự commit vùng số tiền.
+================================================================================
+
+## 0. ĐÃ LÀM GÌ (3 việc)
+
+1. **Commit đợt next5** — toàn bộ drawer READ D0→D5 gộp 1 commit `17d6f9b`
+   (feat(ops): drawer READ REAL-only + provenance, hoàn tất next5 (D0–D5)).
+2. **Fix P4-6** — màn `Tóm tắt ngày` xem "Hôm qua" hiện ĐÚNG số hôm qua; commit `ed79f77`
+   (fix(ops), vùng SỐ TIỀN — user duyệt riêng).
+3. **Audit NEXT6 Prompt-1** — audit-only, KHÔNG sửa code; deliverable `.plan/next6-audit1.md`.
+
+## 1. COMMIT `17d6f9b` — next5 D0→D5
+
+- 39 file, +4093 / −169. Secret scan sạch.
+- **LOẠI RA khỏi commit (vẫn dirty/untracked trong tree, coi là rác):**
+  `syncode` (M) · `checklist1.md` · `faq1.md` · `icon.png` · `query_customer.py`.
+- Nội dung: 5/5 mục drawer bấm được (Công nợ `receivable_customers` · Nợ quá hạn `overdue_top` ·
+  HĐ chưa trả `unpaid_invoices` · Tồn kho nóng `stock_low` · Nháp hôm nay `app_drafts_today`),
+  REAL-only + cổng provenance dùng chung 3 màn tiền, footnote công nợ verbatim, số = GL raw
+  KHÔNG trừ Draft PE, D4 polish (refresh list ngắn · tiêu đề drill theo server · clear cache ·
+  badge fail-safe · timeout 7s).
+- Số đo lúc đóng: **Node 820/818/2** (2 fail `dshGateway*` = môi trường DSH từ B0) ·
+  **Flutter 333/333** · analyze **0** · falsify drill **37 ca ALL RED**.
+
+## 2. COMMIT `ed79f77` — Tóm tắt ngày "Hôm qua" (P4-6) [VÙNG SỐ TIỀN]
+
+**Bug gốc (D4 phát hiện ngoài scope):** khi chọn "Hôm qua", 2 thẻ (Hóa đơn đã xuất ·
+Tiền khách trả) đổi TIÊU ĐỀ sang hôm qua nhưng SỐ vẫn là số HÔM NAY.
+
+**User chốt hướng (A) + phương án 2:**
+- 2 thẻ hiện **số của HÔM QUA** (`_yesterday`); **bỏ hẳn** dòng delta.
+- `_DayNotRead` (`daily_summary_screen.dart`): hôm qua chưa đọc được (`_yesterday == null`) ⇒
+  thẻ hiện tiêu đề + "Đang đọc ngày hôm qua…" / "Chưa đọc được ngày hôm qua." + `Thử lại`
+  — **fail-closed, KHÔNG bao giờ rơi về số hôm nay**. Keys: `summary-day-not-read-sales_invoices`,
+  `summary-day-not-read-receipts`.
+- Drill date: `_yesterday?.meta.date` → **`d.meta.date`** (ngày do chính server trả).
+- **Xoá:** method `_deltaLine()` + keys `invoices-delta` / `receipts-delta`.
+
+**Bằng chứng:**
+```
+$ cd apps/mobile && flutter test
+  +333: All tests passed!
+$ flutter analyze --no-pub
+  No issues found!
+$ cd mcp-erpnext && node scripts/falsify/p44-read-drill.mjs
+  ... 38 ca · ALL RED  (thay 3 ca delta cũ bằng 3 ca guard-fix)
+```
+- 8 file đổi. Docs cập nhật cùng commit: `features.md`, `checklist.md`, `next.md`, `faq.md §10.3`, `working.md`.
+
+## 3. CODE REVIEW `ed79f77` — MANUAL (mọi tool review đều KHÔNG khả dụng phiên này)
+
+> OCR `open-code-review`, AgentMemory, `codebase-memory-mcp`, `cocoindex-code`, Simplenote MCP
+> đều không gọi được ⇒ review thủ công qua `git diff` / grep. `code_search`/ripgrep cũng lỗi ENOTDIR.
+
+| Mức | Phát hiện | Trạng thái |
+|---|---|---|
+| High | (không có) | — |
+| **M1** (Medium) | `onRefresh: () => _load(force: true)` `daily_summary_screen.dart:265` chỉ đọc lại HÔM NAY ⇒ đang xem "Hôm qua" kéo-refresh KHÔNG làm mới ngày đang xem | ❌ **CHƯA sửa — chờ user** |
+| **M2** (Medium) | `_BlockError.onRetry` (trong `_salesInvoices`/`_receipts` khi `d=_yesterday`) reload HÔM NAY, không phải ngày đang xem | ❌ **CHƯA sửa — chờ user** |
+| L1 | Note nói "chỉ bán/thu" nhưng thẻ SO vẫn giữ số hôm nay + drill `sales_orders_today` không có date | Low |
+| L2 | Tiêu đề block-error không nhất quán | Low |
+| L3 | Ngày fetch tính client-side, còn ngày drill lấy từ server | Low |
+| L4 | `_isQuietDay(data)` dùng hôm nay trong khi đang xem hôm qua | Low |
+
+Ponytail / dead-code PASS: `grep '_deltaLine|invoices-delta|receipts-delta'` = none ·
+`_yesterday?.meta.date` = none · `_DayNotRead` có 2 call site + 1 định nghĩa.
+
+## 4. NEXT6 — audit Prompt-1 (AUDIT-ONLY, không sửa code)
+
+Deliverable `.plan/next6-audit1.md` (277 dòng). Gap G1–G11 (session isolation):
+- G1 store key = `conversation_id` đơn độc, **không principal** (`dsh-gateway.mjs:459`)
+- G2 không lock per-conversation (chỉ global `inFlight`, max=1)
+- G3 `sessionContext` global cross-user (`copilot-server.mjs:56/1409`)
+- G4 `begin()` replay không kiểm `user_id` (`idempotency.mjs`)
+- G5 proposal không bind principal (bind ở `/execute`, `safety-gateway.mjs:568,647`)
+- G6 429 thiếu `Retry-After`
+- G7 `DSH_MAX_SESSIONS` chưa dùng (cap cứng 200)
+- G8 Flutter `_dshConversationId` (`chat_controller.dart:124`) không persist
+- G9 không có endpoint clear
+- G10 log `/ask` thiếu `conversation_id`
+- G11 metadata session thiếu
+
+Baseline (đo thật):
+```
+$ cd mcp-erpnext && npm test        # COPILOT_MOCK_OK=1 node --test
+  ℹ tests 820 · pass 818 · fail 2 · duration 135743ms
+  (2 fail = dshGatewayHealth + verifyDshRuntime — môi trường dsh, từ B0, không hồi quy)
+$ cd apps/mobile && flutter analyze --no-pub   →  No issues found!
+$ cd apps/mobile && flutter test               →  +333: All tests passed!
+```
+File dự kiến sửa cho NEXT6 code: `dsh-gateway.mjs`, `http-ask.mjs`, `idempotency.mjs`,
+`safety-gateway.mjs`, `copilot-server.mjs`, tests, `chat_controller.dart`.
+KHÔNG sửa `payment-write.mjs` / `authorization.mjs` (đã đúng).
+**Chưa tạo** change `next6-session-isolation` (audit-only; sẽ tạo ở đầu Prompt-2 trước khi code).
+
+## 5. BÀI HỌC → SKILL (local-only, `.agents/` gitignored)
+
+`.agents/skills/erpn-verify-first/SKILL.md` +5 dòng (nay 519 dòng):
+1. `flutter analyze --no-pub` với `package_config.json` cũ ⇒ **1069 lỗi `undefined_class` giả**.
+2. Sửa code làm lệch anchor falsify + `only` ⇒ **grep harness trước**.
+3. Đổi DỮ LIỆU một thẻ ⇒ rà **MỌI đường refresh/retry** (chính là M1/M2 — đã cắn).
+4. Mô tả phương án với scope phóng đại ⇒ phải **hỏi lại**.
+5. Ca falsify fail-closed phải biến đổi **DỮ LIỆU**, không phải crash.
+
+## 6. TRẠNG THÁI MỘT CÂU
+
+**next5 đã commit (`17d6f9b`) và bug "Hôm qua" đã fix+commit (`ed79f77`) — cả 2 chưa push;
+review `ed79f77` để lại M1/M2 (refresh/retry reload sai ngày) CHƯA sửa vì chạm vùng SỐ TIỀN,
+đang chờ user quyết; NEXT6 mới xong audit, chưa code.**
+
+## 7. VIỆC CẦN LÀM TIẾP (thứ tự)
+
+1. **[USER]** quyết M1/M2 (có sửa hay không, sửa thế nào).
+2. **[USER]** `push` ⇒ CI APK cho 2 commit.
+3. NEXT6 Prompt-2: tạo `openspec/changes/next6-session-isolation/` (tên KHÔNG bắt đầu bằng số)
+   → code → test → review.
+4. Còn treo: revoke token `ghp_…7aO`; duyệt 2 layout P5-4; vòng XML thật 2 lần (P9-D).

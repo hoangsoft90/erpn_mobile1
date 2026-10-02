@@ -1,0 +1,84 @@
+result80 — 2026-09-28 — next9 turn-entity-isolation (prompt-1 + prompt-2) + todo-test + push CI
+
+════════════════════════════════════════════════════════════════════
+1. PHẠM VI PHIÊN
+════════════════════════════════════════════════════════════════════
+- Thực thi .plan/next9/prompt-1.md (§3–§20): siết regression A–H ID-level,
+  D/G fixture inject, execute-bound (§10), Flutter verify (§11–§15), REAL probe (§17).
+- Thực thi .plan/next9/prompt-2.md (§1–§5): execute-binding test + FULL regression
+  + report §J + verdict.
+- Viết .plan/next9/todo-test.md (test plan 4 tầng cho user).
+- Update skill erpn-verify-first (+ lessons) — separate commit.
+- Commit + push lên GitHub (change/flutter-chat-mvp) để CI build APK.
+
+════════════════════════════════════════════════════════════════════
+2. KẾT QUẢ CHÍNH (bằng chứng ngắn — chi tiết trong debug-result.md §G–§J)
+════════════════════════════════════════════════════════════════════
+Server:
+- Test next9: next9-turn-isolation 6/6 · next9-entity-isolation-fixtures 2/2 ·
+  next9-execute-binding 3/3 ⇒ 11/11 PASS (COPILOT_MOCK_OK=1 node --test, đo lại
+  trong phiên).
+- Falsify: re-inject khối writeEligible vào WRITE path ⇒ A/E/F/H đỏ đúng (4 fail),
+  B/C xanh (không over-correct); inject override vào executePaymentProposal ⇒
+  2/3 đỏ đúng; restore md5 khớp mỗi đợt.
+- Node FULL (npm test): 936 tests — 934 pass / 2 fail = đúng cặp baseline env
+  (dshGatewayHealth + verifyDshRuntime, máy không có binary dsh).
+- Execute-bound verify-first: sau fix, sessionContext chỉ còn 3 điểm .set()
+  (copilot-server L1198 item / L1374 supplier / L1616 customer), 0 điểm đọc ⇒
+  execute path không thể tiêu thụ context.
+- REAL probe (read-only): scripts/probe-next9-real.mjs → PASS 3/3, exit 0 —
+  100 khách thật; T1 tên khách thật bind đúng id · T2 tên không có ⇒
+  MISSING_ENTITY không bind · T3 không leak customer.
+
+Flutter:
+- flutter pub get khôi phục toolchain (pub-cache thiếu stack_trace-1.12.2, dio-5.11.1).
+- test/next9_turn_isolation_test.dart: 2/2 PASS (key unique/stable/restore +
+  trim-shift không lẫn outcome; confirm qua mock /execute).
+- Falsify Flutter: comment key ⇒ đỏ đúng leak ("Lê Lợi outcome leaked onto the
+  OTHER customer's card") ⇒ Symptom B PROVEN.
+- FULL suite: 391 pass / 3 fail (_probe_review_test.dart — pre-existing: stash
+  2 file next9 rồi chạy riêng probe ⇒ vẫn fail RenderFlex 4×; pop khôi phục).
+- flutter analyze: file next9 0 issue (2 lint info sửa; còn 1 warning probe cũ).
+
+Verdict: NEXT9 VERDICT: PASS (debug-result.md §J — đủ 7 mục bắt buộc prompt-2 §5).
+
+════════════════════════════════════════════════════════════════════
+3. SỔ SÁCH ĐÃ CẬP NHẬT (theo .project/ai-rules.md §1)
+════════════════════════════════════════════════════════════════════
+- .plan/next9/todo-test.md (mới) — test plan 4 tầng + invariant + sign-off.
+- .plan/next9/debug-result.md — §G acceptance matrix, §H DoD, §I verdict,
+  §J prompt-2 close gate (7 mục + PASS).
+- openspec/changes/next9-turn-entity-isolation/ — spec delta (execute sau khi
+  context đổi Y vẫn bind X; ambiguous; cross-type; turn identity; card state)
+  + tasks tick đủ (trừ §16 device).
+- next.md — trạng thái mới nhất (next9 PASS + push CI).
+- checklist.md — phiên 2026-09-28 (5).
+- working.md — mục next9-prompt-2 + next9-prompt-1.
+- handoff_20260928-*.md mới.
+
+════════════════════════════════════════════════════════════════════
+4. COMMIT + PUSH (KHÔNG clone, KHÔNG force — source mới nhất là cloud shell)
+════════════════════════════════════════════════════════════════════
+- Commit: feat(next9) — server fix + 11 test + falsify + probe + Flutter key +
+  test + openspec + docs. Loại trừ: .agent_sessions/, probe _* untracked,
+  chat-copilot-test*.md, upcode, .plan/ (gitignored), .env.
+- Push: origin master → remote branch change/flutter-chat-mvp (fast-forward,
+  KHÔNG clone — khác mô tả skill erpn-deploy-github vì môi trường này CÓ .git).
+- Token: GH_TOKEN từ .env (chmod 600 đã kiểm), mask mọi output, trả remote về
+  SSH sau push.
+- CI: workflow android-debug-apk.yml trigger theo paths apps/mobile/** —
+  commit này chạm apps/mobile ⇒ CI chạy. Kết quả run: xem §5.
+
+════════════════════════════════════════════════════════════════════
+5. CI RUN
+════════════════════════════════════════════════════════════════════
+run id: 36447372336 · head 402de73 · status completed · conclusion SUCCESS
+(~5.5 phút) · artifact erpn-chat-debug-apk 85.427.638 bytes (~85,4 MB, chưa hết hạn)
+URL: https://github.com/hoangsoft90/erpn_mobile1/actions/runs/36447372336
+
+════════════════════════════════════════════════════════════════════
+6. CÒN LẠI
+════════════════════════════════════════════════════════════════════
+- §16 Manual device reproduction (Case 1–3 trên APK) — việc vận hành duy nhất.
+- Quyết định: giữ hay xoá session-context store (chỉ ghi, 0 điểm đọc).
+- Archive openspec change next9-turn-entity-isolation (sau khi user duyệt).

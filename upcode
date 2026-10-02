@@ -1,0 +1,55 @@
+#!/bin/bash
+#
+# sync_to_cloudshell.sh
+# Scan file local, so sánh với file đang có trên Cloud Shell (dùng find + comm),
+# chỉ đóng gói (tar) và push những file THẬT SỰ CHƯA CÓ trên Cloud Shell.
+# Không dùng rsync — chỉ dùng find/tar/gcloud cloud-shell ssh.
+
+set -euo pipefail
+
+export CLOUDSDK_CONFIG=~/.config/gcloud-dev4vn
+
+LOCAL_PATH="/Users/hoang/htdocs/erpnext/erpn_mobile1"
+REMOTE_PATH="~/htdocs_apps/erpn_mobile1"
+
+if [ ! -d "$LOCAL_PATH" ]; then
+  echo "Không tìm thấy thư mục local: $LOCAL_PATH" >&2
+  exit 1
+fi
+
+# Đảm bảo thư mục đích tồn tại trên Cloud Shell
+gcloud cloud-shell ssh --command="mkdir -p ${REMOTE_PATH}" >/dev/null
+
+echo ">>> Lấy danh sách file trên Cloud Shell..."
+REMOTE_FILES="$(gcloud cloud-shell ssh --command="cd ${REMOTE_PATH} && find . -type f \( -path './.git/*' -o -path './node_modules/*' -o -path './.draft/*' -o -path './apps/mobile/linux/flutter/ephemeral/.plugin_symlinks/*' \) -prune -o -type f -print | sed 's|^\./||'" | sort)"
+
+echo ">>> Lấy danh sách file local..."
+LOCAL_FILES="$(cd "$LOCAL_PATH" && find . -type f \( -path './.git/*' -o -path './node_modules/*' -o -path './.draft/*' -o -path './apps/mobile/linux/flutter/ephemeral/.plugin_symlinks/*' \) -prune -o -type f -print | sed 's|^\./||' | sort)"
+
+echo ">>> So sánh & tìm file mới (có ở local, chưa có ở remote)..."
+NEW_FILES="$(comm -23 <(echo "$LOCAL_FILES") <(echo "$REMOTE_FILES"))"
+
+if [ -z "$NEW_FILES" ]; then
+  echo ">>> Không có file mới cần push."
+  exit 0
+fi
+
+echo ">>> Danh sách file sẽ push:"
+echo "$NEW_FILES" | sed 's/^/    + /'
+
+echo ">>> Đang nén & gửi qua 1 kết nối SSH duy nhất..."
+cd "$LOCAL_PATH"
+echo "$NEW_FILES" | tar -czf - -T - | gcloud cloud-shell ssh --command="mkdir -p ${REMOTE_PATH} && tar -xzf - -C ${REMOTE_PATH}"
+
+# --- Dọn file rác đã lỡ up trước đó (chạy 1 lần nếu Cloud Shell đã dính file ._*) ---
+gcloud cloud-shell ssh --command="find ${REMOTE_PATH} -name '._*' -delete"
+
+echo ">>> Hoàn tất push $(echo "$NEW_FILES" | wc -l) file mới."
+
+# --- Ghi chú ---
+# 1) Script chỉ push file MỚI (chưa tồn tại đường dẫn đó trên Cloud Shell). File đã tồn tại
+#    dù nội dung có đổi cũng KHÔNG được cập nhật/ghi đè (đúng yêu cầu ban đầu).
+# 2) Nếu máy local là macOS, lệnh find/sed ở trên vẫn chạy được (không dùng -printf
+#    vì BSD find trên macOS không hỗ trợ, nên dùng find + sed cho tương thích cả hai).
+# 3) Muốn loại trừ thư mục như .git, node_modules: sửa dòng find thành
+#    find . -type f \( -path './.git/*' -o -path './node_modules/*' \) -prune -o -type f -print

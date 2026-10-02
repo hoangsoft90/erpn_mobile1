@@ -1,0 +1,159 @@
+================================================================================
+result77.txt — next7 A0–A3 (WRITE handoff + Flutter card) + P4 đóng next7
+Ngày: 2026-09-27 · Project: erpn_mobile1 · Branch: master · Commit: 49a070c
+================================================================================
+
+## 0. Một dòng
+
+Cụm next7 A0–A3 (AI WRITE handoff) đã code-verify-commit; P4 regression tổng
+chứng minh DoD next7 đạt (12/12 matrix, 5/5 DoD); 2 bug TEST-HARNESS tự gây
+tự sửa (falsify-bị-kill để lại mutation; oracle-blindness đa provider),
+production 0 dòng thay đổi ở 2 fix đó.
+
+## 1. Commit phiên này
+
+- `49a070c` feat(next7): A0–A3 — DSH_WRITE_HANDOFF → answerQuestion,
+  confirm + execute bound ids.
+  - 19 file, +1638/−73. STAGED TẬN TAY (không `git add -A`):
+    code (dsh-gateway/dsh-optin/http-ask + Flutter chat
+    controller/client/screen), test (next7-a0 dedicated 367 dòng,
+    dsh_mode_test, gateway/http-ask test), falsify harness
+    `next7-a0-handoff.mjs`, 2 openspec change (A0+A1), working.md.
+  - GIỮ NGOÀI commit (đúng lệnh user): `apps/mobile/test/_probe_review_test.dart`
+    (untracked, rác từ next6), `.agent_sessions/res17..23`,
+    `chat-copilot-test.md`, `upcode`, `todo1.md`.
+  - Secret scan trên diff staged: sạch, không `.env`.
+- (Trước đó trong next7: `8b8f5c0` C0 gate · `cf7bc0f` C1+C3 · `e556a45` B voice.)
+
+## 2. Số đo verify A0–A3 (trước commit)
+
+- Node targeted (next7-a0 + dsh-gateway + http-ask + p5-optin +
+  next6-isolation): 94 tests — 92 pass / 2 fail =
+  `dshGatewayHealth` + `verifyDshRuntime` (env: máy không có binary `dsh`
+  trên PATH, `DSH_ROUTER_CREDENTIAL` unset — đúng baseline A/B-proof từ
+  phiên A0; falsify harness có `BASELINE_RED` set loại trừ đúng 2 test này).
+- Falsify `next7-a0-handoff.mjs`: 6/6 mutation RED —
+  M1 empty-set x9 · M2 spawn-instead-of-decision x10 · M3 forbidden-in-set
+  x17 · M4 drop-result x8 · M5 no-metering x1 · M6 drop-sales_order x3.
+  Restore byte-identical (sha256 optin/gateway/ask trước=sau).
+- flutter analyze: **0** (SAU `flutter pub get` — checkout mới cần resolve;
+  trước pub get: 1165 issue GIẢ kiểu `BaseOptions isn't defined`).
+- Flutter targeted 12 file chat/dsh/voice: **171/171** (trước fix: 170/171).
+- Flutter FULL: **378 pass / 3 fail** — cả 3 fail =
+  `test/_probe_review_test.dart` untracked (RenderFlex overflow 5787px,
+  khiếm khuyết probe đã ghi từ next6 — KHÔNG xoá nếu user không đồng ý).
+
+## 3. 2 sự cố tự gây tự sửa trong phiên verify (chi tiết cho LESSONS)
+
+### 3.1 Falsify harness bị kill giữa chừng ⇒ mutation còn sót trên đĩa
+
+- Lần chạy 1: SYNC timeout 300s mà 6 mutation × suite (2 test env treo 30s
+  mỗi vòng) ⇒ tool kill giữa chừng, hàm restore không chạy.
+- Hậu quả: `mcp-erpnext/src/dsh-optin.mjs` còn mutation M6 — handoff set
+  thiếu `"sales_order.create"` (diff 84→83 dòng).
+- Phát hiện: `git diff --stat` sau kill (84→83) — KHÔNG phải grep từng id
+  (grep `'^+'` từng dòng thấy 9 id mà tự biện minh thành "đủ 10"!).
+- Sửa: str_replace thêm lại `sales_order.create` ⇒ diff về 84 dòng; chạy
+  lại Node targeted ⇒ 92/94 như cũ; chạy lại falsify ở bước 3.2 ⇒ sạch.
+- Bài học: (a) ước tính timeout trước; (b) sau kill → diff --stat + đọc
+  trực tiếp vùng mutate; (c) kỳ vọng 10 đếm thấy 9 ⇒ DỪNG điều tra.
+
+### 3.2 Test A3 confirm đỏ ⇒ nguyên nhân là TEST HARNESS, không phải production
+
+- Triệu chứng: `A3 confirming the handoff card posts /execute and completes
+  the turn` — tap nút KHÔNG lỗi, KHÔNG exception, nhưng oracle chỉ thấy
+  `paths = ['/dsh/ask']` (không `/execute`).
+- Lần sửa 1 (sai hướng — vẫn fail): nghi nút ngoài viewport ⇒ thêm
+  `ensureVisible` + thu hẹp matcher từ `textContaining('Xác nhận')` (trúng
+  text banner AI) về `'Xác nhận thu tiền'` — sửa này ĐÚNG về hygiene nhưng
+  không phải nguyên nhân gốc.
+- Nguyên nhân thật: `_pumpChat` chỉ override `copilotApiClientProvider`;
+  `ProposalCard._confirm()` post `/execute` qua **`dioProvider`** ( Dio
+  riêng, `applySettings()` lúc runtime) ⇒ request chảy vào dio thật.
+  Bẫy này đã được ghi sẵn trong `chat_controller_test.dart` §6
+  (falsification E: "a recorder attached to a different Dio proves nothing").
+- Sửa đúng: `_pumpChat` tạo MỘT `sharedDio` với `_MockAdapter(router.handler)`
+  và override CẢ `dioProvider` lẫn `copilotApiClientProvider` ⇒ cả /dsh/ask
+  lẫn /execute đều qua router. Test A3 xanh ngay.
+- Fix chỉ chạm `dsh_mode_test.dart` — **production 0 dòng**.
+
+## 4. P4 — Regression tổng + đóng next7
+
+Output: `.plan/next7/next7-final-result.md` (bảng PASS/FAIL từng dòng).
+Tóm tắt:
+
+- Matrix plan_final §6: **12/12 PASS** — READ không card · doanh thu REAL
+  abs==0 (C2) · WRITE đủ slot→proposal→execute→verify (A0–A2) · thiếu số =
+  clarification (A10) · trùng tên = picker (A5) · không khách =
+  MISSING_ENTITY (A6) · double confirm replay 1 row (A2 E2E) · OFF_TOPIC ·
+  voice OFF/ON-final/Huỷ/partial-WRITE (B1/B2).
+- DoD §10: **5/5 PASS** (DoD 2 kèm caveat: cần 1 loop máy thật cho voice).
+- Node FULL sau commit `49a070c`: `env -u ERPNEXT_URL -u ERPNEXT_API_KEY
+  -u ERPNEXT_API_SECRET COPILOT_MOCK_OK=1 node --test` ⇒ **891 tests —
+  889 pass / 2 fail** (đúng cặp env baseline; 0 regression).
+- Flutter FULL: 378/381 (3 fail = probe untracked, xem §2).
+- flutter analyze: 0.
+- Falsify phase-time: next7-a0 6/6 · day-phrase 10/10 · voice 7/7 ·
+  p4-ops 15/15 · p44 18/18 · a3-einvoice-pdf 10/10 (C0–C3/A/B result files).
+- `chat-copilot-test.md`: H1–H4 đã đầy đủ bằng chứng REAL (C2); mục I
+  (I1/I2 bubble trên app thật) còn trắng — cần mcp-loop + máy thật, không
+  phải dòng FAIL của next7.
+
+## 5. Docs đồng bộ trong phiên này
+
+- `.agents/skills/erpn-verify-first/SKILL.md`: +2 hàng (§3.1, §3.2).
+- `LESSONS_LEARNED.md`: +đợt "2026-09-27 (2)" (3 nhóm lỗi mới).
+- `checklist.md` · `next.md` · `features.md` · `faq.md` §19 · handoff
+  `handoff_20260927-1531.md` — cùng lượt cập nhật này.
+- `working.md`: đã cập nhật ở các bước trước trong phiên (A3 verify →
+  P4 → commit).
+
+## 6. Chờ user / tồn đọng
+
+1. ❓ Loop máy thật cho voice auto-send (B1 §8.2 — mock không chứng minh
+   recognizer thật; cần APK + điện thoại Android).
+2. ❓ Archive OpenSpec 4 change next7 theo thứ tự: `next7-a0-dsh-write-handoff`
+   → `next7-a1-write-handoff-widening` (delta MODIFIED trên requirement A0
+   ⇒ A0 trước) → `next7-voice-autosend` → `next7-c1-sales-summary`
+   (+ c0, c3). `openspec list`: c0/c1 ✓ Complete; a1 11/14, a0 20/24,
+   voice 29/32, c3 14/17 — các `[ ]` còn lại đều là mục "Out of scope
+   (named)" by-design.
+3. ❓ Xoá `apps/mobile/test/_probe_review_test.dart` (untracked) như next6
+   đã làm? 3 fail full suite đến từ nó; findings đã phủ bởi
+   `proposal_card_test.dart`. KHÔNG tự xoá (file untracked — mất vĩnh viễn).
+4. ❓ Push 3 commit next7 (`8b8f5c0`/`cf7bc0f`/`e556a45` + `49a070c`) lên
+   GitHub để CI build APK (nhớ: repo vars/secret vẫn 0/0 ⇒ APK endpoint
+   loopback; và KHÔNG được cuốn rác untracked khi push).
+5. AgentMemory `:3111` down cả phiên ⇒ 4 bài học (kill-harness,
+   oracle-blindness, bẫy company-filter C2, ADR doanh thu NET) CHƯA lưu
+   qua đó — đã bù vào skill + LESSONS (kho trong-project), phần
+   cross-project (Simplenote) chưa ghi vì MCP Simplenote cũng không có
+   trong session.
+6. Chat doanh thu NGÀY QUÁ KHỨ bằng câu nói (C3 đã nối day-phrase cho
+   drill/drawer; đường chat sales.summary vẫn chỉ hôm nay) — task mới
+   nếu user muốn.
+
+## 7. Bài học ghi vào skill (nguyên văn 2 hàng mới)
+
+- (xem `.agents/skills/erpn-verify-first/SKILL.md` — 2 hàng "result77
+  (next7 A0–A3)": falsify-bị-kill + oracle-blindness đa provider).
+
+================================================================================
+Kết thúc result77.
+================================================================================
+
+## 8. PUSH + CI APK (sau khi ghi §1–7)
+
+- Docs-sync commit `71dce73` (result77 + handoff + checklist/features/next/faq §19 +
+  LESSONS) rồi PUSH: **fast-forward thuần `8b8f5c0..71dce73` →
+  `change/flutter-chat-mvp`** — KHÔNG force, KHÔNG clone (kiểm trước push qua API:
+  remote tip `8b8f5c0` = commit C0 của chính mình, là tổ tiên của local; đúng luật
+  "cloud shell = nguồn sự thật"). Đường push: HTTPS + GH_TOKEN từ `.env` (output đã
+  mask; remote trả về SSH URL sau push; deploy key SSH không tồn tại trên môi trường
+  này — skill erpn-deploy-github viết cho máy khác, chỉ dùng phần token/checklist).
+- **CI run `36330848942` = SUCCESS** (~5 phút, tự trigger vì `49a070c` chạm
+  `apps/mobile/**`) · artifact **`erpn-chat-debug-apk` 85.426.453 bytes (~81,5 MB)**,
+  hết hạn 2026-12-26.
+- ⚠️ Vẫn đúng cảnh báo cũ: repo Variables/Secrets = 0/0 ⇒ APK endpoint nhúng là
+  loopback mặc định — muốn APK dùng thật cần vars `COPILOT_BASE_URL`,
+  `COPILOT_AUTH_USER` + secret `COPILOT_AUTH_PASSWORD` rồi dispatch lại workflow.

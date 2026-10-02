@@ -1,0 +1,91 @@
+result76.txt — Session 2026-09-27 (~04:00)
+==========================================
+Phạm vi: (1) nút scroll-to-bottom ChatScreen + review lần 2 bắt 2 bug thật;
+(2) NEXT6 P0–P5 dsh runtime isolation + off-topic scope gate; (3) commit/push/CI.
+
+═══ 1. Scroll-to-bottom (ChatScreen) ═══
+File: apps/mobile/lib/features/chat/presentation/screens/chat_screen.dart
+      apps/mobile/test/chat_scroll_to_bottom_test.dart (MỚI)
+
+Hành vi: FAB.small trong Stack vùng list (KHÔNG đè thanh nhập), key `scroll-to-bottom`,
+tooltip "Xuống cuối", icon keyboard_arrow_down. Hiện khi cuộn lên > 64px; ẩn khi ở đáy;
+list không cuộn được (maxScrollExtent <= 0) luôn ẩn. Bấm → animateTo đáy + tự ẩn.
+
+REVIEW LẦN 2 — 2 bug THẬT (test falsify viết TRƯỚC khi sửa):
+- BUG 1 (stuck UI, test đỏ tại dòng 132): cờ _showScrollToBottom chỉ được tính lại
+  trong _onScroll; list không cuộn được KHÔNG BAO GIỜ phát scroll event ⇒ sau
+  "Xóa lịch sử" + 1 tin ngắn, nút VẪN HIỆN dù maxScrollExtent == 0.
+  FIX: reset cờ trong _scrollToBottom() (post-frame — nơi biết chắc đang xuống đáy).
+- BUG 2 (do chính fix trên): setState trong addPostFrameCallback có thể chạy sau
+  unmount ⇒ setState() called after dispose. FIX: `if (!mounted || !hasClients) return;`
+
+Verify: chat_scroll_to_bottom_test.dart 3/3 PASS · regression chat (erp_target+dsh_mode) 18/18
+PASS · flutter analyze 0 issue.
+
+═══ 2. NEXT6 P0–P5 — dsh runtime isolation + scope ═══
+P0 (chỉ đọc, .plan/next6/P0-result.md): CWD thật của dsh = env.DSH_CWD ?? REPO_ROOT;
+chuỗi rò rỉ A→E chứng minh từ SOURCE package dsh (`@deepseek-ai/dsh-agent-instructions`,
+bật mặc định qua dsh-base/cordis.patch.yml): discover AGENTS.md+CLAUDE.md từ project root
+(marker .git) → inject user-role <system-reminder> verbatim (57.155B < budget 65.536B) →
++ bằng chứng thực nghiệm sẵn có trong repo: scripts/mock-llm.mjs "verified bug in run #2 —
+45k of instructions". Log lịch sử: dsh_ask 31 answered / 121 failed / 121 refused; lạc đề
+đã từng answered ("hôm nay mưa hay nắng", "tồn kho laptop", "chào bạn"); "anh khánh"
+08:24:56 answered với erpnext_target:null (lượt leak thật).
+
+P1 (isolation, 2 vế):
+- Vế falsify (config CŨ, cwd=repo, sentinel tạm trong AGENTS.md/working.md/operating_rules.md):
+  output `PROBE_SENTINEL=LEAK`, probe chars=104472.
+- Vế mới (cwd cô lập /home/hoangsoft90/erpn-dsh-cwd): output `PROBE_SENTINEL=NO_LEAK`,
+  chars=52248 (mất đúng phần AGENTS/CLAUDE ~52k).
+- Vế ERP thật: /dsh/ask "chị Lan còn nợ bao nhiêu" → "Trả lời từ ERPNext: lan không còn nợ gì."
+  + erp_target=REAL (copilot_ask vẫn gọi ERPNext thật).
+- Sentinel đã HOÀN TÁC sạch (grep 0 hit). Phát hiện + xử lý: cwd cô lập ⇒ dsh hết tự nạp
+  .env ⇒ dsh từ chối boot (MISSING_CREDENTIAL) ⇒ route đổi sang DSH_ROUTER_CREDENTIAL
+  (placeholder KHÔNG bí mật — llm-router tự thay Authorization per-upstream; key thật vẫn
+  bị strip bởi DSH_SECRET_ENV_KEYS). Patch YAML nhận path TUYỆT ĐỐI qua env
+  ERPN_REPO_ROOT/ERPN_COPILOT_SERVER (fallback process.cwd() cho chạy tay).
+
+P2 (code gate): dshQuestionGate + foldVietnamese + OFF_TOPIC_TERMS (fold dấu, ERP thắng
+deny-list) + isErpNextMeta → DSH_META_INFO trả câu CỐ ĐỊNH. "anh khánh" đi QUA (resolver
+sở hữu MISSING_ENTITY). Test +5: dsh-gateway suite 52/52. FALSIFY: gỡ nhánh gate ⇒ đúng
+5 test off-topic đỏ (47/52) ⇒ khôi phục 52/52.
+
+P3 (system boundary): dsh CÓ lớp system thật — @deepseek-ai/dsh-system-prompt, row id
+`system-prompt`, personaPrefix. Đã thêm row vào dsh-e2e.patch.yml (ranh giới ERP + marker
+ERP_BOUNDARY_V1). Probe: PROBE_BOUNDARY=FOUND trên message role=system thật.
+
+P4 (untrusted data, audit-only): đã có sẵn src/untrusted-data.mjs nối copilot-server (dùng
+chung child /dsh/ask); test 3/3 gồm "customer named with an injection cannot trigger a WRITE".
+Live test GHI note lên khách probe trên ERPNext thật: CHƯA làm — chờ duyệt (GHI production).
+
+P5 (bảng test §7): các dòng code-gate qua /dsh/ask thật → DSH_OFF_TOPIC ×5 + DSH_META_INFO
+×1 PASS. 3 dòng cần entity-resolver thật + 2 lượt conversation_id: CHƯA — cần LLM thật.
+Bằng chứng: .plan/next6/P1-result.md + P2-P5-result.md.
+
+Suite: mcp-erpnext FULL 859/859 PASS (npm test, COPILOT_MOCK_OK=1).
+
+═══ 3. Commits + push + CI ═══
+- 4e99e00 fix(dsh): runtime isolation + off-topic gate + real system boundary (next6)
+  [5 file, KHÔNG .env, KHÔNG secret trong message]
+- 0bc4b72 feat(chat): scroll-to-bottom button + fix stuck flag on list shrink
+- Push: master → change/flutter-chat-mvp = FAST-FORWARD a7317a1..0bc4b72 (KHÔNG force,
+  KHÔNG clone; remote tip trước push = a7317a1 khớp cha local).
+- CI: run 36293281082 android-debug-apk (push tự trigger vì 0bc4b72 chạm apps/mobile/**) →
+  **completed SUCCESS** (~7 phút; poll API). Artifact `erpn-chat-debug-apk` **81.5 MB ready**:
+  https://github.com/hoangsoft90/erpn_mobile1/actions/runs/36293281082
+- Docs commit 3d49c7e (result76 + openspec change + checklist/next/features/faq/LESSONS/working +
+  handoff_20260927-0417) push fast-forward 0bc4b72..3d49c7e (chỉ docs — không trigger CI thêm).
+
+═══ 4. Bài học đã lưu (.agents/skills/erpn-verify-first/SKILL.md +2 hàng) ═══
+1) Cờ UI suy ra từ scroll listener: list không cuộn được không bao giờ phát scroll event ⇒
+   mọi đường đổi ĐỘ DÀI list phải tự reset cờ; reset trong post-frame phải guard !mounted.
+2) str_replace oldString sai nguyên văn ⇒ tool nuốt THAY THẾ KHÔNG KHỚP mà vẫn báo thành công
+   ⇒ file bị chèn chuỗi lệnh echo nguyên văn (nếu không soi diff sẽ push rác lên GH + CI);
+   sau MỖI str_replace phải git diff --stat/khớp số file kỳ vọng trước khi commit.
+
+═══ 5. Chờ user / còn treo ═══
+- M1/M2 refresh "Hôm qua" (vùng SỐ TIỀN) — chờ user.
+- Repo Variables/Secrets = 0/0 ⇒ APK nhúng loopback; muốn dùng thật: vars COPILOT_BASE_URL/
+  COPILOT_AUTH_USER + secret COPILOT_AUTH_PASSWORD rồi dispatch lại workflow.
+- P4 live test ghi note injection (cần duyệt GHI ERPNext) · P5 3 dòng cần LLM thật.
+- Revoke token GitHub cũ đã lộ qua chat.
